@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+*.sql.gz
+src/frontend/node_modules/
