@@ -207,7 +207,6 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
     setEditPer(null);
   };
   const vc = useContext(VisColsCtx);
-  const y52V = wk * 52;
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
@@ -228,7 +227,7 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
         }
         return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
-      {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>}
+      {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y48V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -703,7 +702,8 @@ export default function App() {
 
         {/* ═══ TAX RATES ═══ */}
         {tab === "taxes" && (
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, maxWidth: "100%" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
             <Card>
               <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Payroll & State Rates</h3>
               <p style={{ fontSize: 12, color: "#999", margin: "0 0 16px" }}>Update when rates change each year.</p>
@@ -763,7 +763,8 @@ export default function App() {
                 {fetchStatus && <div style={{ fontSize: 12, marginTop: 8, color: fetchStatus.startsWith("✅") ? "#2ECC71" : fetchStatus.startsWith("❌") ? "#E8573A" : "#556FB5", wordBreak: "break-word" }}>{fetchStatus}</div>}
               </div>
             </Card>
-            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
               <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — Single / MFS</h3><BrEd brackets={tax.fedSingle} onChange={v => upTax("fedSingle", v)} /></Card>
               <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — MFJ</h3><BrEd brackets={tax.fedMFJ} onChange={v => upTax("fedMFJ", v)} /></Card>
             </div>
