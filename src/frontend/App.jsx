@@ -452,10 +452,10 @@ export default function App() {
     else if (sortBy === "category") s.sort((a, b) => a.c.localeCompare(b.c) || a.n.localeCompare(b.n));
     return s;
   };
-  const ewk = useMemo(() => exp.map((e, i) => ({ ...e, idx: i, wk: toWk(e.v, e.p), hl: toWk(e.v, e.p) > hlWk && hlWk > 0 })), [exp, hlW, hlPeriod]);
+  const ewk = useMemo(() => exp.map((e, i) => ({ ...e, idx: i, wk: toWk(e.v, e.p), hl: toWk(e.v, e.p) >= hlWk && hlWk > 0 })), [exp, hlW, hlPeriod]);
   const necI = useMemo(() => applySort(ewk.filter(e => e.t === "N")), [ewk, sortBy, sortDir]);
   const disI = useMemo(() => applySort(ewk.filter(e => e.t === "D")), [ewk, sortBy, sortDir]);
-  const savSorted = useMemo(() => { const items = sav.map((s, i) => ({ ...s, idx: i, wk: toWk(s.v, s.p), hl: toWk(s.v, s.p) > hlWk && hlWk > 0 })); if (sortBy === "amount") items.sort((a, b) => sortDir === "desc" ? b.wk - a.wk : a.wk - b.wk); return items; }, [sav, sortBy, sortDir, hlW]);
+  const savSorted = useMemo(() => { const items = sav.map((s, i) => ({ ...s, idx: i, wk: toWk(s.v, s.p), hl: toWk(s.v, s.p) >= hlWk && hlWk > 0 })); if (sortBy === "amount") items.sort((a, b) => sortDir === "desc" ? b.wk - a.wk : a.wk - b.wk); return items; }, [sav, sortBy, sortDir, hlW]);
 
   const tNW = necI.reduce((s, e) => s + e.wk, 0), tDW = disI.reduce((s, e) => s + e.wk, 0);
   const tExpW = tNW + tDW, tSavW = savSorted.reduce((s, e) => s + e.wk, 0);
@@ -1151,8 +1151,10 @@ export default function App() {
               </Card>
             </div>
 
-            {snapshots.length > 0 && (() => {
-              const sorted = [...snapshots].sort((a, b) => a.date.localeCompare(b.date));
+            {(() => {
+              const livePoint = { date: "Now", label: "Current", grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW, remW, cNetW: C.cNet, kNetW: C.kNet, eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet };
+              const allPoints = [...snapshots, livePoint];
+              const sorted = allPoints.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
               const curEaipNet = C.eaipNet, curEaipGross = C.eaipGross;
               const curCEaipNet = C.cEaipNet, curKEaipNet = C.kEaipNet;
               const trendData = sorted.map(s => {
