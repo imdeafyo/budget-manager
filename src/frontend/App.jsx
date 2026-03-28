@@ -169,15 +169,17 @@ function EditTxt({ value, onChange, color }) {
     : <span onClick={() => setEd(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, color: color || "inherit" }} title="Click to rename">{value}</span>;
 }
 
+let _visCols = { wk: true, mo: true, y48: true, y52: true };
 const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub }) => {
-  const mob = window.innerWidth < 700;
+  const vc = _visCols;
+  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr"].filter(Boolean).join(" ");
   return (
-  <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr" : "2.4fr 1fr 1fr 1fr 1fr", gap: mob ? 4 : 6, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
-    <div style={{ fontSize: mob ? 11 : 13, color: color || "var(--tx, #333)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}{sub && <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>({sub})</span>}</div>
-    <div style={{ fontSize: mob ? 11 : 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(wk)}</div>
-    {!mob && <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(mo)}</div>}
-    <div style={{ fontSize: mob ? 11 : 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(y48)}</div>
-    {!mob && <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx3, #888)" }}>{fmt(y52)}</div>}
+  <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
+    <div style={{ fontSize: 12, color: color || "var(--tx, #333)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}{sub && <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>({sub})</span>}</div>
+    {vc.wk && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(wk)}</div>}
+    {vc.mo && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(mo)}</div>}
+    {vc.y48 && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(y48)}</div>}
+    {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx3, #888)" }}>{fmt(y52)}</div>}
   </div>
   );
 };
@@ -204,27 +206,27 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
-  const mob = window.innerWidth < 700;
+  const vc = _visCols;
+  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
-    <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr 20px" : "2.4fr 1fr 1fr 1fr 1fr 24px", gap: mob ? 4 : 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
-      <div style={{ fontSize: mob ? 11 : 13, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+    <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
+      <div style={{ fontSize: 12, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <button onClick={() => onUpdate({ t: isN ? "D" : "N" })} title={isN ? "→ Discretionary" : "→ Necessity"}
-          style={{ fontSize: mob ? 8 : 10, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: mob ? "2px 5px" : "3px 7px", background: isN ? "#556FB5" : "#E8573A", cursor: "pointer", flexShrink: 0 }}>{isN ? "NEC" : "DIS"}</button>
+          style={{ fontSize: 9, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: "2px 6px", background: isN ? "#556FB5" : "#E8573A", cursor: "pointer", flexShrink: 0 }}>{isN ? "NEC" : "DIS"}</button>
         {eN
           ? <input autoFocus value={localName} onChange={e => setLocalName(e.target.value)} onBlur={() => { onUpdate({ n: localName }); sEN(false); }} onKeyDown={e => { if (e.key === "Enter") { onUpdate({ n: localName }); sEN(false); } }} style={{ flex: 1, border: "1px solid var(--input-border,#ddd)", borderRadius: 4, padding: "2px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0 }} />
-          : <span onClick={() => sEN(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, fontSize: mob ? 11 : 13 }} title="Click to rename">{item.n}</span>}
-        {!mob && <select className="cat-dd" value={item.c} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
+          : <span onClick={() => sEN(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, fontSize: 12 }} title="Click to rename">{item.n}</span>}
+        <select className="cat-dd" value={item.c} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 11 }}>
           {cats.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>}
+        </select>
       </div>
-      {(mob ? ["w", "y"] : ["w", "m", "y"]).map(per => {
+      {(vc.wk ? ["w"] : []).concat(vc.mo ? ["m"] : []).concat(vc.y48 ? ["y"] : []).map(per => {
         if (editPer === per) {
           const editVal = per === item.p ? item.v : String(Math.round(valFor(per) * 100) / 100);
-          return <div key={per}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
+          return <div key={per} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEditPer(null); }}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
         }
-        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: mob ? 11 : 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
+        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
-      {!mob && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y48V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -246,23 +248,23 @@ function SavRowInner({ item, savCats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
-  const mob = window.innerWidth < 700;
+  const vc = _visCols;
+  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
-    <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr 20px" : "2.4fr 1fr 1fr 1fr 1fr 24px", gap: mob ? 4 : 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
-      <div style={{ fontSize: mob ? 11 : 13, color: "#2ECC71", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+    <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
+      <div style={{ fontSize: 12, color: "#2ECC71", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <EditTxt value={item.n} onChange={n => onUpdate({ n })} color="#2ECC71" />
-        {!mob && <select className="cat-dd" value={item.c || ""} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
+        <select className="cat-dd" value={item.c || ""} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 11 }}>
           {(savCats || []).map(c => <option key={c} value={c}>{c}</option>)}
-        </select>}
+        </select>
       </div>
-      {(mob ? ["w", "y"] : ["w", "m", "y"]).map(per => {
+      {(vc.wk ? ["w"] : []).concat(vc.mo ? ["m"] : []).concat(vc.y48 ? ["y"] : []).map(per => {
         if (editPer === per) {
           const editVal = per === item.p ? item.v : String(Math.round(valFor(per) * 100) / 100);
-          return <div key={per}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
+          return <div key={per} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setEditPer(null); }}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
         }
-        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: mob ? 11 : 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
+        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
-      {!mob && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -350,6 +352,8 @@ export default function App() {
   const [showAddItem, setShowAddItem] = useState(false);
   const [customIcon, setCustomIcon] = useState(null);
   const [bannerOpen, setBannerOpen] = useState(!window.innerWidth || window.innerWidth >= 700);
+  const [toolbarOpen, setToolbarOpen] = useState(!window.innerWidth || window.innerWidth >= 700);
+  const [visCols, setVisCols] = useState({ wk: true, mo: !window.innerWidth || window.innerWidth >= 700, y48: true, y52: !window.innerWidth || window.innerWidth >= 700 });
   const [showPerPerson, setShowPerPerson] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [snapLabel, setSnapLabel] = useState("");
@@ -585,11 +589,13 @@ export default function App() {
   }, [dk, waf]);
 
   const iconRef = useRef(null);
+  useEffect(() => { _visCols = visCols; }, [visCols]);
 
   return (
     <div style={{ minHeight: "100vh", background: bg, fontFamily: "'DM Sans',sans-serif", color: tx }}>
       <style>{`
         html, body { overflow-x: hidden; max-width: 100vw; }
+        * { box-sizing: border-box; }
         :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); }
         input, textarea { background: var(--input-bg) !important; color: var(--input-color) !important; border-color: var(--input-border) !important; }
         select { color: var(--input-color) !important; border-color: var(--input-border) !important; }
@@ -601,36 +607,39 @@ export default function App() {
         .recharts-legend-item-text { color: var(--card-color) !important; }
       `}</style>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:wght@400;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ position: "sticky", top: 0, zIndex: 50, background: headerBg, color: "#fff", padding: mob ? "6px 0 0" : "12px 0 0" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 12px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: mob ? 8 : 12, marginBottom: mob ? 4 : 8 }}>
-            <label style={{ cursor: "pointer", flexShrink: 0 }} title="Click to upload custom icon">
-              {customIcon
-                ? <img src={customIcon} style={{ width: 34, height: 34, borderRadius: 8, objectFit: "cover" }} />
-                : <div style={{ width: 34, height: 34, borderRadius: 8, background: "linear-gradient(135deg,#E8573A,#F2A93B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>💰</div>}
-              <input ref={iconRef} type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = ev => setCustomIcon(ev.target.result); r.readAsDataURL(f); } }} style={{ display: "none" }} />
-            </label>
-            <div style={{ flex: 1 }}>
-              {editingTitle
-                ? <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
-                    onBlur={() => { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); }}
-                    onKeyDown={e => { if (e.key === "Enter") { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
-                    style={{ margin: 0, fontSize: 22, fontFamily: "'Fraunces',serif", fontWeight: 800, background: "transparent", border: "none", borderBottom: "2px solid #E8573A", color: "#fff", outline: "none", width: "100%" }} />
-                : <h1 onClick={() => { setTitleDraft(appTitle); setEditingTitle(true); }} style={{ margin: 0, fontSize: 22, fontFamily: "'Fraunces',serif", fontWeight: 800, cursor: "text" }} title="Click to rename">{appTitle}</h1>}
-              <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {tax.stateName || "State"}</p></div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button onClick={() => setDarkMode("light")} style={{ padding: "5px 10px", background: !dk && !waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !dk && !waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
-              <button onClick={() => setDarkMode("dark")} style={{ padding: "5px 10px", background: dk ? "#F2A93B" : "rgba(255,255,255,0.1)", color: dk ? "#1a1a1a" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌙</button>
-              <button onClick={() => setDarkMode("waf")} style={{ padding: "5px 10px", background: waf ? "#c96b70" : "rgba(255,255,255,0.1)", color: waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌸</button>
-            </div>
+      {/* Title bar - always sticky */}
+      <div style={{ position: "sticky", top: 0, zIndex: 51, background: headerBg, color: "#fff", padding: mob ? "6px 12px" : "10px 20px" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", gap: mob ? 8 : 12 }}>
+          <label style={{ cursor: "pointer", flexShrink: 0 }} title="Click to upload custom icon">
+            {customIcon
+              ? <img src={customIcon} style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, objectFit: "cover" }} />
+              : <div style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, background: "linear-gradient(135deg,#E8573A,#F2A93B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: mob ? 14 : 18 }}>💰</div>}
+            <input ref={iconRef} type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = ev => setCustomIcon(ev.target.result); r.readAsDataURL(f); } }} style={{ display: "none" }} />
+          </label>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {editingTitle
+              ? <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
+                  onBlur={() => { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); }}
+                  onKeyDown={e => { if (e.key === "Enter") { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
+                  style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, background: "transparent", border: "none", borderBottom: "2px solid #E8573A", color: "#fff", outline: "none", width: "100%" }} />
+              : <h1 onClick={() => { setTitleDraft(appTitle); setEditingTitle(true); }} style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title="Click to rename">{appTitle}</h1>}
+            {!mob && <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {tax.stateName || "State"}</p>}
           </div>
-          <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #333", overflowX: "auto" }}>
-            <button style={ts(tab === "taxes")} onClick={() => setTab("taxes")}>Tax Rates</button>
-            <button style={ts(tab === "settings")} onClick={() => setTab("settings")}>Income</button>
-            <button style={ts(tab === "budget")} onClick={() => setTab("budget")}>Budget</button>
-            <button style={ts(tab === "cats")} onClick={() => setTab("cats")}>Categories</button>
-            <button style={ts(tab === "charts")} onClick={() => setTab("charts")}>Charts</button>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => setDarkMode("light")} style={{ padding: "5px 10px", background: !dk && !waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !dk && !waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
+            <button onClick={() => setDarkMode("dark")} style={{ padding: "5px 10px", background: dk ? "#F2A93B" : "rgba(255,255,255,0.1)", color: dk ? "#1a1a1a" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌙</button>
+            <button onClick={() => setDarkMode("waf")} style={{ padding: "5px 10px", background: waf ? "#c96b70" : "rgba(255,255,255,0.1)", color: waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌸</button>
           </div>
+        </div>
+      </div>
+      {/* Tabs - separate sticky */}
+      <div style={{ position: "sticky", top: mob ? 40 : 52, zIndex: 50, background: headerBg }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 12px", display: "flex", gap: 2, borderBottom: "1px solid #333", overflowX: "auto" }}>
+          <button style={ts(tab === "taxes")} onClick={() => setTab("taxes")}>Tax Rates</button>
+          <button style={ts(tab === "settings")} onClick={() => setTab("settings")}>Income</button>
+          <button style={ts(tab === "budget")} onClick={() => setTab("budget")}>Budget</button>
+          <button style={ts(tab === "cats")} onClick={() => setTab("cats")}>Categories</button>
+          <button style={ts(tab === "charts")} onClick={() => setTab("charts")}>Charts</button>
         </div>
       </div>
 
@@ -891,22 +900,33 @@ export default function App() {
 
         {tab === "budget" && viewingSnap === null && (
           <div>
-            <div style={{ position: "sticky", top: mob ? 52 : 82, zIndex: 10, paddingTop: 4, paddingBottom: 4, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0" }}>
-            <div onClick={() => mob && setBannerOpen(p => !p)} style={{ cursor: mob ? "pointer" : "default" }}>
-            <Card dark style={{ marginBottom: 8, padding: bannerOpen ? undefined : "8px 16px" }}>
+            <div style={{ position: "sticky", top: mob ? 72 : 88, zIndex: 10, paddingTop: 4, paddingBottom: 4, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0" }}>
+            <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
+            <Card dark style={{ marginBottom: 4, padding: bannerOpen ? undefined : "8px 16px" }}>
               {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 8, textAlign: "center" }}>
                 {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + Bonus", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
                   <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: mob ? 13 : 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
                 ))}
+                {mob && <div style={{ gridColumn: "1/-1", fontSize: 9, color: "#666", textAlign: "center" }}>tap to collapse ▴</div>}
               </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "#4ECDC4" }}>Net: {fmt(C.net)}/wk</span>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "#2ECC71" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
-                <span style={{ fontSize: 10, color: "#888" }}>tap to expand ▾</span>
+                <span style={{ fontSize: 10, color: "#888" }}>▾</span>
               </div>}
             </Card>
             </div>
 
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center", padding: "6px 0" }}>
+            <div onClick={() => setToolbarOpen(p => !p)} style={{ cursor: "pointer", padding: "4px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                {["wk", "mo", "y48", "y52"].map(k => {
+                  const labels = { wk: "W", mo: "M", y48: "48", y52: "52" };
+                  return <button key={k} onClick={e => { e.stopPropagation(); setVisCols(p => ({ ...p, [k]: !p[k] })); }}
+                    style={{ padding: "2px 6px", fontSize: 9, fontWeight: 700, border: visCols[k] ? "1px solid var(--c-taxable, #556FB5)" : "1px solid #ccc", borderRadius: 4, background: visCols[k] ? "rgba(85,111,181,0.1)" : "transparent", color: visCols[k] ? "var(--c-taxable, #556FB5)" : "#aaa", cursor: "pointer" }}>{labels[k]}</button>;
+                })}
+              </div>
+            </div>
+            {toolbarOpen && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center", padding: "2px 0" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>Sort:</span>
                 {[["default", "Default"], ["amount", "Amount"], ["category", "Category"]].map(([v, l]) => (
@@ -932,13 +952,14 @@ export default function App() {
               <button onClick={() => setShowAddItem(true)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#fef5f2", color: "#E8573A", cursor: "pointer" }}>
                 + Add Item
               </button>
-            </div>
+            </div>}
             </div>
 
             <Card style={{ overflowX: "auto" }}>
-              <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr" : "2.4fr 1fr 1fr 1fr 1fr", gap: mob ? 4 : 6, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
-                {(mob ? ["", "Weekly", "Yearly (48)"] : ["", "Weekly", "Monthly", "Yearly (48)", "Yearly (52)"]).map(h => <div key={h} style={{ fontSize: mob ? 9 : 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
-              </div>
+              {(() => { const cols = ["1.8fr", visCols.wk && "1fr", visCols.mo && "1fr", visCols.y48 && "1fr", visCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (visCols.wk) hdrs.push("Weekly"); if (visCols.mo) hdrs.push("Monthly"); if (visCols.y48) hdrs.push("Yr (48)"); if (visCols.y52) hdrs.push("Yr (52)"); return (
+              <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
+                {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
+              </div>); })()}
 
               <SH>Income</SH>
               <Row label="Corey Salary" wk={C.cw} mo={moC(C.cw)} y48={y4(C.cw)} y52={y5(C.cw)} bold />
