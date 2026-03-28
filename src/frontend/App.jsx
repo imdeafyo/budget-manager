@@ -169,15 +169,18 @@ function EditTxt({ value, onChange, color }) {
     : <span onClick={() => setEd(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, color: color || "inherit" }} title="Click to rename">{value}</span>;
 }
 
-const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub }) => (
-  <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr 1fr", gap: 6, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
-    <div style={{ fontSize: 13, color: color || "var(--tx, #333)" }}>{label}{sub && <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>({sub})</span>}</div>
-    <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(wk)}</div>
-    <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(mo)}</div>
-    <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(y48)}</div>
-    <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx3, #888)" }}>{fmt(y52)}</div>
+const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub }) => {
+  const mob = window.innerWidth < 700;
+  return (
+  <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr" : "2.4fr 1fr 1fr 1fr 1fr", gap: mob ? 4 : 6, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
+    <div style={{ fontSize: mob ? 11 : 13, color: color || "var(--tx, #333)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}{sub && <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>({sub})</span>}</div>
+    <div style={{ fontSize: mob ? 11 : 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(wk)}</div>
+    {!mob && <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(mo)}</div>}
+    <div style={{ fontSize: mob ? 11 : 13, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(y48)}</div>
+    {!mob && <div style={{ fontSize: 13, textAlign: "right", color: color || "var(--tx3, #888)" }}>{fmt(y52)}</div>}
   </div>
-);
+  );
+};
 
 /* ── Expense Row — click any period column to edit in that period ── */
 function ExpRowInner({ item, cats, onUpdate, onRemove }) {
@@ -201,26 +204,27 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
+  const mob = window.innerWidth < 700;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr 1fr 24px", gap: 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
-      <div style={{ fontSize: 13, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+    <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr 20px" : "2.4fr 1fr 1fr 1fr 1fr 24px", gap: mob ? 4 : 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
+      <div style={{ fontSize: mob ? 11 : 13, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <button onClick={() => onUpdate({ t: isN ? "D" : "N" })} title={isN ? "→ Discretionary" : "→ Necessity"}
-          style={{ fontSize: 10, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: "3px 7px", background: isN ? "#556FB5" : "#E8573A", cursor: "pointer", flexShrink: 0 }}>{isN ? "NEC" : "DIS"}</button>
+          style={{ fontSize: mob ? 8 : 10, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: mob ? "2px 5px" : "3px 7px", background: isN ? "#556FB5" : "#E8573A", cursor: "pointer", flexShrink: 0 }}>{isN ? "NEC" : "DIS"}</button>
         {eN
-          ? <input autoFocus value={localName} onChange={e => setLocalName(e.target.value)} onBlur={() => { onUpdate({ n: localName }); sEN(false); }} onKeyDown={e => { if (e.key === "Enter") { onUpdate({ n: localName }); sEN(false); } }} style={{ flex: 1, border: "1px solid var(--input-border,#ddd)", borderRadius: 4, padding: "2px 4px", fontSize: 12, fontFamily: "'DM Sans',sans-serif", minWidth: 0 }} />
-          : <span onClick={() => sEN(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }} title="Click to rename">{item.n}</span>}
-        <select className="cat-dd" value={item.c} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
+          ? <input autoFocus value={localName} onChange={e => setLocalName(e.target.value)} onBlur={() => { onUpdate({ n: localName }); sEN(false); }} onKeyDown={e => { if (e.key === "Enter") { onUpdate({ n: localName }); sEN(false); } }} style={{ flex: 1, border: "1px solid var(--input-border,#ddd)", borderRadius: 4, padding: "2px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0 }} />
+          : <span onClick={() => sEN(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, fontSize: mob ? 11 : 13 }} title="Click to rename">{item.n}</span>}
+        {!mob && <select className="cat-dd" value={item.c} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
           {cats.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        </select>}
       </div>
-      {["w", "m", "y"].map(per => {
+      {(mob ? ["w", "y"] : ["w", "m", "y"]).map(per => {
         if (editPer === per) {
           const editVal = per === item.p ? item.v : String(Math.round(valFor(per) * 100) / 100);
           return <div key={per}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
         }
-        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
+        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: mob ? 11 : 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
-      <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y48V)}</div>
+      {!mob && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y48V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -242,22 +246,23 @@ function SavRowInner({ item, savCats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
+  const mob = window.innerWidth < 700;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr 1fr 24px", gap: 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
-      <div style={{ fontSize: 13, color: "#2ECC71", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+    <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr 20px" : "2.4fr 1fr 1fr 1fr 1fr 24px", gap: mob ? 4 : 6, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
+      <div style={{ fontSize: mob ? 11 : 13, color: "#2ECC71", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <EditTxt value={item.n} onChange={n => onUpdate({ n })} color="#2ECC71" />
-        <select className="cat-dd" value={item.c || ""} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
+        {!mob && <select className="cat-dd" value={item.c || ""} onChange={e => onUpdate({ c: e.target.value })} style={{ flexShrink: 0, fontSize: 12 }}>
           {(savCats || []).map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        </select>}
       </div>
-      {["w", "m", "y"].map(per => {
+      {(mob ? ["w", "y"] : ["w", "m", "y"]).map(per => {
         if (editPer === per) {
           const editVal = per === item.p ? item.v : String(Math.round(valFor(per) * 100) / 100);
           return <div key={per}><NI value={editVal} onChange={(v, raw) => { saveVal(v, raw, per); }} onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
         }
-        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
+        return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: mob ? 11 : 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
-      <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>
+      {!mob && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -344,6 +349,7 @@ export default function App() {
   const [niT, setNiT] = useState("N"); const [niS, setNiS] = useState("exp"); const [niP, setNiP] = useState("m"); const [niV, setNiV] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
   const [customIcon, setCustomIcon] = useState(null);
+  const [bannerOpen, setBannerOpen] = useState(!window.innerWidth || window.innerWidth >= 700);
   const [showPerPerson, setShowPerPerson] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [snapLabel, setSnapLabel] = useState("");
@@ -480,9 +486,9 @@ export default function App() {
 
   const BrEd = ({ brackets, onChange }) => (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px 24px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate %</span><span /></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 20px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate %</span><span /></div>
       {brackets.map((b, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px 24px", gap: 4, marginBottom: 2 }}>
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 20px", gap: 4, marginBottom: 2 }}>
           <input type="number" value={b[0]} onChange={e => { const n = [...brackets]; n[i] = [+e.target.value, n[i][1], n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
           <input type="number" value={b[1] >= 9999999 ? "" : b[1]} placeholder="∞" onChange={e => { const n = [...brackets]; n[i] = [n[i][0], e.target.value === "" ? 9999999 : +e.target.value, n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
           <input type="number" step="0.01" value={(b[2] * 100).toFixed(2)} onChange={e => { const n = [...brackets]; n[i] = [n[i][0], n[i][1], +e.target.value / 100]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
@@ -583,6 +589,7 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: bg, fontFamily: "'DM Sans',sans-serif", color: tx }}>
       <style>{`
+        html, body { overflow-x: hidden; max-width: 100vw; }
         :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); }
         input, textarea { background: var(--input-bg) !important; color: var(--input-color) !important; border-color: var(--input-border) !important; }
         select { color: var(--input-color) !important; border-color: var(--input-border) !important; }
@@ -594,9 +601,9 @@ export default function App() {
         .recharts-legend-item-text { color: var(--card-color) !important; }
       `}</style>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:wght@400;700;800;900&display=swap" rel="stylesheet" />
-      <div style={{ position: "sticky", top: 0, zIndex: 50, background: headerBg, color: "#fff", padding: "12px 0 0" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 20px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 50, background: headerBg, color: "#fff", padding: mob ? "6px 0 0" : "12px 0 0" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: mob ? 8 : 12, marginBottom: mob ? 4 : 8 }}>
             <label style={{ cursor: "pointer", flexShrink: 0 }} title="Click to upload custom icon">
               {customIcon
                 ? <img src={customIcon} style={{ width: 34, height: 34, borderRadius: 8, objectFit: "cover" }} />
@@ -627,11 +634,11 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px 60px" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: mob ? "12px 10px 60px" : "24px 20px 60px", overflowX: "hidden" }}>
 
         {/* ═══ TAX RATES ═══ */}
         {tab === "taxes" && (
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, overflowX: "hidden" }}>
             <Card>
               <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Payroll & State Rates</h3>
               <p style={{ fontSize: 12, color: "#999", margin: "0 0 16px" }}>Update when rates change each year.</p>
@@ -884,14 +891,20 @@ export default function App() {
 
         {tab === "budget" && viewingSnap === null && (
           <div>
-            <div style={{ position: "sticky", top: 82, zIndex: 10, paddingTop: 4, paddingBottom: 4, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0" }}>
-            <Card dark style={{ marginBottom: 8 }}>
-              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr 1fr" : "repeat(7, 1fr)", gap: 8, textAlign: "center" }}>
-                {[["Net Income / Week", fmt(C.net), "#4ECDC4"], ["Net Income / Month", fmt(moC(C.net)), "#F2A93B"], ["Net Income / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net Income / Year (52)", fmt(y5(C.net)), "#888"], ["EAIP (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year (52)", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + EAIP / Year", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
-                  <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
+            <div style={{ position: "sticky", top: mob ? 52 : 82, zIndex: 10, paddingTop: 4, paddingBottom: 4, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0" }}>
+            <div onClick={() => mob && setBannerOpen(p => !p)} style={{ cursor: mob ? "pointer" : "default" }}>
+            <Card dark style={{ marginBottom: 8, padding: bannerOpen ? undefined : "8px 16px" }}>
+              {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 8, textAlign: "center" }}>
+                {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + Bonus", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
+                  <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: mob ? 13 : 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
                 ))}
-              </div>
+              </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#4ECDC4" }}>Net: {fmt(C.net)}/wk</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#2ECC71" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
+                <span style={{ fontSize: 10, color: "#888" }}>tap to expand ▾</span>
+              </div>}
             </Card>
+            </div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center", padding: "6px 0" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -923,8 +936,8 @@ export default function App() {
             </div>
 
             <Card style={{ overflowX: "auto" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "2.4fr 1fr 1fr 1fr 1fr", gap: 6, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
-                {["", "Weekly", "Monthly", "Yearly (48)", "Yearly (52)"].map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1.8fr 1fr 1fr" : "2.4fr 1fr 1fr 1fr 1fr", gap: mob ? 4 : 6, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
+                {(mob ? ["", "Weekly", "Yearly (48)"] : ["", "Weekly", "Monthly", "Yearly (48)", "Yearly (52)"]).map(h => <div key={h} style={{ fontSize: mob ? 9 : 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
               </div>
 
               <SH>Income</SH>
@@ -1106,10 +1119,10 @@ export default function App() {
 
             <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
               <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>By Category <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>(% of {savRateBase} income)</span></h3>
-                <ResponsiveContainer width="100%" height={280}><PieChart><Pie data={catTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={2} dataKey="value" stroke="none">{catTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer>
+                <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={catTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={2} dataKey="value" stroke="none">{catTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
               </Card>
               <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(% of {savRateBase} income)</span></h3>
-                <ResponsiveContainer width="100%" height={280}><PieChart><Pie data={typTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={3} dataKey="value" stroke="none">{typTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer>
+                <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={typTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={3} dataKey="value" stroke="none">{typTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
               </Card>
             </div>
 
@@ -1144,12 +1157,12 @@ export default function App() {
               const hasPerPerson = sorted.some(s => s.cNetW && s.kNetW);
               return (
                 <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
-                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Total Expenses (Yearly)</h3><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="Expenses" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></Card>
-                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary</h3><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Necessity" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} /><Line type="monotone" dataKey="Discretionary" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></Card>
-                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Net Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Income" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={includeEaip ? "Net Income + EAIP" : "Net Income"} />{hasPerPerson && <Line type="monotone" dataKey="Corey Net" stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey="Kelly Net" stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></Card>
+                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Total Expenses (Yearly)</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="Expenses" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></div></Card>
+                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Necessity" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} /><Line type="monotone" dataKey="Discretionary" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></div></Card>
+                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Net Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Income" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={includeEaip ? "Net Income + EAIP" : "Net Income"} />{hasPerPerson && <Line type="monotone" dataKey="Corey Net" stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey="Kelly Net" stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card>
                   <Card>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Savings Rate (% of {savRateBase}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3>
-                    <ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 'auto']} /><Tooltip formatter={v => `${v}%`} contentStyle={cs} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Savings Rate (Gross)" : "Savings Rate (Net)"} stroke="#2ECC71" strokeWidth={2.5} dot={{ r: 4, fill: "#2ECC71" }} name={`Savings Rate (${savRateBase}${includeEaip ? " + EAIP" : ""})`} /></LineChart></ResponsiveContainer>
+                    <div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 'auto']} /><Tooltip formatter={v => `${v}%`} contentStyle={cs} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Savings Rate (Gross)" : "Savings Rate (Net)"} stroke="#2ECC71" strokeWidth={2.5} dot={{ r: 4, fill: "#2ECC71" }} name={`Savings Rate (${savRateBase}${includeEaip ? " + EAIP" : ""})`} /></LineChart></ResponsiveContainer></div>
                   </Card>
                 </div>
               );
@@ -1172,9 +1185,9 @@ export default function App() {
                       {names.map(n => <option key={n} value={n}>{n}</option>)}
                     </select>
                   </div>
-                  <ResponsiveContainer width="100%" height={250}>
+                  <div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}>
                     <LineChart data={itemData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={{ borderRadius: 10, border: "none", boxShadow: "0 4px 12px rgba(0,0,0,.1)" }} /><Line type="monotone" dataKey="value" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} name={selName} /></LineChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer></div>
                 </Card>
               ) : null;
             })()}
