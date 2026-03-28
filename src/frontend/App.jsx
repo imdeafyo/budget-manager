@@ -1163,7 +1163,7 @@ export default function App() {
                 const eaip = includeEaip ? snapEaipNet : 0;
                 const eaipG = includeEaip ? snapEaipGross : 0;
                 const netInc = (s.netW || 0) * 48 + eaip;
-                const grossInc = (s.grossW || 0) * 48 + eaipG;
+                const grossInc = (s.grossW || 0) * 52 + eaipG;
                 const savAmt = (s.savW || 0) * 48 + (s.remW || 0) * 48 + eaip;
                 const snapCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet;
                 const snapKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
@@ -1176,8 +1176,8 @@ export default function App() {
                   "Corey Net": Math.round(((s.cNetW || 0) * 48) + (includeEaip ? snapCEaip : 0)),
                   "Kelly Net": Math.round(((s.kNetW || 0) * 48) + (includeEaip ? snapKEaip : 0)),
                   "Gross Income": Math.round(grossInc),
-                  "Corey Gross": Math.round((s.cGrossW || 0) * 48),
-                  "Kelly Gross": Math.round((s.kGrossW || 0) * 48),
+                  "Corey Gross": Math.round((s.cGrossW || 0) * 52),
+                  "Kelly Gross": Math.round((s.kGrossW || 0) * 52),
                   "Savings Rate (Net)": netInc > 0 ? Math.round(savAmt / netInc * 1000) / 10 : 0,
                   "Savings Rate (Gross)": grossInc > 0 ? Math.round(savAmt / grossInc * 1000) / 10 : 0,
                 };
