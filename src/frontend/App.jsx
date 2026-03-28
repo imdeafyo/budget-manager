@@ -107,7 +107,7 @@ const pctOf = (part, total) => total > 0 ? `${(part / total * 100).toFixed(1)}%`
 function useM(bp = 700) { const [m, s] = useState(window.innerWidth < bp); useEffect(() => { const h = () => s(window.innerWidth < bp); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, [bp]); return m; }
 
 /* ── Shared UI components (OUTSIDE App to prevent re-mount) ── */
-const Card = ({ children, style, dark }) => <div style={{ background: dark ? "linear-gradient(135deg,#1a1a1a,#2d2d2d)" : "var(--card-bg, #fff)", borderRadius: 14, padding: 24, boxShadow: dark ? "none" : "var(--shadow, 0 1px 4px rgba(0,0,0,.06))", color: dark ? "#fff" : "var(--card-color, #222)", ...style }}>{children}</div>;
+const Card = ({ children, style, dark }) => { const m = window.innerWidth < 700; return <div style={{ background: dark ? "linear-gradient(135deg,#1a1a1a,#2d2d2d)" : "var(--card-bg, #fff)", borderRadius: 14, padding: m ? 14 : 24, boxShadow: dark ? "none" : "var(--shadow, 0 1px 4px rgba(0,0,0,.06))", color: dark ? "#fff" : "var(--card-color, #222)", overflow: "hidden", maxWidth: "100%", ...style }}>{children}</div>; };
 const SH = ({ children, color }) => <div style={{ fontSize: 11, fontWeight: 700, color: color || "#999", textTransform: "uppercase", letterSpacing: 1.5, marginTop: 24, marginBottom: 8 }}>{children}</div>;
 const CSH = ({ children, color, collapsed, onToggle }) => <div onClick={onToggle} style={{ fontSize: 11, fontWeight: 700, color: color || "#999", textTransform: "uppercase", letterSpacing: 1.5, marginTop: 24, marginBottom: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, userSelect: "none" }}><span style={{ fontSize: 14, transition: "transform 0.2s", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>▾</span>{children}</div>;
 
@@ -207,7 +207,8 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
     setEditPer(null);
   };
   const vc = useContext(VisColsCtx);
-  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
+  const y52V = wk * 52;
+  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
       <div style={{ fontSize: 12, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
@@ -227,6 +228,7 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
         }
         return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
+      {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -249,7 +251,7 @@ function SavRowInner({ item, savCats, onUpdate, onRemove }) {
     setEditPer(null);
   };
   const vc = useContext(VisColsCtx);
-  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
+  const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
       <div style={{ fontSize: 12, color: "#2ECC71", fontWeight: 500, display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
@@ -265,6 +267,7 @@ function SavRowInner({ item, savCats, onUpdate, onRemove }) {
         }
         return <div key={per} onClick={() => setEditPer(per)} style={{ fontSize: 12, textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4 }}>{fmt(valFor(per))}</div>;
       })}
+      {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(y52V)}</div>}
       <button onClick={onRemove} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
     </div>
   );
@@ -597,6 +600,7 @@ export default function App() {
       <style>{`
         html, body { max-width: 100vw; }
         * { box-sizing: border-box; }
+        input, textarea, select { max-width: 100%; min-width: 0; }
         :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); }
         input, textarea { background: var(--input-bg) !important; color: var(--input-color) !important; border-color: var(--input-border) !important; }
         select { color: var(--input-color) !important; border-color: var(--input-border) !important; }
