@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 /* ── Formula eval: strips commas, evaluates math, returns number ── */
@@ -169,9 +169,9 @@ function EditTxt({ value, onChange, color }) {
     : <span onClick={() => setEd(true)} style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, color: color || "inherit" }} title="Click to rename">{value}</span>;
 }
 
-let _visCols = { wk: true, mo: true, y48: true, y52: true };
+const VisColsCtx = createContext({ wk: true, mo: true, y48: true, y52: true });
 const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub }) => {
-  const vc = _visCols;
+  const vc = useContext(VisColsCtx);
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr"].filter(Boolean).join(" ");
   return (
   <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
@@ -206,7 +206,7 @@ function ExpRowInner({ item, cats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
-  const vc = _visCols;
+  const vc = useContext(VisColsCtx);
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
@@ -248,7 +248,7 @@ function SavRowInner({ item, savCats, onUpdate, onRemove }) {
     onUpdate({ v: toStored });
     setEditPer(null);
   };
-  const vc = _visCols;
+  const vc = useContext(VisColsCtx);
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
     <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(46,204,113,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
@@ -489,7 +489,7 @@ export default function App() {
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
   const BrEd = ({ brackets, onChange }) => (
-    <div style={{ overflowX: "hidden" }}>
+    <div style={{  }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
       {brackets.map((b, i) => (
         <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, marginBottom: 2 }}>
@@ -590,21 +590,12 @@ export default function App() {
 
   const iconRef = useRef(null);
   const headerRef = useRef(null);
-  const [headerH, setHeaderH] = useState(mob ? 72 : 88);
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setHeaderH(el.offsetHeight));
-    ro.observe(el);
-    setHeaderH(el.offsetHeight);
-    return () => ro.disconnect();
-  }, []);
-  useEffect(() => { _visCols = visCols; }, [visCols]);
 
   return (
+    <VisColsCtx.Provider value={visCols}>
     <div style={{ minHeight: "100vh", background: bg, fontFamily: "'DM Sans',sans-serif", color: tx }}>
       <style>{`
-        html, body { overflow-x: hidden; max-width: 100vw; }
+        html, body { max-width: 100vw; }
         * { box-sizing: border-box; }
         :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); }
         input, textarea { background: var(--input-bg) !important; color: var(--input-color) !important; border-color: var(--input-border) !important; }
@@ -650,13 +641,65 @@ export default function App() {
             <button style={ts(tab === "charts")} onClick={() => setTab("charts")}>Charts</button>
           </div>
         </div>
+        {/* Banner + Toolbar - inside sticky header, only on budget tab */}
+        {tab === "budget" && viewingSnap === null && <div style={{ maxWidth: 1100, margin: "0 auto", padding: "4px 12px 2px", background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", borderTop: `1px solid ${dk ? "#333" : waf ? "#c0bbb5" : "#ddd"}` }}>
+          <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
+            {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 6, textAlign: "center", padding: "8px 0" }}>
+              {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + Bonus", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
+                <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: mob ? 12 : 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
+              ))}
+              {mob && <div style={{ gridColumn: "1/-1", fontSize: 9, color: "var(--tx3,#999)", textAlign: "center" }}>tap to collapse ▴</div>}
+            </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#4ECDC4" }}>Net: {fmt(C.net)}/wk</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#2ECC71" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
+              <span style={{ fontSize: 10, color: "var(--tx3,#999)" }}>▾</span>
+            </div>}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", borderTop: "1px solid var(--bdr, #ddd)" }}>
+            <span onClick={() => setToolbarOpen(p => !p)} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
+            <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3, #999)", marginRight: 2 }}>Cols:</span>
+              {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y48"], ["y52", "Y52"]].map(([k, lbl]) =>
+                <button key={k} onClick={() => setVisCols(p => ({ ...p, [k]: !p[k] }))}
+                  style={{ padding: "3px 8px", fontSize: 10, fontWeight: 700, border: visCols[k] ? "2px solid #556FB5" : "2px solid var(--bdr, #ccc)", borderRadius: 6, background: visCols[k] ? "#EEF1FA" : "transparent", color: visCols[k] ? "#556FB5" : "var(--tx3, #aaa)", cursor: "pointer" }}>{lbl}</button>
+              )}
+            </div>
+          </div>
+          {toolbarOpen && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: "4px 0", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#999)", textTransform: "uppercase" }}>Sort:</span>
+              {[["default", "Default"], ["amount", "Amount"], ["category", "Category"]].map(([v, l]) => (
+                <button key={v} onClick={() => { if (sortBy === v && v === "amount") setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortBy(v); if (v === "amount") setSortDir("desc"); } }}
+                  style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: sortBy === v ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: sortBy === v ? "#EEF1FA" : "var(--input-bg, #fafafa)", color: sortBy === v ? "#556FB5" : "var(--tx3, #888)", cursor: "pointer" }}>
+                  {l}{sortBy === v && v === "amount" ? (sortDir === "desc" ? " ↓" : " ↑") : ""}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#999)" }}>Highlight &gt;</span>
+              <NI value={hlThresh} onChange={v => setHlThresh(v)} prefix="$" style={{ width: 90, height: 30 }} />
+              <select value={hlPeriod} onChange={e => setHlPeriod(e.target.value)} style={{ fontSize: 11, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, padding: "4px 6px", background: "var(--input-bg, #fafafa)", cursor: "pointer" }}>
+                <option value="w">/wk</option><option value="m">/mo</option><option value="y">/yr</option>
+              </select>
+            </div>
+            <button onClick={() => setShowPerPerson(p => !p)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: showPerPerson ? "2px solid #4ECDC4" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: showPerPerson ? "#E8F8F5" : "var(--input-bg, #fafafa)", color: showPerPerson ? "#4ECDC4" : "var(--tx3, #888)", cursor: "pointer" }}>
+              {showPerPerson ? "Hide" : "Show"} Per-Person
+            </button>
+            <button onClick={toggleAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, background: "var(--input-bg, #fafafa)", color: "var(--tx3, #888)", cursor: "pointer" }}>
+              {allExpanded ? "Collapse All" : "Expand All"}
+            </button>
+            <button onClick={() => setShowAddItem(true)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#fef5f2", color: "#E8573A", cursor: "pointer" }}>
+              + Add Item
+            </button>
+          </div>}
+        </div>}
       </div>
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: mob ? "12px 10px 60px" : "24px 20px 60px", overflowX: "hidden" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: mob ? "12px 10px 60px" : "24px 20px 60px" }}>
 
         {/* ═══ TAX RATES ═══ */}
         {tab === "taxes" && (
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, overflowX: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20 }}>
             <Card>
               <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Payroll & State Rates</h3>
               <p style={{ fontSize: 12, color: "#999", margin: "0 0 16px" }}>Update when rates change each year.</p>
@@ -909,60 +952,6 @@ export default function App() {
 
         {tab === "budget" && viewingSnap === null && (
           <div>
-            <div style={{ position: "sticky", top: headerH, zIndex: 10, paddingTop: 0, paddingBottom: 0, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", marginTop: -1 }}>
-            <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
-            <Card dark style={{ marginBottom: 4, padding: bannerOpen ? undefined : "8px 16px" }}>
-              {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 8, textAlign: "center" }}>
-                {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + Bonus", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
-                  <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: mob ? 13 : 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
-                ))}
-                {mob && <div style={{ gridColumn: "1/-1", fontSize: 9, color: "#666", textAlign: "center" }}>tap to collapse ▴</div>}
-              </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#4ECDC4" }}>Net: {fmt(C.net)}/wk</span>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#2ECC71" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
-                <span style={{ fontSize: 10, color: "#888" }}>▾</span>
-              </div>}
-            </Card>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px" }}>
-              <span onClick={() => setToolbarOpen(p => !p)} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
-              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3, #999)", marginRight: 2 }}>Columns:</span>
-                {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y48"], ["y52", "Y52"]].map(([k, lbl]) =>
-                  <button key={k} onClick={() => setVisCols(p => ({ ...p, [k]: !p[k] }))}
-                    style={{ padding: "3px 8px", fontSize: 10, fontWeight: 700, border: visCols[k] ? "2px solid #556FB5" : "2px solid #ccc", borderRadius: 6, background: visCols[k] ? "#EEF1FA" : "transparent", color: visCols[k] ? "#556FB5" : "#aaa", cursor: "pointer" }}>{lbl}</button>
-                )}
-              </div>
-            </div>
-            {toolbarOpen && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center", padding: "2px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>Sort:</span>
-                {[["default", "Default"], ["amount", "Amount"], ["category", "Category"]].map(([v, l]) => (
-                  <button key={v} onClick={() => { if (sortBy === v && v === "amount") setSortDir(d => d === "desc" ? "asc" : "desc"); else { setSortBy(v); if (v === "amount") setSortDir("desc"); } }}
-                    style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: sortBy === v ? "2px solid #556FB5" : "2px solid #ddd", borderRadius: 6, background: sortBy === v ? "#EEF1FA" : "#fafafa", color: sortBy === v ? "#556FB5" : "#888", cursor: "pointer" }}>
-                    {l}{sortBy === v && v === "amount" ? (sortDir === "desc" ? " ↓" : " ↑") : ""}
-                  </button>
-                ))}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Highlight &gt;</span>
-                <NI value={hlThresh} onChange={v => setHlThresh(v)} prefix="$" style={{ width: 90, height: 30 }} />
-                <select value={hlPeriod} onChange={e => setHlPeriod(e.target.value)} style={{ fontSize: 11, border: "2px solid #ddd", borderRadius: 6, padding: "4px 6px", background: "#fafafa", cursor: "pointer" }}>
-                  <option value="w">/wk</option><option value="m">/mo</option><option value="y">/yr</option>
-                </select>
-              </div>
-              <button onClick={() => setShowPerPerson(p => !p)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: showPerPerson ? "2px solid #4ECDC4" : "2px solid #ddd", borderRadius: 6, background: showPerPerson ? "#E8F8F5" : "#fafafa", color: showPerPerson ? "#4ECDC4" : "#888", cursor: "pointer" }}>
-                {showPerPerson ? "Hide" : "Show"} Per-Person
-              </button>
-              <button onClick={toggleAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #ddd", borderRadius: 6, background: "#fafafa", color: "#888", cursor: "pointer" }}>
-                {allExpanded ? "Collapse All" : "Expand All"}
-              </button>
-              <button onClick={() => setShowAddItem(true)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#fef5f2", color: "#E8573A", cursor: "pointer" }}>
-                + Add Item
-              </button>
-            </div>}
-            </div>
 
             <Card style={{ overflowX: "auto" }}>
               {(() => { const cols = ["1.8fr", visCols.wk && "1fr", visCols.mo && "1fr", visCols.y48 && "1fr", visCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (visCols.wk) hdrs.push("Weekly"); if (visCols.mo) hdrs.push("Monthly"); if (visCols.y48) hdrs.push("Yr (48)"); if (visCols.y52) hdrs.push("Yr (52)"); return (
@@ -1289,5 +1278,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </VisColsCtx.Provider>
   );
 }
