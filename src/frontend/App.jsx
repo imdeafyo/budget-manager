@@ -353,9 +353,9 @@ export default function App() {
   const [niT, setNiT] = useState("N"); const [niS, setNiS] = useState("exp"); const [niP, setNiP] = useState("m"); const [niV, setNiV] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
   const [customIcon, setCustomIcon] = useState(null);
-  const [bannerOpen, setBannerOpen] = useState(!window.innerWidth || window.innerWidth >= 700);
-  const [toolbarOpen, setToolbarOpen] = useState(!window.innerWidth || window.innerWidth >= 700);
-  const [visCols, setVisCols] = useState({ wk: true, mo: !window.innerWidth || window.innerWidth >= 700, y48: true, y52: !window.innerWidth || window.innerWidth >= 700 });
+  const [bannerOpen, setBannerOpen] = useState(() => { try { const v = localStorage.getItem("budget-banner"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
+  const [toolbarOpen, setToolbarOpen] = useState(() => { try { const v = localStorage.getItem("budget-toolbar"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
+  const [visCols, setVisCols] = useState(() => { try { const v = localStorage.getItem("budget-cols"); return v ? JSON.parse(v) : { wk: true, mo: !window.innerWidth || window.innerWidth >= 700, y48: true, y52: !window.innerWidth || window.innerWidth >= 700 }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
   const [showPerPerson, setShowPerPerson] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [snapLabel, setSnapLabel] = useState("");
@@ -537,6 +537,9 @@ export default function App() {
   const dk = darkMode === "dark" || darkMode === true;
   const waf = darkMode === "waf";
   useEffect(() => { try { localStorage.setItem("budget-theme", darkMode); } catch {} }, [darkMode]);
+  useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
+  useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
+  useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
   const cycleTheme = () => setDarkMode(p => p === "light" || p === false ? "dark" : p === "dark" || p === true ? "waf" : "light");
   const bg = dk ? "#1e1e1e" : waf ? "#d5d0cb" : "linear-gradient(145deg,#f5f0eb 0%,#ede7e0 50%,#e8e2db 100%)";
   const headerBg = dk ? "#1a1a1a" : waf ? "#486b50" : "#1a1a1a";
