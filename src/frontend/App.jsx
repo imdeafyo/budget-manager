@@ -489,14 +489,14 @@ export default function App() {
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
   const BrEd = ({ brackets, onChange }) => (
-    <div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 20px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate %</span><span /></div>
+    <div style={{ overflowX: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
       {brackets.map((b, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 60px 20px", gap: 4, marginBottom: 2 }}>
-          <input type="number" value={b[0]} onChange={e => { const n = [...brackets]; n[i] = [+e.target.value, n[i][1], n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
-          <input type="number" value={b[1] >= 9999999 ? "" : b[1]} placeholder="∞" onChange={e => { const n = [...brackets]; n[i] = [n[i][0], e.target.value === "" ? 9999999 : +e.target.value, n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
-          <input type="number" step="0.01" value={(b[2] * 100).toFixed(2)} onChange={e => { const n = [...brackets]; n[i] = [n[i][0], n[i][1], +e.target.value / 100]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} />
-          <button onClick={() => onChange(brackets.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, marginBottom: 2 }}>
+          <input type="number" value={b[0]} onChange={e => { const n = [...brackets]; n[i] = [+e.target.value, n[i][1], n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
+          <input type="number" value={b[1] >= 9999999 ? "" : b[1]} placeholder="∞" onChange={e => { const n = [...brackets]; n[i] = [n[i][0], e.target.value === "" ? 9999999 : +e.target.value, n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
+          <input type="number" step="0.01" value={(b[2] * 100).toFixed(2)} onChange={e => { const n = [...brackets]; n[i] = [n[i][0], n[i][1], +e.target.value / 100]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
+          <button onClick={() => onChange(brackets.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc", padding: 0 }}>×</button>
         </div>
       ))}
       <button onClick={() => { const l = brackets[brackets.length - 1]; onChange([...brackets, [l ? l[1] : 0, 9999999, .37]]); }} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Bracket</button>
@@ -506,7 +506,7 @@ export default function App() {
   const DedEditor = ({ items, setItems, label }) => (
     <Card>
       <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>{label} <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(weekly $)</span></h3>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 24px", gap: "6px 10px", alignItems: "center" }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr 1fr 20px" : "1fr 1fr 1fr 24px", gap: "6px 8px", alignItems: "center" }}>
         <div style={{ fontWeight: 700, fontSize: 11, color: "#999" }}>Name</div>
         <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>Corey</div>
         <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>Kelly</div><div />
@@ -589,6 +589,16 @@ export default function App() {
   }, [dk, waf]);
 
   const iconRef = useRef(null);
+  const headerRef = useRef(null);
+  const [headerH, setHeaderH] = useState(mob ? 72 : 88);
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setHeaderH(el.offsetHeight));
+    ro.observe(el);
+    setHeaderH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => { _visCols = visCols; }, [visCols]);
 
   return (
@@ -607,39 +617,38 @@ export default function App() {
         .recharts-legend-item-text { color: var(--card-color) !important; }
       `}</style>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Fraunces:wght@400;700;800;900&display=swap" rel="stylesheet" />
-      {/* Title bar - always sticky */}
-      <div style={{ position: "sticky", top: 0, zIndex: 51, background: headerBg, color: "#fff", padding: mob ? "6px 12px" : "10px 20px" }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", gap: mob ? 8 : 12 }}>
-          <label style={{ cursor: "pointer", flexShrink: 0 }} title="Click to upload custom icon">
-            {customIcon
-              ? <img src={customIcon} style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, objectFit: "cover" }} />
-              : <div style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, background: "linear-gradient(135deg,#E8573A,#F2A93B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: mob ? 14 : 18 }}>💰</div>}
-            <input ref={iconRef} type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = ev => setCustomIcon(ev.target.result); r.readAsDataURL(f); } }} style={{ display: "none" }} />
-          </label>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {editingTitle
-              ? <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
-                  onBlur={() => { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); }}
-                  onKeyDown={e => { if (e.key === "Enter") { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
-                  style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, background: "transparent", border: "none", borderBottom: "2px solid #E8573A", color: "#fff", outline: "none", width: "100%" }} />
-              : <h1 onClick={() => { setTitleDraft(appTitle); setEditingTitle(true); }} style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title="Click to rename">{appTitle}</h1>}
-            {!mob && <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {tax.stateName || "State"}</p>}
+      {/* Header + Tabs - single sticky block */}
+      <div ref={headerRef} style={{ position: "sticky", top: 0, zIndex: 50, background: headerBg, color: "#fff" }}>
+        <div style={{ maxWidth: 1100, margin: "0 auto", padding: mob ? "6px 12px 0" : "10px 20px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: mob ? 8 : 12, marginBottom: 4 }}>
+            <label style={{ cursor: "pointer", flexShrink: 0 }} title="Click to upload custom icon">
+              {customIcon
+                ? <img src={customIcon} style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, objectFit: "cover" }} />
+                : <div style={{ width: mob ? 28 : 34, height: mob ? 28 : 34, borderRadius: 8, background: "linear-gradient(135deg,#E8573A,#F2A93B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: mob ? 14 : 18 }}>💰</div>}
+              <input ref={iconRef} type="file" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onload = ev => setCustomIcon(ev.target.result); r.readAsDataURL(f); } }} style={{ display: "none" }} />
+            </label>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {editingTitle
+                ? <input autoFocus value={titleDraft} onChange={e => setTitleDraft(e.target.value)}
+                    onBlur={() => { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); }}
+                    onKeyDown={e => { if (e.key === "Enter") { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
+                    style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, background: "transparent", border: "none", borderBottom: "2px solid #E8573A", color: "#fff", outline: "none", width: "100%" }} />
+                : <h1 onClick={() => { setTitleDraft(appTitle); setEditingTitle(true); }} style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title="Click to rename">{appTitle}</h1>}
+              {!mob && <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {tax.stateName || "State"}</p>}
+            </div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setDarkMode("light")} style={{ padding: "5px 10px", background: !dk && !waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !dk && !waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
+              <button onClick={() => setDarkMode("dark")} style={{ padding: "5px 10px", background: dk ? "#F2A93B" : "rgba(255,255,255,0.1)", color: dk ? "#1a1a1a" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌙</button>
+              <button onClick={() => setDarkMode("waf")} style={{ padding: "5px 10px", background: waf ? "#c96b70" : "rgba(255,255,255,0.1)", color: waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌸</button>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={() => setDarkMode("light")} style={{ padding: "5px 10px", background: !dk && !waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !dk && !waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
-            <button onClick={() => setDarkMode("dark")} style={{ padding: "5px 10px", background: dk ? "#F2A93B" : "rgba(255,255,255,0.1)", color: dk ? "#1a1a1a" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌙</button>
-            <button onClick={() => setDarkMode("waf")} style={{ padding: "5px 10px", background: waf ? "#c96b70" : "rgba(255,255,255,0.1)", color: waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌸</button>
+          <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #444", overflowX: "auto" }}>
+            <button style={ts(tab === "taxes")} onClick={() => setTab("taxes")}>Tax Rates</button>
+            <button style={ts(tab === "settings")} onClick={() => setTab("settings")}>Income</button>
+            <button style={ts(tab === "budget")} onClick={() => setTab("budget")}>Budget</button>
+            <button style={ts(tab === "cats")} onClick={() => setTab("cats")}>Categories</button>
+            <button style={ts(tab === "charts")} onClick={() => setTab("charts")}>Charts</button>
           </div>
-        </div>
-      </div>
-      {/* Tabs - separate sticky */}
-      <div style={{ position: "sticky", top: mob ? 40 : 52, zIndex: 50, background: headerBg }}>
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 12px", display: "flex", gap: 2, borderBottom: "1px solid #333", overflowX: "auto" }}>
-          <button style={ts(tab === "taxes")} onClick={() => setTab("taxes")}>Tax Rates</button>
-          <button style={ts(tab === "settings")} onClick={() => setTab("settings")}>Income</button>
-          <button style={ts(tab === "budget")} onClick={() => setTab("budget")}>Budget</button>
-          <button style={ts(tab === "cats")} onClick={() => setTab("cats")}>Categories</button>
-          <button style={ts(tab === "charts")} onClick={() => setTab("charts")}>Charts</button>
         </div>
       </div>
 
@@ -900,7 +909,7 @@ export default function App() {
 
         {tab === "budget" && viewingSnap === null && (
           <div>
-            <div style={{ position: "sticky", top: mob ? 72 : 88, zIndex: 10, paddingTop: 4, paddingBottom: 4, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0" }}>
+            <div style={{ position: "sticky", top: headerH, zIndex: 10, paddingTop: 0, paddingBottom: 0, background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", marginTop: -1 }}>
             <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
             <Card dark style={{ marginBottom: 4, padding: bannerOpen ? undefined : "8px 16px" }}>
               {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 8, textAlign: "center" }}>
@@ -916,14 +925,14 @@ export default function App() {
             </Card>
             </div>
 
-            <div onClick={() => setToolbarOpen(p => !p)} style={{ cursor: "pointer", padding: "4px 8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                {["wk", "mo", "y48", "y52"].map(k => {
-                  const labels = { wk: "W", mo: "M", y48: "48", y52: "52" };
-                  return <button key={k} onClick={e => { e.stopPropagation(); setVisCols(p => ({ ...p, [k]: !p[k] })); }}
-                    style={{ padding: "2px 6px", fontSize: 9, fontWeight: 700, border: visCols[k] ? "1px solid var(--c-taxable, #556FB5)" : "1px solid #ccc", borderRadius: 4, background: visCols[k] ? "rgba(85,111,181,0.1)" : "transparent", color: visCols[k] ? "var(--c-taxable, #556FB5)" : "#aaa", cursor: "pointer" }}>{labels[k]}</button>;
-                })}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 8px" }}>
+              <span onClick={() => setToolbarOpen(p => !p)} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
+              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3, #999)", marginRight: 2 }}>Columns:</span>
+                {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y48"], ["y52", "Y52"]].map(([k, lbl]) =>
+                  <button key={k} onClick={() => setVisCols(p => ({ ...p, [k]: !p[k] }))}
+                    style={{ padding: "3px 8px", fontSize: 10, fontWeight: 700, border: visCols[k] ? "2px solid #556FB5" : "2px solid #ccc", borderRadius: 6, background: visCols[k] ? "#EEF1FA" : "transparent", color: visCols[k] ? "#556FB5" : "#aaa", cursor: "pointer" }}>{lbl}</button>
+                )}
               </div>
             </div>
             {toolbarOpen && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 4, alignItems: "center", padding: "2px 0" }}>
