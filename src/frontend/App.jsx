@@ -69,8 +69,10 @@ const DEF_TAX = {
     { name: "FAMLI", rate: 0.45, onTaxable: false },
   ],
   k401Lim: 24500,
-  matchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }],
-  matchBase: 6,
+  c401Catch: 0, c401CatchPreTax: true,
+  k401Catch: 0, k401CatchPreTax: true,
+  cMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], cMatchBase: 6,
+  kMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], kMatchBase: 6,
   hsaLimit: 8300, hsaEmployerMatch: 0,
 };
 const DEF_CATS = ["Automotive","Clothing","Entertainment","Fees","Fun Money","General","Groceries","Healthcare","Housing","Internet","Personal Care","Pet Care","Phone","Restaurants","Student Loans","Taxes","Utilities"];
@@ -316,7 +318,7 @@ export default function App() {
   const loadTaxYear = (yr) => {
     const rates = allTaxDB[yr];
     if (!rates) { setFetchStatus("❌ No data for " + yr); return; }
-    setTax(prev => ({ ...prev, year: yr, ...rates, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, matchTiers: prev.matchTiers, matchBase: prev.matchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+    setTax(prev => ({ ...prev, year: yr, ...rates, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
     setFetchStatus("✅ Loaded " + yr + " federal rates.");
   };
   const addTaxYear = (json) => {
@@ -326,7 +328,7 @@ export default function App() {
       const yr = String(parsed.year);
       const entry = { fedSingle: parsed.fedSingle, fedMFJ: parsed.fedMFJ, stdSingle: parsed.stdSingle, stdMFJ: parsed.stdMFJ, ssRate: parsed.ssRate, ssCap: parsed.ssCap, medRate: parsed.medRate, k401Lim: parsed.k401Lim, hsaLimit: parsed.hsaLimit };
       setCustomTaxDB(prev => ({ ...prev, [yr]: entry }));
-      setTax(prev => ({ ...prev, year: yr, ...entry, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, matchTiers: prev.matchTiers, matchBase: prev.matchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+      setTax(prev => ({ ...prev, year: yr, ...entry, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
       setFetchStatus("✅ Added & loaded " + yr + " rates!");
       setTaxPaste(""); setShowTaxPaste(false);
     } catch (e) { setFetchStatus("❌ Invalid JSON: " + e.message); }
@@ -395,10 +397,17 @@ export default function App() {
     const cs = evalF(cSal), ks = evalF(kSal), cw = cs / 52, kw = ks / 52;
     const cPreW = preDed.reduce((s, d) => s + evalF(d.c), 0);
     const kPreW = preDed.reduce((s, d) => s + evalF(d.k), 0);
-    const cPrePct = Math.min(evalF(c4pre) / 100, tax.k401Lim / Math.max(cs, 1));
-    const cRoPct = Math.min(evalF(c4ro) / 100, (tax.k401Lim - cs * cPrePct) / Math.max(cs, 1));
-    const kPrePct = Math.min(evalF(k4pre) / 100, tax.k401Lim / Math.max(ks, 1));
-    const kRoPct = Math.min(evalF(k4ro) / 100, (tax.k401Lim - ks * kPrePct) / Math.max(ks, 1));
+    // 401k limits: base + catch-up per person
+    const cLim = tax.k401Lim + (tax.c401Catch || 0), kLim = tax.k401Lim + (tax.k401Catch || 0);
+    // Catch-up split: if pre-tax, adds to pre-tax cap; if Roth, adds to Roth cap
+    const cCatchPre = (tax.c401CatchPreTax !== false) ? (tax.c401Catch || 0) : 0;
+    const cCatchRo = (tax.c401CatchPreTax === false) ? (tax.c401Catch || 0) : 0;
+    const kCatchPre = (tax.k401CatchPreTax !== false) ? (tax.k401Catch || 0) : 0;
+    const kCatchRo = (tax.k401CatchPreTax === false) ? (tax.k401Catch || 0) : 0;
+    const cPrePct = Math.min(evalF(c4pre) / 100, (tax.k401Lim + cCatchPre) / Math.max(cs, 1));
+    const cRoPct = Math.min(evalF(c4ro) / 100, (cLim - cs * cPrePct) / Math.max(cs, 1));
+    const kPrePct = Math.min(evalF(k4pre) / 100, (tax.k401Lim + kCatchPre) / Math.max(ks, 1));
+    const kRoPct = Math.min(evalF(k4ro) / 100, (kLim - ks * kPrePct) / Math.max(ks, 1));
     const c4preW = cs * cPrePct / 52, c4roW = cs * cRoPct / 52;
     const k4preW = ks * kPrePct / 52, k4roW = ks * kRoPct / 52;
     const c4w = c4preW + c4roW, k4w = k4preW + k4roW;
@@ -421,8 +430,8 @@ export default function App() {
     const cNet = cw - cPreW - c4w - cTx - postDed.reduce((s, d) => s + evalF(d.c), 0);
     const kNet = kw - kPreW - k4w - kTx - postDed.reduce((s, d) => s + evalF(d.k), 0);
     const cTotalPct = evalF(c4pre) + evalF(c4ro), kTotalPct = evalF(k4pre) + evalF(k4ro);
-    const cMP = calcMatch(cTotalPct, tax.matchTiers || [], tax.matchBase || 0);
-    const kMP = calcMatch(kTotalPct, tax.matchTiers || [], tax.matchBase || 0);
+    const cMP = calcMatch(cTotalPct, tax.cMatchTiers || [], tax.cMatchBase || 0);
+    const kMP = calcMatch(kTotalPct, tax.kMatchTiers || [], tax.kMatchBase || 0);
     // EAIP — annual bonus, taxed at marginal rates
     const cEaipGross = cs * (evalF(cEaip) / 100);
     const kEaipGross = ks * (evalF(kEaip) / 100);
@@ -713,7 +722,7 @@ export default function App() {
               <p style={{ fontSize: 12, color: "#999", margin: "0 0 16px" }}>Update when rates change each year.</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Tax Year</label><input value={tax.year} onChange={e => upTax("year", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
-                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>401(k) Limit</label><NI value={tax.k401Lim} onChange={v => upTax("k401Lim", +v || 0)} prefix="$" /></div>
+                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>401(k) Base Limit</label><NI value={tax.k401Lim} onChange={v => upTax("k401Lim", +v || 0)} prefix="$" /></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>State Name</label><input value={tax.stateName || ""} onChange={e => upTax("stateName", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>State Abbreviation</label><input value={tax.stateAbbr || ""} onChange={e => upTax("stateAbbr", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
                 {[["OASDI %", "ssRate"], ["SS Wage Cap", "ssCap"], ["Medicare %", "medRate"], ["State Income %", "coRate"], ["State FAMLI EE %", "coFamli"]].map(([l, k]) => (
@@ -722,17 +731,29 @@ export default function App() {
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Std Ded (Single)</label><NI value={tax.stdSingle} onChange={v => upTax("stdSingle", +v || 0)} prefix="$" /></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Std Ded (MFJ)</label><NI value={tax.stdMFJ} onChange={v => upTax("stdMFJ", +v || 0)} prefix="$" /></div>
               </div>
-              <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>401(k) Employer Match Tiers</h4>
-              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.matchBase} onChange={e => upTax("matchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
+              <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>Corey — Employer Match</h4>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.cMatchBase || 0} onChange={e => upTax("cMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>Up to EE %</span><span>Match rate</span><span /></div>
-              {(tax.matchTiers || []).map((t, i) => (
+              {(tax.cMatchTiers || []).map((t, i) => (
                 <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, marginBottom: 2 }}>
-                  <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.matchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("matchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
-                  <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.matchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("matchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
-                  <button onClick={() => upTax("matchTiers", (tax.matchTiers || []).filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
+                  <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                  <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                  <button onClick={() => upTax("cMatchTiers", (tax.cMatchTiers || []).filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
                 </div>
               ))}
-              <button onClick={() => upTax("matchTiers", [...(tax.matchTiers || []), { upTo: 10, rate: 0.5 }])} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Tier</button>
+              <button onClick={() => upTax("cMatchTiers", [...(tax.cMatchTiers || []), { upTo: 10, rate: 0.5 }])} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Tier</button>
+
+              <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>Kelly — Employer Match</h4>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.kMatchBase || 0} onChange={e => upTax("kMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>Up to EE %</span><span>Match rate</span><span /></div>
+              {(tax.kMatchTiers || []).map((t, i) => (
+                <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, marginBottom: 2 }}>
+                  <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                  <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                  <button onClick={() => upTax("kMatchTiers", (tax.kMatchTiers || []).filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
+                </div>
+              ))}
+              <button onClick={() => upTax("kMatchTiers", [...(tax.kMatchTiers || []), { upTo: 10, rate: 0.5 }])} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Tier</button>
               <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>HSA</h4>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Annual Limit</label><NI value={tax.hsaLimit} onChange={v => upTax("hsaLimit", +v || 0)} prefix="$" /></div>
@@ -747,7 +768,7 @@ export default function App() {
                   <button onClick={() => setShowTaxPaste(p => !p)} style={{ padding: "8px 16px", fontSize: 12, border: "none", borderRadius: 8, background: "#556FB5", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
                     + Add New Year
                   </button>
-                  <button onClick={() => setTax(prev => ({ ...DEF_TAX, year: prev.year, stateName: prev.stateName, stateAbbr: prev.stateAbbr, coRate: prev.coRate, coFamli: prev.coFamli, stateTaxes: prev.stateTaxes, matchTiers: prev.matchTiers, matchBase: prev.matchBase, hsaEmployerMatch: prev.hsaEmployerMatch }))} style={{ padding: "8px 16px", fontSize: 12, border: "2px solid #E8573A", borderRadius: 8, background: "none", color: "#E8573A", fontWeight: 600, cursor: "pointer" }}>Reset {tax.year}</button>
+                  <button onClick={() => setTax(prev => ({ ...DEF_TAX, year: prev.year, stateName: prev.stateName, stateAbbr: prev.stateAbbr, coRate: prev.coRate, coFamli: prev.coFamli, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }))} style={{ padding: "8px 16px", fontSize: 12, border: "2px solid #E8573A", borderRadius: 8, background: "none", color: "#E8573A", fontWeight: 600, cursor: "pointer" }}>Reset {tax.year}</button>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>
                   {Object.keys(allTaxDB).length} years available (1996–{Object.keys(allTaxDB).sort((a, b) => b - a)[0]}). State rates are always preserved when switching years.
@@ -775,7 +796,7 @@ export default function App() {
             <Card dark style={{ gridColumn: mob ? "1" : "1/-1" }}>
               <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Active Summary</h3>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, fontSize: 13 }}>
-                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${tax.stateAbbr || "ST"} State`, p2(tax.coRate)], [`${tax.stateAbbr || "ST"} FAMLI`, p2(tax.coFamli)], ["401(k) Limit", fmt(tax.k401Lim)], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
+                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${tax.stateAbbr || "ST"} State`, p2(tax.coRate)], [`${tax.stateAbbr || "ST"} FAMLI`, p2(tax.coFamli)], ["401k P1 Limit", fmt(tax.k401Lim + (tax.c401Catch || 0))], ["401k P2 Limit", fmt(tax.k401Lim + (tax.k401Catch || 0))], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
                   <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
                     <span style={{ color: "#aaa" }}>{l}</span><span style={{ color: "#4ECDC4", fontWeight: 600 }}>{v}</span>
                   </div>
@@ -801,16 +822,30 @@ export default function App() {
               </Card>
               <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions</h3>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div /><div />
                   <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#556FB5" }}>Pre-Tax 401(k)</span></div>
                   <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Corey %</label><PI value={c4pre} onChange={setC4pre} /></div>
                   <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Kelly %</label><PI value={k4pre} onChange={setK4pre} /></div>
                   <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4, marginTop: 8 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#E8573A" }}>Roth 401(k)</span></div>
                   <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Corey %</label><PI value={c4ro} onChange={setC4ro} /></div>
                   <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Kelly %</label><PI value={k4ro} onChange={setK4ro} /></div>
+                  <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4, marginTop: 8 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#F2A93B" }}>Catch-Up (age 50+)</span></div>
+                  <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Corey Catch-Up</label><NI value={tax.c401Catch} onChange={v => upTax("c401Catch", +v || 0)} prefix="$" />
+                    <div style={{ marginTop: 4, display: "flex", gap: 4 }}>
+                      <button onClick={() => upTax("c401CatchPreTax", true)} style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, border: (tax.c401CatchPreTax !== false) ? "2px solid #556FB5" : "2px solid #ddd", borderRadius: 4, background: (tax.c401CatchPreTax !== false) ? "#EEF1FA" : "transparent", color: (tax.c401CatchPreTax !== false) ? "#556FB5" : "#aaa", cursor: "pointer" }}>Pre-Tax</button>
+                      <button onClick={() => upTax("c401CatchPreTax", false)} style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, border: (tax.c401CatchPreTax === false) ? "2px solid #E8573A" : "2px solid #ddd", borderRadius: 4, background: (tax.c401CatchPreTax === false) ? "#fef5f2" : "transparent", color: (tax.c401CatchPreTax === false) ? "#E8573A" : "#aaa", cursor: "pointer" }}>Roth</button>
+                    </div>
+                  </div>
+                  <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Kelly Catch-Up</label><NI value={tax.k401Catch} onChange={v => upTax("k401Catch", +v || 0)} prefix="$" />
+                    <div style={{ marginTop: 4, display: "flex", gap: 4 }}>
+                      <button onClick={() => upTax("k401CatchPreTax", true)} style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, border: (tax.k401CatchPreTax !== false) ? "2px solid #556FB5" : "2px solid #ddd", borderRadius: 4, background: (tax.k401CatchPreTax !== false) ? "#EEF1FA" : "transparent", color: (tax.k401CatchPreTax !== false) ? "#556FB5" : "#aaa", cursor: "pointer" }}>Pre-Tax</button>
+                      <button onClick={() => upTax("k401CatchPreTax", false)} style={{ padding: "2px 8px", fontSize: 10, fontWeight: 600, border: (tax.k401CatchPreTax === false) ? "2px solid #E8573A" : "2px solid #ddd", borderRadius: 4, background: (tax.k401CatchPreTax === false) ? "#fef5f2" : "transparent", color: (tax.k401CatchPreTax === false) ? "#E8573A" : "#aaa", cursor: "pointer" }}>Roth</button>
+                    </div>
+                  </div>
                 </div>
                 <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, fontSize: 12 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div><span style={{ color: "#999" }}>Corey limit:</span> <strong>{fmt(tax.k401Lim + (tax.c401Catch || 0))}</strong>/yr</div>
+                    <div><span style={{ color: "#999" }}>Kelly limit:</span> <strong>{fmt(tax.k401Lim + (tax.k401Catch || 0))}</strong>/yr</div>
                     <div><span style={{ color: "#999" }}>Corey total:</span> <strong>{evalF(c4pre) + evalF(c4ro)}%</strong> ({fmt(C.c4w * 52)}/yr)</div>
                     <div><span style={{ color: "#999" }}>Kelly total:</span> <strong>{evalF(k4pre) + evalF(k4ro)}%</strong> ({fmt(C.k4w * 52)}/yr)</div>
                     <div><span style={{ color: "#999" }}>Corey employer:</span> <strong>{C.cMP.toFixed(2)}%</strong> ({fmt(C.cs * C.cMP / 100)}/yr)</div>
