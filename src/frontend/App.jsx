@@ -62,12 +62,8 @@ const TAX_DB = {
 const DEF_TAX = {
   year: "2026",
   ...TAX_DB["2026"],
-  coRate: 4.4, coFamli: 0.45,
-  stateName: "Colorado", stateAbbr: "CO",
-  stateTaxes: [
-    { name: "State Withholding", rate: 4.4, onTaxable: true },
-    { name: "FAMLI", rate: 0.45, onTaxable: false },
-  ],
+  p1State: { name: "Colorado", abbr: "CO", famli: 0.45 },
+  p2State: { name: "Colorado", abbr: "CO", famli: 0.45 },
   k401Lim: 24500,
   c401Catch: 0, c401CatchPreTax: true,
   k401Catch: 0, k401CatchPreTax: true,
@@ -77,6 +73,73 @@ const DEF_TAX = {
 };
 const STATE_ABBR = {"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY","District of Columbia":"DC"};
 const STATE_TAX = {"AL":5.0,"AK":0,"AZ":2.5,"AR":3.9,"CA":13.3,"CO":4.4,"CT":6.99,"DE":6.6,"FL":0,"GA":5.49,"HI":11,"ID":5.695,"IL":4.95,"IN":3.05,"IA":5.7,"KS":5.7,"KY":4.0,"LA":4.25,"ME":7.15,"MD":5.75,"MA":5.0,"MI":4.25,"MN":9.85,"MS":5.0,"MO":4.8,"MT":5.9,"NE":5.84,"NV":0,"NH":0,"NJ":10.75,"NM":5.9,"NY":10.9,"NC":4.5,"ND":1.95,"OH":3.5,"OK":4.75,"OR":9.9,"PA":3.07,"RI":5.99,"SC":6.4,"SD":0,"TN":0,"TX":0,"UT":4.65,"VT":8.75,"VA":5.75,"WA":0,"WV":5.12,"WI":7.65,"WY":0,"DC":10.75};
+/* Employee-share state payroll tax % (PFML/SDI/FAMLI/TDI). 2026 rates. 0 = no employee payroll tax. */
+const STATE_PAYROLL = {"AL":0,"AK":0,"AZ":0,"AR":0,"CA":1.3,"CO":0.45,"CT":0.5,"DE":0.5,"FL":0,"GA":0,"HI":0.5,"ID":0,"IL":0,"IN":0,"IA":0,"KS":0,"KY":0,"LA":0,"ME":0.5,"MD":0.5,"MA":0.46,"MI":0,"MN":0.5,"MS":0,"MO":0,"MT":0,"NE":0,"NV":0,"NH":0,"NJ":0.42,"NM":0,"NY":0.432,"NC":0,"ND":0,"OH":0,"OK":0,"OR":0.6,"PA":0,"RI":1.1,"SC":0,"SD":0,"TN":0,"TX":0,"UT":0,"VT":0,"VA":0,"WA":0.808,"WV":0,"WI":0,"WY":0,"DC":0};
+const STATE_BRACKETS = {
+  "AL":{single:[[0,500,.02],[500,3000,.04],[3000,9999999,.05]],mfj:[[0,1000,.02],[1000,6000,.04],[6000,9999999,.05]],stdSingle:2500,stdMFJ:7500},
+  "AK":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "AZ":{single:[[0,9999999,.025]],mfj:[[0,9999999,.025]],stdSingle:14600,stdMFJ:29200},
+  "AR":{single:[[0,5100,.02],[5100,20400,.04],[20400,9999999,.039]],mfj:[[0,5100,.02],[5100,20400,.04],[20400,9999999,.039]],stdSingle:2340,stdMFJ:4680},
+  "CA":{single:[[0,10412,.01],[10412,24684,.02],[24684,38959,.04],[38959,54081,.06],[54081,68350,.08],[68350,349137,.093],[349137,418961,.103],[418961,698271,.113],[698271,9999999,.133]],mfj:[[0,20824,.01],[20824,49368,.02],[49368,77918,.04],[77918,108162,.06],[108162,136700,.08],[136700,698274,.093],[698274,837922,.103],[837922,1396542,.113],[1396542,9999999,.133]],stdSingle:5540,stdMFJ:11080},
+  "CO":{single:[[0,9999999,.044]],mfj:[[0,9999999,.044]],stdSingle:0,stdMFJ:0},
+  "CT":{single:[[0,10000,.03],[10000,50000,.05],[50000,100000,.055],[100000,200000,.06],[200000,250000,.065],[250000,500000,.069],[500000,9999999,.0699]],mfj:[[0,20000,.03],[20000,100000,.05],[100000,200000,.055],[200000,400000,.06],[400000,500000,.065],[500000,1000000,.069],[1000000,9999999,.0699]],stdSingle:0,stdMFJ:0},
+  "DE":{single:[[0,2000,0],[2000,5000,.022],[5000,10000,.039],[10000,20000,.048],[20000,25000,.052],[25000,60000,.0555],[60000,9999999,.066]],mfj:[[0,2000,0],[2000,5000,.022],[5000,10000,.039],[10000,20000,.048],[20000,25000,.052],[25000,60000,.0555],[60000,9999999,.066]],stdSingle:3250,stdMFJ:6500},
+  "FL":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "GA":{single:[[0,9999999,.0549]],mfj:[[0,9999999,.0549]],stdSingle:12000,stdMFJ:24000},
+  "HI":{single:[[0,2400,.014],[2400,4800,.032],[4800,9600,.055],[9600,14400,.064],[14400,19200,.068],[19200,24000,.072],[24000,36000,.076],[36000,48000,.079],[48000,150000,.0825],[150000,175000,.09],[175000,200000,.10],[200000,9999999,.11]],mfj:[[0,4800,.014],[4800,9600,.032],[9600,19200,.055],[19200,28800,.064],[28800,38400,.068],[38400,48000,.072],[48000,72000,.076],[72000,96000,.079],[96000,300000,.0825],[300000,350000,.09],[350000,400000,.10],[400000,9999999,.11]],stdSingle:2200,stdMFJ:4400},
+  "ID":{single:[[0,9999999,.05695]],mfj:[[0,9999999,.05695]],stdSingle:14600,stdMFJ:29200},
+  "IL":{single:[[0,9999999,.0495]],mfj:[[0,9999999,.0495]],stdSingle:0,stdMFJ:0},
+  "IN":{single:[[0,9999999,.0305]],mfj:[[0,9999999,.0305]],stdSingle:0,stdMFJ:0},
+  "IA":{single:[[0,6210,.044],[6210,31050,.0482],[31050,9999999,.057]],mfj:[[0,6210,.044],[6210,31050,.0482],[31050,9999999,.057]],stdSingle:2210,stdMFJ:5450},
+  "KS":{single:[[0,15000,.031],[15000,30000,.0525],[30000,9999999,.057]],mfj:[[0,30000,.031],[30000,60000,.0525],[60000,9999999,.057]],stdSingle:3500,stdMFJ:8000},
+  "KY":{single:[[0,9999999,.04]],mfj:[[0,9999999,.04]],stdSingle:3160,stdMFJ:6320},
+  "LA":{single:[[0,12500,.0185],[12500,50000,.035],[50000,9999999,.0425]],mfj:[[0,25000,.0185],[25000,100000,.035],[100000,9999999,.0425]],stdSingle:0,stdMFJ:0},
+  "ME":{single:[[0,26050,.058],[26050,61600,.0675],[61600,9999999,.0715]],mfj:[[0,52100,.058],[52100,123200,.0675],[123200,9999999,.0715]],stdSingle:14600,stdMFJ:29200},
+  "MD":{single:[[0,1000,.02],[1000,2000,.03],[2000,3000,.04],[3000,100000,.0475],[100000,125000,.05],[125000,150000,.0525],[150000,250000,.055],[250000,9999999,.0575]],mfj:[[0,1500,.02],[1500,3000,.03],[3000,4500,.04],[4500,150000,.0475],[150000,187500,.05],[187500,225000,.0525],[225000,375000,.055],[375000,9999999,.0575]],stdSingle:2550,stdMFJ:5100},
+  "MA":{single:[[0,9999999,.05]],mfj:[[0,9999999,.05]],stdSingle:0,stdMFJ:0},
+  "MI":{single:[[0,9999999,.0425]],mfj:[[0,9999999,.0425]],stdSingle:5600,stdMFJ:11200},
+  "MN":{single:[[0,31690,.0535],[31690,104090,.068],[104090,183340,.0785],[183340,9999999,.0985]],mfj:[[0,63380,.0535],[63380,208180,.068],[208180,366680,.0785],[366680,9999999,.0985]],stdSingle:14575,stdMFJ:29150},
+  "MS":{single:[[0,10000,0],[10000,9999999,.05]],mfj:[[0,10000,0],[10000,9999999,.05]],stdSingle:2300,stdMFJ:4600},
+  "MO":{single:[[0,1207,.02],[1207,2414,.025],[2414,3621,.03],[3621,4828,.035],[4828,6035,.04],[6035,7242,.045],[7242,8449,.05],[8449,9999999,.048]],mfj:[[0,1207,.02],[1207,2414,.025],[2414,3621,.03],[3621,4828,.035],[4828,6035,.04],[6035,7242,.045],[7242,8449,.05],[8449,9999999,.048]],stdSingle:14600,stdMFJ:29200},
+  "MT":{single:[[0,20500,.047],[20500,9999999,.059]],mfj:[[0,20500,.047],[20500,9999999,.059]],stdSingle:14600,stdMFJ:29200},
+  "NE":{single:[[0,3700,.0246],[3700,22170,.0351],[22170,35730,.0501],[35730,9999999,.0584]],mfj:[[0,7400,.0246],[7400,44340,.0351],[44340,71460,.0501],[71460,9999999,.0584]],stdSingle:7900,stdMFJ:15800},
+  "NV":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "NH":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "NJ":{single:[[0,20000,.014],[20000,35000,.0175],[35000,40000,.035],[40000,75000,.05525],[75000,500000,.0637],[500000,1000000,.0897],[1000000,9999999,.1075]],mfj:[[0,20000,.014],[20000,35000,.0175],[35000,40000,.035],[40000,75000,.05525],[75000,500000,.0637],[500000,1000000,.0897],[1000000,9999999,.1075]],stdSingle:0,stdMFJ:0},
+  "NM":{single:[[0,5500,.017],[5500,11000,.032],[11000,16000,.047],[16000,210000,.049],[210000,9999999,.059]],mfj:[[0,11000,.017],[11000,22000,.032],[22000,32000,.047],[32000,420000,.049],[420000,9999999,.059]],stdSingle:14600,stdMFJ:29200},
+  "NY":{single:[[0,8500,.04],[8500,11700,.045],[11700,13900,.0525],[13900,80650,.055],[80650,215400,.06],[215400,1077550,.0685],[1077550,5000000,.0965],[5000000,25000000,.103],[25000000,9999999,.109]],mfj:[[0,8500,.04],[8500,11700,.045],[11700,13900,.0525],[13900,80650,.055],[80650,215400,.06],[215400,1077550,.0685],[1077550,5000000,.0965],[5000000,25000000,.103],[25000000,9999999,.109]],stdSingle:8000,stdMFJ:16050},
+  "NC":{single:[[0,9999999,.045]],mfj:[[0,9999999,.045]],stdSingle:14600,stdMFJ:29200},
+  "ND":{single:[[0,44725,.0195]],mfj:[[0,89450,.0195]],stdSingle:14600,stdMFJ:29200},
+  "OH":{single:[[0,26050,0],[26050,100000,.025],[100000,9999999,.035]],mfj:[[0,26050,0],[26050,100000,.025],[100000,9999999,.035]],stdSingle:0,stdMFJ:0},
+  "OK":{single:[[0,1000,.0025],[1000,2500,.0075],[2500,3750,.0175],[3750,4900,.0275],[4900,7200,.0375],[7200,9999999,.0475]],mfj:[[0,2000,.0025],[2000,5000,.0075],[5000,7500,.0175],[7500,9800,.0275],[9800,14400,.0375],[14400,9999999,.0475]],stdSingle:7350,stdMFJ:14700},
+  "OR":{single:[[0,4050,.0475],[4050,10200,.0675],[10200,125000,.0875],[125000,9999999,.099]],mfj:[[0,8100,.0475],[8100,20400,.0675],[20400,250000,.0875],[250000,9999999,.099]],stdSingle:2745,stdMFJ:5495},
+  "PA":{single:[[0,9999999,.0307]],mfj:[[0,9999999,.0307]],stdSingle:0,stdMFJ:0},
+  "RI":{single:[[0,73450,.0375],[73450,166950,.0475],[166950,9999999,.0599]],mfj:[[0,73450,.0375],[73450,166950,.0475],[166950,9999999,.0599]],stdSingle:10550,stdMFJ:21100},
+  "SC":{single:[[0,3460,0],[3460,17330,.03],[17330,9999999,.064]],mfj:[[0,3460,0],[3460,17330,.03],[17330,9999999,.064]],stdSingle:14600,stdMFJ:29200},
+  "SD":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "TN":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "TX":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "UT":{single:[[0,9999999,.0465]],mfj:[[0,9999999,.0465]],stdSingle:0,stdMFJ:0},
+  "VT":{single:[[0,45400,.0335],[45400,110050,.066],[110050,229550,.076],[229550,9999999,.0875]],mfj:[[0,90800,.0335],[90800,220100,.066],[220100,459100,.076],[459100,9999999,.0875]],stdSingle:14600,stdMFJ:29200},
+  "VA":{single:[[0,3000,.02],[3000,5000,.03],[5000,17000,.05],[17000,9999999,.0575]],mfj:[[0,3000,.02],[3000,5000,.03],[5000,17000,.05],[17000,9999999,.0575]],stdSingle:4500,stdMFJ:9000},
+  "WA":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "WV":{single:[[0,10000,.0236],[10000,25000,.0315],[25000,40000,.0354],[40000,60000,.0472],[60000,9999999,.0512]],mfj:[[0,10000,.0236],[10000,25000,.0315],[25000,40000,.0354],[40000,60000,.0472],[60000,9999999,.0512]],stdSingle:0,stdMFJ:0},
+  "WI":{single:[[0,14320,.0354],[14320,28640,.0465],[28640,315310,.053],[315310,9999999,.0765]],mfj:[[0,27208,.0354],[27208,54416,.0465],[54416,599089,.053],[599089,9999999,.0765]],stdSingle:13230,stdMFJ:24500},
+  "WY":{single:[],mfj:[],stdSingle:0,stdMFJ:0},
+  "DC":{single:[[0,10000,.04],[10000,40000,.06],[40000,60000,.065],[60000,250000,.085],[250000,500000,.0925],[500000,1000000,.0975],[1000000,9999999,.1075]],mfj:[[0,10000,.04],[10000,40000,.06],[40000,60000,.065],[60000,250000,.085],[250000,500000,.0925],[500000,1000000,.0975],[1000000,9999999,.1075]],stdSingle:14600,stdMFJ:29200},
+};
+function calcStateTax(taxableIncome, stateAbbr, filing) {
+  const st = STATE_BRACKETS[stateAbbr];
+  if (!st || !st.single || st.single.length === 0) return 0;
+  const br = (filing === "mfj" && st.mfj) || st.single;
+  return calcFed(Math.max(0, taxableIncome), br);
+}
+function getStateMarg(taxableIncome, stateAbbr, filing) {
+  const st = STATE_BRACKETS[stateAbbr];
+  if (!st || !st.single || st.single.length === 0) return 0;
+  const br = (filing === "mfj" && st.mfj) || st.single;
+  return getMarg(Math.max(0, taxableIncome), br);
+}
 const DEF_CATS = ["Automotive","Clothing","Entertainment","Fees","Fun Money","General","Groceries","Healthcare","Housing","Internet","Personal Care","Pet Care","Phone","Restaurants","Student Loans","Taxes","Utilities"];
 const DEF_PRE = [{n:"Medical",c:"0",k:"0"},{n:"Dental",c:"0",k:"0"},{n:"Vision",c:"0",k:"0"},{n:"HSA",c:"0",k:"0"}];
 const DEF_POST = [{n:"Identity Protection",c:"0",k:"0"},{n:"Legal",c:"0",k:"0"},{n:"Group Life Insurance",c:"0",k:"0"}];
@@ -312,7 +375,9 @@ export default function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [tax, setTax] = useState(DEF_TAX);
-  const upTax = (k, v) => { if (k === "stateName") { const abbr = STATE_ABBR[v]; const rate = abbr ? STATE_TAX[abbr] : undefined; setTax(p => ({ ...p, stateName: v, ...(abbr ? { stateAbbr: abbr } : {}), ...(rate !== undefined ? { coRate: rate } : {}) })); } else setTax(p => ({ ...p, [k]: v })); };
+  const upTax = (k, v) => setTax(p => ({ ...p, [k]: v }));
+  const upP1State = (k, v) => { if (k === "name") { const abbr = STATE_ABBR[v]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; setTax(p => ({ ...p, p1State: { ...p.p1State, name: v, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) } })); } else setTax(p => ({ ...p, p1State: { ...p.p1State, [k]: v } })); };
+  const upP2State = (k, v) => { if (k === "name") { const abbr = STATE_ABBR[v]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; setTax(p => ({ ...p, p2State: { ...p.p2State, name: v, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) } })); } else setTax(p => ({ ...p, p2State: { ...p.p2State, [k]: v } })); };
   const [fetchStatus, setFetchStatus] = useState("");
   const [showTaxPaste, setShowTaxPaste] = useState(false);
   const [taxPaste, setTaxPaste] = useState("");
@@ -321,7 +386,7 @@ export default function App() {
   const loadTaxYear = (yr) => {
     const rates = allTaxDB[yr];
     if (!rates) { setFetchStatus("❌ No data for " + yr); return; }
-    setTax(prev => ({ ...prev, year: yr, ...rates, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+    setTax(prev => ({ ...prev, year: yr, ...rates, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
     setFetchStatus("✅ Loaded " + yr + " federal rates.");
   };
   const addTaxYear = (json) => {
@@ -331,7 +396,7 @@ export default function App() {
       const yr = String(parsed.year);
       const entry = { fedSingle: parsed.fedSingle, fedMFJ: parsed.fedMFJ, stdSingle: parsed.stdSingle, stdMFJ: parsed.stdMFJ, ssRate: parsed.ssRate, ssCap: parsed.ssCap, medRate: parsed.medRate, k401Lim: parsed.k401Lim, hsaLimit: parsed.hsaLimit };
       setCustomTaxDB(prev => ({ ...prev, [yr]: entry }));
-      setTax(prev => ({ ...prev, year: yr, ...entry, coRate: prev.coRate, coFamli: prev.coFamli, stateName: prev.stateName, stateAbbr: prev.stateAbbr, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+      setTax(prev => ({ ...prev, year: yr, ...entry, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
       setFetchStatus("✅ Added & loaded " + yr + " rates!");
       setTaxPaste(""); setShowTaxPaste(false);
     } catch (e) { setFetchStatus("❌ Invalid JSON: " + e.message); }
@@ -422,11 +487,16 @@ export default function App() {
     const mr = getMarg(Math.max(0, combTxA - sd), br);
     const tot = cTxW + kTxW, cr = tot > 0 ? cTxW / tot : .5;
     const cFed = (fTax / 52) * cr, kFed = (fTax / 52) * (1 - cr);
-    const ssR = tax.ssRate / 100, medR = tax.medRate / 100, coR = tax.coRate / 100, flR = tax.coFamli / 100;
+    const ssR = tax.ssRate / 100, medR = tax.medRate / 100;
+    const p1s = (tax.p1State || {}), p2s = (tax.p2State || {});
     const cSS = Math.min(cw, tax.ssCap / 52) * ssR, kSS = Math.min(kw, tax.ssCap / 52) * ssR;
     const cMc = cw * medR, kMc = kw * medR;
-    const cCO = cTxW * coR, kCO = kTxW * coR;
-    const cFL = cw * flR, kFL = kw * flR;
+    const cStAnn = calcStateTax(cTxW * 52, p1s.abbr || "", fil);
+    const kStAnn = calcStateTax(kTxW * 52, p2s.abbr || "", fil);
+    const cCO = cStAnn / 52, kCO = kStAnn / 52;
+    const cStMR = getStateMarg(cTxW * 52, p1s.abbr || "", fil);
+    const kStMR = getStateMarg(kTxW * 52, p2s.abbr || "", fil);
+    const cFL = cw * (p1s.famli || 0) / 100, kFL = kw * (p2s.famli || 0) / 100;
     const cTx = cFed + cSS + cMc + cCO + cFL, kTx = kFed + kSS + kMc + kCO + kFL;
     const cPostW = c4roW + postDed.reduce((s, d) => s + evalF(d.c), 0);
     const kPostW = k4roW + postDed.reduce((s, d) => s + evalF(d.k), 0);
@@ -445,13 +515,14 @@ export default function App() {
     const cEaipSS = Math.max(0, Math.min(cEaipGross, Math.max(0, tax.ssCap - cs))) * ssR;
     const kEaipSS = Math.max(0, Math.min(kEaipGross, Math.max(0, tax.ssCap - ks))) * ssR;
     const cEaipMc = cEaipGross * medR, kEaipMc = kEaipGross * medR;
-    const cEaipSt = cEaipGross * coR, kEaipSt = kEaipGross * coR;
-    const cEaipFL = cEaipGross * flR, kEaipFL = kEaipGross * flR;
+    const cEaipSt = cEaipGross > 0 ? calcStateTax(cTxW * 52 + cEaipGross, p1s.abbr || "", fil) - cStAnn : 0;
+    const kEaipSt = kEaipGross > 0 ? calcStateTax(kTxW * 52 + kEaipGross, p2s.abbr || "", fil) - kStAnn : 0;
+    const cEaipFL = cEaipGross * (p1s.famli || 0) / 100, kEaipFL = kEaipGross * (p2s.famli || 0) / 100;
     const cEaipTax = cEaipFed + cEaipSS + cEaipMc + cEaipSt + cEaipFL;
     const kEaipTax = kEaipFed + kEaipSS + kEaipMc + kEaipSt + kEaipFL;
     const cEaipNet = cEaipGross - cEaipTax, kEaipNet = kEaipGross - kEaipTax;
     const eaipNet = cEaipNet + kEaipNet;
-    return { cs, ks, cw, kw, cPreW, kPreW, c4w, k4w, c4preW, k4preW, c4roW, k4roW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cFL, kFL, cTx, kTx, cPostW, kPostW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, coR, flR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
+    return { cs, ks, cw, kw, cPreW, kPreW, c4w, k4w, c4preW, k4preW, c4roW, k4roW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
   }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip]);
 
   const moC = v => v * 48 / 12, y4 = v => v * 48, y5 = v => v * 52;
@@ -644,7 +715,7 @@ export default function App() {
                     onKeyDown={e => { if (e.key === "Enter") { setAppTitle(titleDraft.trim() || appTitle); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
                     style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, background: "transparent", border: "none", borderBottom: "2px solid #E8573A", color: "#fff", outline: "none", width: "100%" }} />
                 : <h1 onClick={() => { setTitleDraft(appTitle); setEditingTitle(true); }} style={{ margin: 0, fontSize: mob ? 16 : 22, fontFamily: "'Fraunces',serif", fontWeight: 800, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title="Click to rename">{appTitle}</h1>}
-              {!mob && <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {tax.stateName || "State"}</p>}
+              {!mob && <p style={{ margin: 0, fontSize: 11, color: "#888", letterSpacing: 1, textTransform: "uppercase" }}>{tax.year} Tax Year • {(tax.p1State || {}).name || "State"}</p>}
             </div>
             <div style={{ display: "flex", gap: 4 }}>
               <button onClick={() => setDarkMode("light")} style={{ padding: "5px 10px", background: !dk && !waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !dk && !waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
@@ -726,9 +797,18 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Tax Year</label><input value={tax.year} onChange={e => upTax("year", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>401(k) Base Limit</label><NI value={tax.k401Lim} onChange={v => upTax("k401Lim", +v || 0)} prefix="$" /></div>
-                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>State Name</label><input list="state-names" value={tax.stateName || ""} onChange={e => upTax("stateName", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
-                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>State Abbreviation</label><input value={tax.stateAbbr || ""} onChange={e => upTax("stateAbbr", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
-                {[["OASDI %", "ssRate"], ["SS Wage Cap", "ssCap"], ["Medicare %", "medRate"], ["State Income %", "coRate"], ["State FAMLI EE %", "coFamli"]].map(([l, k]) => (
+                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} State</label><input list="state-names" value={(tax.p1State || {}).name || ""} onChange={e => upP1State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label><input list="state-names-2" value={(tax.p2State || {}).name || ""} onChange={e => upP2State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                <div style={{ gridColumn: "1/-1", padding: "10px 12px", background: "var(--input-bg, #f4f4f4)", borderRadius: 8, fontSize: 11, color: "var(--tx2, #555)" }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Calculated State Tax</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                    <div>{p1Name} ({(tax.p1State || {}).abbr || "ST"}): <strong>{fmt(C.cCO * 52)}/yr</strong> — marginal {(C.cStMR * 100).toFixed(1)}%</div>
+                    <div>{p2Name} ({(tax.p2State || {}).abbr || "ST"}): <strong>{fmt(C.kCO * 52)}/yr</strong> — marginal {(C.kStMR * 100).toFixed(1)}%</div>
+                    <div>{p1Name} Payroll Tax: <strong>{p2((tax.p1State || {}).famli || 0)}</strong> ({fmt(C.cFL * 52)}/yr)</div>
+                    <div>{p2Name} Payroll Tax: <strong>{p2((tax.p2State || {}).famli || 0)}</strong> ({fmt(C.kFL * 52)}/yr)</div>
+                  </div>
+                </div>
+                {[["OASDI %", "ssRate"], ["SS Wage Cap", "ssCap"], ["Medicare %", "medRate"]].map(([l, k]) => (
                   <div key={k}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{l}</label>{k === "ssCap" ? <NI value={tax[k]} onChange={v => upTax(k, +v || 0)} prefix="$" /> : <PI value={tax[k]} onChange={v => upTax(k, +v || 0)} />}</div>
                 ))}
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Std Ded (Single)</label><NI value={tax.stdSingle} onChange={v => upTax("stdSingle", +v || 0)} prefix="$" /></div>
@@ -771,7 +851,7 @@ export default function App() {
                   <button onClick={() => setShowTaxPaste(p => !p)} style={{ padding: "8px 16px", fontSize: 12, border: "none", borderRadius: 8, background: "#556FB5", color: "#fff", fontWeight: 700, cursor: "pointer" }}>
                     + Add New Year
                   </button>
-                  <button onClick={() => setTax(prev => ({ ...DEF_TAX, year: prev.year, stateName: prev.stateName, stateAbbr: prev.stateAbbr, coRate: prev.coRate, coFamli: prev.coFamli, stateTaxes: prev.stateTaxes, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }))} style={{ padding: "8px 16px", fontSize: 12, border: "2px solid #E8573A", borderRadius: 8, background: "none", color: "#E8573A", fontWeight: 600, cursor: "pointer" }}>Reset {tax.year}</button>
+                  <button onClick={() => setTax(prev => ({ ...DEF_TAX, year: prev.year, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }))} style={{ padding: "8px 16px", fontSize: 12, border: "2px solid #E8573A", borderRadius: 8, background: "none", color: "#E8573A", fontWeight: 600, cursor: "pointer" }}>Reset {tax.year}</button>
                 </div>
                 <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>
                   {Object.keys(allTaxDB).length} years available (1996–{Object.keys(allTaxDB).sort((a, b) => b - a)[0]}). State rates are always preserved when switching years.
@@ -799,7 +879,7 @@ export default function App() {
             <Card dark style={{ gridColumn: mob ? "1" : "1/-1" }}>
               <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Active Summary</h3>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, fontSize: 13 }}>
-                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${tax.stateAbbr || "ST"} State`, p2(tax.coRate)], [`${tax.stateAbbr || "ST"} FAMLI`, p2(tax.coFamli)], ["401k P1 Limit", fmt(tax.k401Lim + (tax.c401Catch || 0))], ["401k P2 Limit", fmt(tax.k401Lim + (tax.k401Catch || 0))], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
+                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${(tax.p1State || {}).abbr || "ST"} P1 State`, `${C.cStMR ? (C.cStMR * 100).toFixed(1) : "0"}% marginal`], [`${(tax.p2State || {}).abbr || "ST"} P2 State`, `${C.kStMR ? (C.kStMR * 100).toFixed(1) : "0"}% marginal`], ["401k P1 Limit", fmt(tax.k401Lim + (tax.c401Catch || 0))], ["401k P2 Limit", fmt(tax.k401Lim + (tax.k401Catch || 0))], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
                   <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
                     <span style={{ color: "#aaa" }}>{l}</span><span style={{ color: "#4ECDC4", fontWeight: 600 }}>{v}</span>
                   </div>
@@ -1037,10 +1117,10 @@ export default function App() {
               <Row label="Medicare" sub={p2(tax.medRate)} wk={-(C.cMc + C.kMc)} mo={-moC(C.cMc + C.kMc)} y48={-y4(C.cMc + C.kMc)} y52={-y5(C.cMc + C.kMc)} color="var(--c-fedtax, #1a5276)" />
               {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.cMc} mo={-moC(C.cMc)} y48={-y4(C.cMc)} y52={-y5(C.cMc)} color="var(--c-fedtax2, #3a7abf)" /><Row label={`  ↳ ${p2Name}`} wk={-C.kMc} mo={-moC(C.kMc)} y48={-y4(C.kMc)} y52={-y5(C.kMc)} color="var(--c-fedtax2, #3a7abf)" /></>}</>}
 
-              <CSH color="var(--c-sttax, #8B4513)" collapsed={collapsed.stTax} onToggle={() => toggleSec("stTax")}>State Taxes ({tax.stateName || "State"})</CSH>
-              {!collapsed.stTax && <><Row label={`${tax.stateAbbr || "ST"} Withholding`} sub={p2(tax.coRate)} wk={-(C.cCO + C.kCO)} mo={-moC(C.cCO + C.kCO)} y48={-y4(C.cCO + C.kCO)} y52={-y5(C.cCO + C.kCO)} color="var(--c-sttax, #8B4513)" />
+              <CSH color="var(--c-sttax, #8B4513)" collapsed={collapsed.stTax} onToggle={() => toggleSec("stTax")}>State Taxes ({(tax.p1State || {}).abbr || "ST"}{(tax.p2State || {}).abbr && (tax.p2State || {}).abbr !== (tax.p1State || {}).abbr ? `/${(tax.p2State || {}).abbr}` : ""})</CSH>
+              {!collapsed.stTax && <><Row label={`${(tax.p1State || {}).abbr || "ST"}/${(tax.p2State || {}).abbr || "ST"} State Tax`} wk={-(C.cCO + C.kCO)} mo={-moC(C.cCO + C.kCO)} y48={-y4(C.cCO + C.kCO)} y52={-y5(C.cCO + C.kCO)} color="var(--c-sttax, #8B4513)" />
               {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.cCO} mo={-moC(C.cCO)} y48={-y4(C.cCO)} y52={-y5(C.cCO)} color="var(--c-sttax2, #B8860B)" /><Row label={`  ↳ ${p2Name}`} wk={-C.kCO} mo={-moC(C.kCO)} y48={-y4(C.kCO)} y52={-y5(C.kCO)} color="var(--c-sttax2, #B8860B)" /></>}
-              <Row label={`${tax.stateAbbr || "ST"} FAMLI`} sub={p2(tax.coFamli)} wk={-(C.cFL + C.kFL)} mo={-moC(C.cFL + C.kFL)} y48={-y4(C.cFL + C.kFL)} y52={-y5(C.cFL + C.kFL)} color="var(--c-sttax, #8B4513)" />
+              <Row label={`${(tax.p1State || {}).abbr || "ST"}/${(tax.p2State || {}).abbr || "ST"} State Payroll Tax`} wk={-(C.cFL + C.kFL)} mo={-moC(C.cFL + C.kFL)} y48={-y4(C.cFL + C.kFL)} y52={-y5(C.cFL + C.kFL)} color="var(--c-sttax, #8B4513)" />
               {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.cFL} mo={-moC(C.cFL)} y48={-y4(C.cFL)} y52={-y5(C.cFL)} color="var(--c-sttax2, #B8860B)" /><Row label={`  ↳ ${p2Name}`} wk={-C.kFL} mo={-moC(C.kFL)} y48={-y4(C.kFL)} y52={-y5(C.kFL)} color="var(--c-sttax2, #B8860B)" /></>}</>}
 
               {(() => { const t = C.cTx + C.kTx; return <Row label="Total Taxes" wk={-t} mo={-moC(t)} y48={-y4(t)} y52={-y5(t)} bold border color="var(--c-totaltax, #E8573A)" />; })()}
@@ -1093,9 +1173,9 @@ export default function App() {
                 {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={0} mo={0} y48={-C.cEaipSS} y52={-C.cEaipSS} color="var(--c-fedtax2, #3a7abf)" /><Row label={`  ↳ ${p2Name}`} wk={0} mo={0} y48={-C.kEaipSS} y52={-C.kEaipSS} color="var(--c-fedtax2, #3a7abf)" /></>}
                 <Row label="Medicare" wk={0} mo={0} y48={-(C.cEaipMc + C.kEaipMc)} y52={-(C.cEaipMc + C.kEaipMc)} color="var(--c-fedtax, #1a5276)" />
                 {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={0} mo={0} y48={-C.cEaipMc} y52={-C.cEaipMc} color="var(--c-fedtax2, #3a7abf)" /><Row label={`  ↳ ${p2Name}`} wk={0} mo={0} y48={-C.kEaipMc} y52={-C.kEaipMc} color="var(--c-fedtax2, #3a7abf)" /></>}
-                <Row label={`${tax.stateAbbr || "ST"} Withholding`} wk={0} mo={0} y48={-(C.cEaipSt + C.kEaipSt)} y52={-(C.cEaipSt + C.kEaipSt)} color="var(--c-sttax, #8B4513)" />
+                <Row label={`${(tax.p1State || {}).abbr || "ST"}/${(tax.p2State || {}).abbr || "ST"} State Tax`} wk={0} mo={0} y48={-(C.cEaipSt + C.kEaipSt)} y52={-(C.cEaipSt + C.kEaipSt)} color="var(--c-sttax, #8B4513)" />
                 {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={0} mo={0} y48={-C.cEaipSt} y52={-C.cEaipSt} color="var(--c-sttax2, #B8860B)" /><Row label={`  ↳ ${p2Name}`} wk={0} mo={0} y48={-C.kEaipSt} y52={-C.kEaipSt} color="var(--c-sttax2, #B8860B)" /></>}
-                <Row label={`${tax.stateAbbr || "ST"} FAMLI`} wk={0} mo={0} y48={-(C.cEaipFL + C.kEaipFL)} y52={-(C.cEaipFL + C.kEaipFL)} color="var(--c-sttax, #8B4513)" />
+                <Row label={`${(tax.p1State || {}).abbr || "ST"}/${(tax.p2State || {}).abbr || "ST"} State Payroll Tax`} wk={0} mo={0} y48={-(C.cEaipFL + C.kEaipFL)} y52={-(C.cEaipFL + C.kEaipFL)} color="var(--c-sttax, #8B4513)" />
                 {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={0} mo={0} y48={-C.cEaipFL} y52={-C.cEaipFL} color="var(--c-sttax2, #B8860B)" /><Row label={`  ↳ ${p2Name}`} wk={0} mo={0} y48={-C.kEaipFL} y52={-C.kEaipFL} color="var(--c-sttax2, #B8860B)" /></>}
                 </>}
                 <Row label="Total EAIP Taxes" wk={0} mo={0} y48={-(C.cEaipTax + C.kEaipTax)} y52={-(C.cEaipTax + C.kEaipTax)} bold border color="var(--c-totaltax, #E8573A)" />
