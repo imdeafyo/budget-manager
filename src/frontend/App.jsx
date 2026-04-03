@@ -429,6 +429,7 @@ export default function App() {
   const [showPerPerson, setShowPerPerson] = useState(false);
   const [snapshots, setSnapshots] = useState([]);
   const [snapLabel, setSnapLabel] = useState("");
+  const [snapDate, setSnapDate] = useState("");
   const [editSnapIdx, setEditSnapIdx] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [itemHistoryName, setItemHistoryName] = useState("");
@@ -575,9 +576,9 @@ export default function App() {
 
   const BrEd = ({ brackets, onChange }) => (
     <div style={{  }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
       {brackets.map((b, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 50px 20px", gap: 3, marginBottom: 2 }}>
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 20px", gap: 3, marginBottom: 2 }}>
           <input type="number" value={b[0]} onChange={e => { const n = [...brackets]; n[i] = [+e.target.value, n[i][1], n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
           <input type="number" value={b[1] >= 9999999 ? "" : b[1]} placeholder="∞" onChange={e => { const n = [...brackets]; n[i] = [n[i][0], e.target.value === "" ? 9999999 : +e.target.value, n[i][2]]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
           <input type="number" step="0.01" value={(b[2] * 100).toFixed(2)} onChange={e => { const n = [...brackets]; n[i] = [n[i][0], n[i][1], +e.target.value / 100]; onChange(n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "3px 4px", fontSize: 11, fontFamily: "'DM Sans',sans-serif", minWidth: 0, width: "100%" }} />
@@ -587,6 +588,28 @@ export default function App() {
       <button onClick={() => { const l = brackets[brackets.length - 1]; onChange([...brackets, [l ? l[1] : 0, 9999999, .37]]); }} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Bracket</button>
     </div>
   );
+
+  const StateBrView = ({ abbr, filing, label }) => {
+    const st = STATE_BRACKETS[abbr];
+    if (!st) return null;
+    const br = filing === "mfj" ? (st.mfj && st.mfj.length > 0 ? st.mfj : st.single) : st.single;
+    if (!br || br.length === 0) return <Card><h3 style={{ margin: "0 0 8px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>{label}</h3><div style={{ fontSize: 12, color: "var(--tx3,#999)" }}>No state income tax</div></Card>;
+    const sd = filing === "mfj" ? st.stdMFJ : st.stdSingle;
+    return (
+      <Card>
+        <h3 style={{ margin: "0 0 8px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>{label}</h3>
+        {sd > 0 && <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginBottom: 8 }}>Std Deduction: {fmt(sd)}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span></div>
+        {br.map((b, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, marginBottom: 2, fontSize: 11, color: "var(--tx2,#555)" }}>
+            <span>{fmt(b[0])}</span>
+            <span>{b[1] >= 9999999 ? "∞" : fmt(b[1])}</span>
+            <span style={{ fontWeight: 600 }}>{(b[2] * 100).toFixed(2)}%</span>
+          </div>
+        ))}
+      </Card>
+    );
+  };
 
   const DedEditor = ({ items, setItems, label }) => (
     <Card>
@@ -800,19 +823,20 @@ export default function App() {
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} State</label><input list="state-names" value={(tax.p1State || {}).name || ""} onChange={e => upP1State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label><input list="state-names-2" value={(tax.p2State || {}).name || ""} onChange={e => upP2State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
                 <div style={{ gridColumn: "1/-1", padding: "10px 12px", background: "var(--input-bg, #f4f4f4)", borderRadius: 8, fontSize: 11, color: "var(--tx2, #555)" }}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Calculated State Tax</div>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Calculated Rates ({tax.year})</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
                     <div>{p1Name} ({(tax.p1State || {}).abbr || "ST"}): <strong>{fmt(C.cCO * 52)}/yr</strong> — marginal {(C.cStMR * 100).toFixed(1)}%</div>
                     <div>{p2Name} ({(tax.p2State || {}).abbr || "ST"}): <strong>{fmt(C.kCO * 52)}/yr</strong> — marginal {(C.kStMR * 100).toFixed(1)}%</div>
                     <div>{p1Name} Payroll Tax: <strong>{p2((tax.p1State || {}).famli || 0)}</strong> ({fmt(C.cFL * 52)}/yr)</div>
                     <div>{p2Name} Payroll Tax: <strong>{p2((tax.p2State || {}).famli || 0)}</strong> ({fmt(C.kFL * 52)}/yr)</div>
+                    <div>OASDI: <strong>{p2(tax.ssRate)}</strong> — SS Cap: <strong>{fmt(tax.ssCap)}</strong></div>
+                    <div>Medicare: <strong>{p2(tax.medRate)}</strong></div>
+                    <div>Std Ded (Single): <strong>{fmt(tax.stdSingle)}</strong></div>
+                    <div>Std Ded (MFJ): <strong>{fmt(tax.stdMFJ)}</strong></div>
+                    <div>401(k) Limit: <strong>{fmt(tax.k401Lim)}</strong></div>
+                    <div>HSA Limit: <strong>{fmt(tax.hsaLimit)}</strong></div>
                   </div>
                 </div>
-                {[["OASDI %", "ssRate"], ["SS Wage Cap", "ssCap"], ["Medicare %", "medRate"]].map(([l, k]) => (
-                  <div key={k}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{l}</label>{k === "ssCap" ? <NI value={tax[k]} onChange={v => upTax(k, +v || 0)} prefix="$" /> : <PI value={tax[k]} onChange={v => upTax(k, +v || 0)} />}</div>
-                ))}
-                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Std Ded (Single)</label><NI value={tax.stdSingle} onChange={v => upTax("stdSingle", +v || 0)} prefix="$" /></div>
-                <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Std Ded (MFJ)</label><NI value={tax.stdMFJ} onChange={v => upTax("stdMFJ", +v || 0)} prefix="$" /></div>
               </div>
               <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>{p1Name} — Employer Match</h4>
               <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.cMatchBase || 0} onChange={e => upTax("cMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
@@ -865,7 +889,7 @@ export default function App() {
                   <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
                     <button onClick={() => addTaxYear(taxPaste)} disabled={!taxPaste.trim()} style={{ padding: "6px 14px", fontSize: 12, border: "none", borderRadius: 6, background: taxPaste.trim() ? "#2ECC71" : "#ccc", color: "#fff", fontWeight: 700, cursor: taxPaste.trim() ? "pointer" : "default" }}>Add & Load</button>
                     <button onClick={() => { setShowTaxPaste(false); setTaxPaste(""); }} style={{ padding: "6px 14px", fontSize: 12, border: "1px solid #ddd", borderRadius: 6, background: "none", color: "#888", cursor: "pointer" }}>Cancel</button>
-                    <button onClick={() => { navigator.clipboard.writeText('Give me the US federal tax rates for tax year [YEAR] formatted exactly like this JSON (replace all values, keep the structure, return ONLY the JSON):\n\n{"year":"[YEAR]","fedSingle":[[0,11925,0.10],[11925,48475,0.12],[48475,103350,0.22],[103350,197300,0.24],[197300,250525,0.32],[250525,626350,0.35],[626350,9999999,0.37]],"fedMFJ":[[0,23850,0.10],[23850,96950,0.12],[96950,206700,0.22],[206700,394600,0.24],[394600,501050,0.32],[501050,751600,0.35],[751600,9999999,0.37]],"stdSingle":15000,"stdMFJ":30000,"ssRate":6.2,"ssCap":176100,"medRate":1.45,"k401Lim":23500,"hsaLimit":8550}'); setFetchStatus("📋 Prompt copied! Paste it in a new Claude chat, replace [YEAR], and paste the result back here."); }} style={{ padding: "6px 14px", fontSize: 12, border: "1px solid #556FB5", borderRadius: 6, background: "none", color: "#556FB5", fontWeight: 600, cursor: "pointer" }}>Copy Prompt</button>
+                    <button onClick={() => { navigator.clipboard.writeText('Give me the US federal tax rates for tax year [YEAR] formatted exactly like this JSON. Replace ALL values with the correct [YEAR] values, keep the structure, return ONLY the JSON with no markdown or explanation:\n\n{"year":"[YEAR]","fedSingle":[[0,12400,0.10],[12400,50400,0.12],[50400,105700,0.22],[105700,201775,0.24],[201775,256225,0.32],[256225,640600,0.35],[640600,9999999,0.37]],"fedMFJ":[[0,24800,0.10],[24800,100800,0.12],[100800,211400,0.22],[211400,403550,0.24],[403550,512450,0.32],[512450,768700,0.35],[768700,9999999,0.37]],"stdSingle":16100,"stdMFJ":32200,"ssRate":6.2,"ssCap":184500,"medRate":1.45,"k401Lim":24500,"hsaLimit":8300}\n\nFields: fedSingle/fedMFJ = federal income tax brackets [from,to,rate]. stdSingle/stdMFJ = standard deductions. ssRate = OASDI employee rate %. ssCap = Social Security wage cap. medRate = Medicare employee rate %. k401Lim = 401(k) elective deferral limit (not catch-up). hsaLimit = HSA family contribution limit.'); setFetchStatus("📋 Prompt copied! Paste it in a new Claude chat, replace [YEAR], and paste the result back here."); }} style={{ padding: "6px 14px", fontSize: 12, border: "1px solid #556FB5", borderRadius: 6, background: "none", color: "#556FB5", fontWeight: 600, cursor: "pointer" }}>Copy Prompt</button>
                   </div>
                 </div>}
                 {fetchStatus && <div style={{ fontSize: 12, marginTop: 8, color: fetchStatus.startsWith("✅") ? "#2ECC71" : fetchStatus.startsWith("❌") ? "#E8573A" : "#556FB5", wordBreak: "break-word" }}>{fetchStatus}</div>}
@@ -873,13 +897,21 @@ export default function App() {
             </Card>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
-              <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — Single / MFS</h3><BrEd brackets={tax.fedSingle} onChange={v => upTax("fedSingle", v)} /></Card>
-              <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — MFJ</h3><BrEd brackets={tax.fedMFJ} onChange={v => upTax("fedMFJ", v)} /></Card>
+              <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — Single / MFS</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span></div>
+                {tax.fedSingle.map((b, i) => (<div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, marginBottom: 2, fontSize: 11, color: "var(--tx2,#555)" }}><span>{fmt(b[0])}</span><span>{b[1] >= 9999999 ? "∞" : fmt(b[1])}</span><span style={{ fontWeight: 600 }}>{(b[2] * 100).toFixed(2)}%</span></div>))}
+              </Card>
+              <Card><h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Federal — MFJ</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span></div>
+                {tax.fedMFJ.map((b, i) => (<div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px", gap: 3, marginBottom: 2, fontSize: 11, color: "var(--tx2,#555)" }}><span>{fmt(b[0])}</span><span>{b[1] >= 9999999 ? "∞" : fmt(b[1])}</span><span style={{ fontWeight: 600 }}>{(b[2] * 100).toFixed(2)}%</span></div>))}
+              </Card>
+              {(tax.p1State || {}).abbr && STATE_BRACKETS[(tax.p1State || {}).abbr] && <StateBrView abbr={(tax.p1State).abbr} filing={fil} label={`${(tax.p1State).name || (tax.p1State).abbr} — ${p1Name} (${fil === "mfj" ? "MFJ" : "Single"})`} />}
+              {(tax.p2State || {}).abbr && STATE_BRACKETS[(tax.p2State || {}).abbr] && <StateBrView abbr={(tax.p2State).abbr} filing={fil} label={`${(tax.p2State).name || (tax.p2State).abbr} — ${p2Name} (${fil === "mfj" ? "MFJ" : "Single"})`} />}
             </div>
             <Card dark style={{ gridColumn: mob ? "1" : "1/-1" }}>
               <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Active Summary</h3>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, fontSize: 13 }}>
-                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${(tax.p1State || {}).abbr || "ST"} P1 State`, `${C.cStMR ? (C.cStMR * 100).toFixed(1) : "0"}% marginal`], [`${(tax.p2State || {}).abbr || "ST"} P2 State`, `${C.kStMR ? (C.kStMR * 100).toFixed(1) : "0"}% marginal`], ["401k P1 Limit", fmt(tax.k401Lim + (tax.c401Catch || 0))], ["401k P2 Limit", fmt(tax.k401Lim + (tax.k401Catch || 0))], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
+                {[["Fed Marginal", fp(C.mr)], ["Std Deduction", fmt(C.sd)], ["OASDI", `${p2(tax.ssRate)} to ${fmt(tax.ssCap)}`], ["Medicare", p2(tax.medRate)], [`${(tax.p1State || {}).abbr || "ST"} ${p1Name}`, `${C.cStMR ? (C.cStMR * 100).toFixed(1) : "0"}% marginal`], [`${(tax.p2State || {}).abbr || "ST"} ${p2Name}`, `${C.kStMR ? (C.kStMR * 100).toFixed(1) : "0"}% marginal`], [`401k ${p1Name}`, fmt(tax.k401Lim + (tax.c401Catch || 0))], [`401k ${p2Name}`, fmt(tax.k401Lim + (tax.k401Catch || 0))], ["HSA Limit", fmt(tax.hsaLimit)]].map(([l, v]) => (
                   <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
                     <span style={{ color: "#aaa" }}>{l}</span><span style={{ color: "#4ECDC4", fontWeight: 600 }}>{v}</span>
                   </div>
@@ -996,9 +1028,38 @@ export default function App() {
           const disT = disItems.reduce((s, [, d]) => s + (d.v || 0), 0);
           const savT = savItems.reduce((s, [, d]) => s + (d.v || 0), 0);
           const expT = necT + disT;
-          const netY = (snap.netW || 0) * 48;
+
+          // Salary-based tax calc for snapshot — use snapshot's grossW*52 as salaries if no explicit salary stored
+          const snapCS = snap.cSalary !== undefined ? snap.cSalary : (snap.cGrossW || 0) * 52;
+          const snapKS = snap.kSalary !== undefined ? snap.kSalary : (snap.kGrossW || 0) * 52;
+          // Look up tax year from snapshot date
+          const snapYr = snap.date ? snap.date.slice(0, 4) : tax.year;
+          const snapTaxData = allTaxDB[snapYr] || allTaxDB[tax.year] || TAX_DB["2026"];
+          const snapFil = snap.fil || fil;
+          const snapP1s = snap.p1State || (tax.p1State || {});
+          const snapP2s = snap.p2State || (tax.p2State || {});
+          // Calc net from salaries (simplified — no 401k/deductions, just tax)
+          const scw = snapCS / 52, skw = snapKS / 52;
+          const sBr = snapFil === "mfj" ? snapTaxData.fedMFJ : snapTaxData.fedSingle;
+          const sSd = snapFil === "mfj" ? snapTaxData.stdMFJ : snapTaxData.stdSingle;
+          const sCombTxA = (scw + skw) * 52;
+          const sFedTax = snapFil === "mfj" ? calcFed(Math.max(0, sCombTxA - sSd), sBr) : calcFed(Math.max(0, snapCS - snapTaxData.stdSingle), snapTaxData.fedSingle) + calcFed(Math.max(0, snapKS - snapTaxData.stdSingle), snapTaxData.fedSingle);
+          const sSsR = snapTaxData.ssRate / 100, sMedR = snapTaxData.medRate / 100;
+          const sTot = scw + skw, sCr = sTot > 0 ? scw / sTot : 0.5;
+          const scFed = (sFedTax / 52) * sCr, skFed = (sFedTax / 52) * (1 - sCr);
+          const scSS = Math.min(scw, snapTaxData.ssCap / 52) * sSsR, skSS = Math.min(skw, snapTaxData.ssCap / 52) * sSsR;
+          const scMc = scw * sMedR, skMc = skw * sMedR;
+          const scSt = calcStateTax(scw * 52, snapP1s.abbr || "", snapFil) / 52;
+          const skSt = calcStateTax(skw * 52, snapP2s.abbr || "", snapFil) / 52;
+          const scFL = scw * (snapP1s.famli || 0) / 100, skFL = skw * (snapP2s.famli || 0) / 100;
+          const scNet = scw - scFed - scSS - scMc - scSt - scFL;
+          const skNet = skw - skFed - skSS - skMc - skSt - skFL;
+          const snapNetW = scNet + skNet;
+          const netY = snapNetW * 48;
           const remY = netY - expT - savT;
-          const cNetY = (snap.cNetW || 0) * 48, kNetY = (snap.kNetW || 0) * 48;
+          const cNetY = scNet * 48, kNetY = skNet * 48;
+
+          const upSnap = (field, val) => { const n = [...snapshots]; n[viewingSnap] = { ...n[viewingSnap], [field]: val }; setSnapshots(n); };
           const renameSnapItem = (oldName, newName) => { if (oldName === newName || !newName.trim()) return; const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[newName.trim()] = it[oldName]; delete it[oldName]; n[viewingSnap] = { ...n[viewingSnap], items: it }; setSnapshots(n); };
           const upSnapItem = (name, field, val) => { const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[name] = { ...it[name], [field]: val }; n[viewingSnap] = { ...n[viewingSnap], items: it }; let nec = 0, dis = 0, sv = 0; Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; }); n[viewingSnap].necW = nec / 48; n[viewingSnap].disW = dis / 48; n[viewingSnap].expW = (nec + dis) / 48; n[viewingSnap].savW = sv / 48; setSnapshots(n); };
           const upSnapVal = (name, rawVal, period) => {
@@ -1009,8 +1070,7 @@ export default function App() {
           };
           const SnapItemRow = ({ name, data }) => {
             const yr = data.v || 0, wk = yr / 48, mo = yr / 12;
-            const ep = data.ep || "y"; // edit period: w, m, y
-            const editVal = ep === "w" ? wk : ep === "m" ? mo : yr;
+            const ep = data.ep || "y";
             const allCats = [...cats, ...savCats.filter(sc => !cats.includes(sc))];
             return (
               <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 40px 1fr 1fr 1fr 1fr", gap: 4, padding: "3px 0", alignItems: "center", fontSize: 12 }}>
@@ -1035,7 +1095,11 @@ export default function App() {
           return (
             <div>
               <div style={{ background: "#556FB5", color: "#fff", padding: "12px 20px", borderRadius: 12, marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <div><span style={{ fontWeight: 800, fontFamily: "'Fraunces',serif" }}>Viewing Snapshot:</span> {snap.label} <span style={{ opacity: 0.7 }}>({snap.date})</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1, minWidth: 0, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 800, fontFamily: "'Fraunces',serif", flexShrink: 0 }}>Snapshot:</span>
+                  <input type="date" value={snap.date || ""} onChange={e => upSnap("date", e.target.value)} style={{ border: "none", borderBottom: "2px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 13, fontFamily: "'DM Sans',sans-serif", padding: "2px 4px", outline: "none" }} />
+                  <input value={snap.label || ""} onChange={e => upSnap("label", e.target.value)} style={{ border: "none", borderBottom: "2px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 13, fontFamily: "'DM Sans',sans-serif", padding: "2px 4px", outline: "none", flex: 1, minWidth: 120 }} />
+                </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button onClick={() => setRestoreConfirm(viewingSnap)} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore This</button>
                   <button onClick={() => setViewingSnap(null)} style={{ padding: "6px 14px", background: "#fff", color: "#556FB5", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>← Back to Current</button>
@@ -1047,15 +1111,14 @@ export default function App() {
                     <div key={l}><div style={{ fontSize: 9, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: 16, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
                   ))}
                 </div>
-                {(cNetY > 0 || kNetY > 0) && <div style={{ marginTop: 8, fontSize: 12, color: "#aaa", textAlign: "center" }}>{p1Name}: {fmt(cNetY)}/yr • {p2Name}: {fmt(kNetY)}/yr</div>}
-                <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>Combined Net (weekly)</label>
-                    <input type="number" value={Math.round((snap.netW || 0) * 100) / 100} onChange={e => { const n = [...snapshots]; n[viewingSnap] = { ...n[viewingSnap], netW: +e.target.value || 0 }; setSnapshots(n); }} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
-                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{ p1Name } Net (weekly)</label>
-                    <input type="number" value={Math.round((snap.cNetW || 0) * 100) / 100} onChange={e => { const n = [...snapshots]; n[viewingSnap] = { ...n[viewingSnap], cNetW: +e.target.value || 0 }; setSnapshots(n); }} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
-                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{ p2Name } Net (weekly)</label>
-                    <input type="number" value={Math.round((snap.kNetW || 0) * 100) / 100} onChange={e => { const n = [...snapshots]; n[viewingSnap] = { ...n[viewingSnap], kNetW: +e.target.value || 0 }; setSnapshots(n); }} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
+                <div style={{ marginTop: 8, fontSize: 12, color: "#aaa", textAlign: "center" }}>{p1Name}: {fmt(cNetY)}/yr • {p2Name}: {fmt(kNetY)}/yr • Tax Year: {snapYr}</div>
+                <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p1Name} Annual Salary</label>
+                    <input type="number" value={Math.round(snapCS)} onChange={e => upSnap("cSalary", +e.target.value || 0)} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p2Name} Annual Salary</label>
+                    <input type="number" value={Math.round(snapKS)} onChange={e => upSnap("kSalary", +e.target.value || 0)} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
                 </div>
+                <div style={{ marginTop: 6, fontSize: 10, color: "#777", textAlign: "center" }}>Taxes auto-calculated from {snapYr} rates • Combined gross: {fmt(snapCS + snapKS)}/yr</div>
               </Card>
               <Card>
                 <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 40px 1fr 1fr 1fr 1fr", gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
@@ -1233,6 +1296,8 @@ export default function App() {
             <Card style={{ marginBottom: 20 }}>
               <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Save Budget Snapshot</h3>
               <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div style={{ minWidth: 120 }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Date</label>
+                  <input type="date" value={snapDate || new Date().toISOString().slice(0, 10)} onChange={e => setSnapDate(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
                 <div style={{ flex: 1, minWidth: 200 }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Label</label>
                   <input value={snapLabel} onChange={e => setSnapLabel(e.target.value)} placeholder="What changed?" style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
                 <button onClick={() => {
@@ -1241,16 +1306,17 @@ export default function App() {
                   ewk.forEach(e => { itemSnaps[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
                   savSorted.forEach(s => { itemSnaps[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
                   setSnapshots(prev => [...prev, {
-                    id: Date.now(), date: new Date().toISOString().slice(0, 10), label: snapLabel || "Snapshot",
+                    id: Date.now(), date: snapDate || new Date().toISOString().slice(0, 10), label: snapLabel || "Snapshot",
                     grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW,
                     remW, savRate: C.net > 0 ? (totalSavPlusRemW / C.net * 100) : 0,
                     savRateGross: (C.cw + C.kw) > 0 ? (totalSavPlusRemW / (C.cw + C.kw) * 100) : 0,
                     cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw,
+                    cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
                     eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
                     items: itemSnaps,
                     fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cHsaAnn, kHsaAnn, exp, sav, cats, tax },
                   }]);
-                  setSnapLabel("");
+                  setSnapLabel(""); setSnapDate("");
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
               </div>
             </Card>
@@ -1356,8 +1422,8 @@ export default function App() {
                     const ri = snapshots.findIndex(x => x.id === s.id);
                     return (
                       <div key={s.id} style={{ display: "grid", gridTemplateColumns: "80px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, padding: "5px 0", alignItems: "center", borderTop: "1px solid var(--bdr,#f0f0f0)", fontSize: 11, minWidth: 850 }}>
-                        <span style={{ color: "var(--tx3,#888)" }}>{s.date}</span>
-                        <span style={{ fontWeight: 600, color: "var(--tx,#333)" }}>{s.label}</span>
+                        <input type="date" value={s.date} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], date: e.target.value }; setSnapshots(n); }} style={{ fontSize: 10, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 3px", color: "var(--tx3,#888)", background: "transparent" }} />
+                        <input value={s.label} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], label: e.target.value }; setSnapshots(n); }} style={{ fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 4px", color: "var(--tx,#333)", background: "transparent" }} />
                         <span style={{ textAlign: "right", color: "#4ECDC4" }}>{fmt((s.netW || 0) * 48)}</span>
                         <span style={{ textAlign: "right", color: "#E8573A" }}>{fmt((s.expW || 0) * 48)}</span>
                         <span style={{ textAlign: "right", color: "#2ECC71" }}>{fmt((s.savW || 0) * 48)}</span>
