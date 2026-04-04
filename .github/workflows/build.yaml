@@ -8,7 +8,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  VERSION: v1.0  # <-- bump this when you release
 
 jobs:
   build:
@@ -18,6 +17,14 @@ jobs:
       packages: write
     steps:
     - uses: actions/checkout@v6
+
+    - name: Set version
+      id: version
+      run: |
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        TAG="v1.0-${SHORT_SHA}"
+        echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+        echo "Generated tag: ${TAG}"
 
     - name: Log in to GHCR
       uses: docker/login-action@v4
@@ -34,20 +41,4 @@ jobs:
       uses: docker/build-push-action@v7
       with:
         context: .
-        push: true
-        tags: |
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-
-    - name: Output digest
-      run: |
-        echo "## Docker Image" >> $GITHUB_STEP_SUMMARY
-        echo "**Version:** \`${{ env.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Helm chart value:**" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
-        echo "image:" >> $GITHUB_STEP_SUMMARY
-        echo "  repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
-        echo "  tag: ${{ env.VERSION }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+        push: true​​​​​​​​​​​​​​​​
