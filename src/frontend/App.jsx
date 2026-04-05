@@ -438,7 +438,11 @@ export default function App() {
   const [collapsed, setCollapsed] = useState({});
   const toggleSec = s => setCollapsed(p => ({ ...p, [s]: !p[s] }));
   const allExpanded = !collapsed.nec && !collapsed.dis && !collapsed.sav && !collapsed.preTax && !collapsed.postTax && !collapsed.fedTax && !collapsed.stTax && !collapsed.preSav && !collapsed.eaip && !collapsed.eaipTax;
-  const toggleAll = () => { const v = allExpanded; setCollapsed({ nec: v, dis: v, sav: v, preTax: v, postTax: v, fedTax: v, stTax: v, preSav: v, eaip: v, eaipTax: v }); };
+  const allCollapsed = collapsed.nec && collapsed.dis && collapsed.sav && collapsed.preTax && collapsed.postTax && collapsed.fedTax && collapsed.stTax && collapsed.preSav && collapsed.eaip && collapsed.eaipTax;
+  const isMixed = !allExpanded && !allCollapsed;
+  const expandAll = () => setCollapsed({ nec: false, dis: false, sav: false, preTax: false, postTax: false, fedTax: false, stTax: false, preSav: false, eaip: false, eaipTax: false });
+  const collapseAll = () => setCollapsed({ nec: true, dis: true, sav: true, preTax: true, postTax: true, fedTax: true, stTax: true, preSav: true, eaip: true, eaipTax: true });
+  const toggleAll = () => { if (allExpanded) collapseAll(); else expandAll(); };
   const [includeEaip, setIncludeEaip] = useState(false);
 
   // Load
@@ -559,13 +563,13 @@ export default function App() {
     ewk.forEach(e => { e.t === "N" ? n += e.wk * 48 : d += e.wk * 48; });
     savSorted.forEach(e => s += e.wk * 48);
     s += Math.max(0, remW) * 48; // add remaining to savings
-    if (includeEaip) s += C.eaipNet; // add EAIP to savings
+    if (includeEaip) s += C.eaipNet; // add Bonus to savings
     const base = savRateBase === "gross" ? (C.cw + C.kw) * 48 + (includeEaip ? C.eaipGross : 0) : C.net * 48 + (includeEaip ? C.eaipNet : 0);
     const vals = [n, d, s, Math.max(0, base - n - d - s)];
     return [
       { name: "Necessity", value: Math.round(n), _allValues: vals, color: "#556FB5" },
       { name: "Discretionary", value: Math.round(d), _allValues: vals, color: "#E8573A" },
-      { name: "Savings" + (includeEaip ? " + EAIP" : ""), value: Math.round(s), _allValues: vals, color: "#2ECC71" },
+      { name: "Savings" + (includeEaip ? " + Bonus" : ""), value: Math.round(s), _allValues: vals, color: "#2ECC71" },
     ].filter(x => x.value > 0);
   }, [ewk, savSorted, savRateBase, C, includeEaip, remW]);
 
@@ -763,13 +767,13 @@ export default function App() {
               ))}
               {mob && <div style={{ gridColumn: "1/-1", fontSize: 9, color: "var(--tx3,#999)", textAlign: "center" }}>tap to collapse ▴</div>}
             </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#4ECDC4" }}>Net: {fmt(C.net)}/wk</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#2ECC71" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "#4ECDC4", fontFamily: "'Fraunces',serif" }}>Net: {fmt(C.net)}/wk</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
               <span style={{ fontSize: 10, color: "var(--tx3,#999)" }}>▾</span>
             </div>}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "2px 0", borderTop: "1px solid var(--bdr, #ddd)" }}>
-            <span onClick={() => setToolbarOpen(p => !p)} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
+            <span onClick={() => setToolbarOpen(p => !p)} style={{ fontSize: 10, fontWeight: 700, color: toolbarOpen ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${toolbarOpen ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: toolbarOpen ? "#EEF1FA" : "transparent", userSelect: "none" }}>Tools {toolbarOpen ? "▴" : "▾"}</span>
             <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
               <span style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3, #999)", marginRight: 2 }}>Cols:</span>
               {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y48"], ["y52", "Y52"]].map(([k, lbl]) =>
@@ -798,9 +802,16 @@ export default function App() {
             <button onClick={() => setShowPerPerson(p => !p)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: showPerPerson ? "2px solid #4ECDC4" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: showPerPerson ? "#E8F8F5" : "var(--input-bg, #fafafa)", color: showPerPerson ? "#4ECDC4" : "var(--tx3, #888)", cursor: "pointer" }}>
               {showPerPerson ? "Hide" : "Show"} Per-Person
             </button>
-            <button onClick={toggleAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, background: "var(--input-bg, #fafafa)", color: "var(--tx3, #888)", cursor: "pointer" }}>
+            {isMixed ? <>
+              <button onClick={expandAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, background: "var(--input-bg, #fafafa)", color: "var(--tx3, #888)", cursor: "pointer" }}>
+                Expand All
+              </button>
+              <button onClick={collapseAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, background: "var(--input-bg, #fafafa)", color: "var(--tx3, #888)", cursor: "pointer" }}>
+                Collapse All
+              </button>
+            </> : <button onClick={toggleAll} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid var(--bdr, #ddd)", borderRadius: 6, background: "var(--input-bg, #fafafa)", color: "var(--tx3, #888)", cursor: "pointer" }}>
               {allExpanded ? "Collapse All" : "Expand All"}
-            </button>
+            </button>}
             <button onClick={() => setShowAddItem(true)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#fef5f2", color: "#E8573A", cursor: "pointer" }}>
               + Add Item
             </button>
@@ -1059,21 +1070,96 @@ export default function App() {
           const remY = netY - expT - savT;
           const cNetY = scNet * 48, kNetY = skNet * 48;
 
-          const upSnap = (field, val) => { const n = [...snapshots]; n[viewingSnap] = { ...n[viewingSnap], [field]: val }; setSnapshots(n); };
-          const renameSnapItem = (oldName, newName) => { if (oldName === newName || !newName.trim()) return; const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[newName.trim()] = it[oldName]; delete it[oldName]; n[viewingSnap] = { ...n[viewingSnap], items: it }; setSnapshots(n); };
-          const upSnapItem = (name, field, val) => { const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[name] = { ...it[name], [field]: val }; n[viewingSnap] = { ...n[viewingSnap], items: it }; let nec = 0, dis = 0, sv = 0; Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; }); n[viewingSnap].necW = nec / 48; n[viewingSnap].disW = dis / 48; n[viewingSnap].expW = (nec + dis) / 48; n[viewingSnap].savW = sv / 48; setSnapshots(n); };
+          // Recalculate all snapshot aggregate fields for chart consistency
+          const recalcSnap = (snapObj) => {
+            const it = snapObj.items || {};
+            let nec = 0, dis = 0, sv = 0;
+            Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; });
+            const sCS = snapObj.cSalary !== undefined ? snapObj.cSalary : (snapObj.cGrossW || 0) * 52;
+            const sKS = snapObj.kSalary !== undefined ? snapObj.kSalary : (snapObj.kGrossW || 0) * 52;
+            const sYr = snapObj.date ? snapObj.date.slice(0, 4) : tax.year;
+            const sTD = allTaxDB[sYr] || allTaxDB[tax.year] || TAX_DB["2026"];
+            const sF = snapObj.fil || fil;
+            const sP1 = snapObj.p1State || (tax.p1State || {});
+            const sP2 = snapObj.p2State || (tax.p2State || {});
+            const sw1 = sCS / 52, sw2 = sKS / 52;
+            const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
+            const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
+            const sCTA = (sw1 + sw2) * 52;
+            const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, sCS - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, sKS - sTD.stdSingle), sTD.fedSingle);
+            const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
+            const sT = sw1 + sw2, sC = sT > 0 ? sw1 / sT : 0.5;
+            const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
+            const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
+            const mc1 = sw1 * mR, mc2 = sw2 * mR;
+            const st1 = calcStateTax(sw1 * 52, sP1.abbr || "", sF) / 52;
+            const st2 = calcStateTax(sw2 * 52, sP2.abbr || "", sF) / 52;
+            const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
+            const n1 = sw1 - f1 - ss1 - mc1 - st1 - fl1;
+            const n2 = sw2 - f2 - ss2 - mc2 - st2 - fl2;
+            const nW = n1 + n2;
+            const gW = sw1 + sw2;
+            const eW = (nec + dis) / 48;
+            const sW = sv / 48;
+            const rW = nW - eW - sW;
+            // Bonus
+            const cBonusPct = snapObj.cEaipPct !== undefined ? snapObj.cEaipPct : (snapObj.fullState?.cEaip !== undefined ? evalF(snapObj.fullState.cEaip) : 0);
+            const kBonusPct = snapObj.kEaipPct !== undefined ? snapObj.kEaipPct : (snapObj.fullState?.kEaip !== undefined ? evalF(snapObj.fullState.kEaip) : 0);
+            const cBonusGross = sCS * cBonusPct / 100;
+            const kBonusGross = sKS * kBonusPct / 100;
+            const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
+            const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(sw1 * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(sw1 * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
+            const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(sw2 * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(sw2 * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
+            const cBonusNet = cBonusGross - cBonusTax;
+            const kBonusNet = kBonusGross - kBonusTax;
+            const totalSavPlusRem = sW + Math.max(0, rW);
+            return {
+              ...snapObj,
+              necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
+              netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
+              savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
+              savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
+              eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
+              cEaipNet: cBonusNet, kEaipNet: kBonusNet,
+              cEaipPct: cBonusPct, kEaipPct: kBonusPct,
+            };
+          };
+
+          const upSnap = (field, val) => { const n = [...snapshots]; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], [field]: val }); setSnapshots(n); };
+          const renameSnapItem = (oldName, newName) => { if (oldName === newName || !newName.trim()) return; const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[newName.trim()] = it[oldName]; delete it[oldName]; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it }); setSnapshots(n); };
+          const upSnapItem = (name, field, val) => { const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[name] = { ...it[name], [field]: val }; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it }); setSnapshots(n); };
           const upSnapVal = (name, rawVal, period) => {
             let yearly = +rawVal || 0;
             if (period === "w") yearly = yearly * 48;
             else if (period === "m") yearly = yearly * 12;
             upSnapItem(name, "v", Math.round(yearly * 100) / 100);
           };
+          const rmSnapItem = (name) => { const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; delete it[name]; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it }); setSnapshots(n); };
+          const addSnapItem = (type) => {
+            const newName = type === "S" ? "New Savings Item" : "New Expense Item";
+            let finalName = newName;
+            const existing = snap.items || {};
+            let counter = 1;
+            while (existing[finalName]) { finalName = `${newName} ${counter++}`; }
+            const n = [...snapshots];
+            const it = { ...(n[viewingSnap].items || {}), [finalName]: { v: 0, t: type, c: "" } };
+            n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it });
+            setSnapshots(n);
+          };
           const SnapItemRow = ({ name, data }) => {
             const yr = data.v || 0, wk = yr / 48, mo = yr / 12;
-            const ep = data.ep || "y";
+            const [editPer, setEditPer] = useState(null);
             const allCats = [...cats, ...savCats.filter(sc => !cats.includes(sc))];
+            const valFor = p => p === "w" ? wk : p === "m" ? mo : yr;
+            const saveEditVal = (v, per) => {
+              let yearly = evalF(v);
+              if (per === "w") yearly = yearly * 48;
+              else if (per === "m") yearly = yearly * 12;
+              upSnapItem(name, "v", Math.round(yearly * 100) / 100);
+              setEditPer(null);
+            };
             return (
-              <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 40px 1fr 1fr 1fr 1fr", gap: 4, padding: "3px 0", alignItems: "center", fontSize: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 1fr 1fr 1fr 1fr 20px", gap: 4, padding: "3px 0", alignItems: "center", fontSize: 12 }}>
                 <select value={data.t || "N"} onChange={e => upSnapItem(name, "t", e.target.value)} style={{ fontSize: 9, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: "3px 4px", background: data.t === "N" ? "#556FB5" : data.t === "D" ? "#E8573A" : "#2ECC71", cursor: "pointer" }}>
                   <option value="N">NEC</option><option value="D">DIS</option><option value="S">SAV</option>
                 </select>
@@ -1082,13 +1168,14 @@ export default function App() {
                   <option value="">—</option>
                   {allCats.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                <select value={ep} onChange={e => upSnapItem(name, "ep", e.target.value)} style={{ fontSize: 9, border: "1px solid #ddd", borderRadius: 4, padding: "1px", color: "#556FB5", fontWeight: 600, cursor: "pointer" }}>
-                  <option value="w">wk</option><option value="m">mo</option><option value="y">yr</option>
-                </select>
-                {ep === "w" ? <input type="number" step="0.01" value={Math.round(wk * 100) / 100} onChange={e => upSnapVal(name, e.target.value, "w")} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right" }} /> : <div style={{ textAlign: "right", color: "#888", fontSize: 11 }}>{fmt(wk)}</div>}
-                {ep === "m" ? <input type="number" step="0.01" value={Math.round(mo * 100) / 100} onChange={e => upSnapVal(name, e.target.value, "m")} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right" }} /> : <div style={{ textAlign: "right", color: "#888", fontSize: 11 }}>{fmt(mo)}</div>}
-                {ep === "y" ? <input type="number" step="0.01" value={Math.round(yr * 100) / 100} onChange={e => upSnapVal(name, e.target.value, "y")} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right" }} /> : <div style={{ textAlign: "right", color: "#888", fontSize: 11 }}>{fmt(yr)}</div>}
-                <div style={{ textAlign: "right", color: "#888", fontSize: 11 }}>{fmt(yr)}</div>
+                {["w", "m", "y"].map(per => {
+                  if (editPer === per) {
+                    return <div key={per}><NI value={String(Math.round(valFor(per) * 100) / 100)} onChange={(v) => saveEditVal(v, per)} autoFocus onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
+                  }
+                  return <div key={per} onClick={() => setEditPer(per)} style={{ textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4, fontSize: 11 }}>{fmt(valFor(per))}</div>;
+                })}
+                <div style={{ textAlign: "right", color: "var(--tx3,#888)", fontSize: 11 }}>{fmt(yr)}</div>
+                <button onClick={() => rmSnapItem(name)} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
               </div>
             );
           };
@@ -1118,22 +1205,38 @@ export default function App() {
                   <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p2Name} Annual Salary</label>
                     <input type="number" value={Math.round(snapKS)} onChange={e => upSnap("kSalary", +e.target.value || 0)} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
                 </div>
+                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "#9B59B6" }}>{p1Name} Bonus %</label>
+                    <div style={{ display: "flex", alignItems: "center", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, overflow: "hidden", background: "rgba(255,255,255,0.1)" }}>
+                      <input type="number" step="0.1" value={snap.cEaipPct !== undefined ? snap.cEaipPct : (snap.fullState?.cEaip !== undefined ? evalF(snap.fullState.cEaip) : 0)} onChange={e => upSnap("cEaipPct", +e.target.value || 0)} style={{ flex: 1, border: "none", outline: "none", padding: "6px 8px", fontSize: 12, background: "transparent", color: "#fff", width: "100%", textAlign: "right" }} />
+                      <span style={{ padding: "0 8px 0 2px", color: "#aaa", fontWeight: 600, fontSize: 12 }}>%</span>
+                    </div></div>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "#9B59B6" }}>{p2Name} Bonus %</label>
+                    <div style={{ display: "flex", alignItems: "center", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, overflow: "hidden", background: "rgba(255,255,255,0.1)" }}>
+                      <input type="number" step="0.1" value={snap.kEaipPct !== undefined ? snap.kEaipPct : (snap.fullState?.kEaip !== undefined ? evalF(snap.fullState.kEaip) : 0)} onChange={e => upSnap("kEaipPct", +e.target.value || 0)} style={{ flex: 1, border: "none", outline: "none", padding: "6px 8px", fontSize: 12, background: "transparent", color: "#fff", width: "100%", textAlign: "right" }} />
+                      <span style={{ padding: "0 8px 0 2px", color: "#aaa", fontWeight: 600, fontSize: 12 }}>%</span>
+                    </div></div>
+                </div>
+                {(snap.eaipNet > 0 || snap.eaipGross > 0) && <div style={{ marginTop: 6, fontSize: 10, color: "#9B59B6", textAlign: "center" }}>Bonus net: {fmt(snap.eaipNet || 0)} ({p1Name}: {fmt(snap.cEaipNet || 0)} • {p2Name}: {fmt(snap.kEaipNet || 0)})</div>}
                 <div style={{ marginTop: 6, fontSize: 10, color: "#777", textAlign: "center" }}>Taxes auto-calculated from {snapYr} rates • Combined gross: {fmt(snapCS + snapKS)}/yr</div>
               </Card>
               <Card>
-                <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 40px 1fr 1fr 1fr 1fr", gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
-                  <span>Type</span><span>Name</span><span>Category</span><span>Per</span><span style={{ textAlign: "right" }}>Weekly</span><span style={{ textAlign: "right" }}>Monthly</span><span style={{ textAlign: "right" }}>Yearly (48)</span><span style={{ textAlign: "right" }}>Yearly (52)</span>
+                <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 1fr 1fr 1fr 1fr 20px", gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
+                  <span>Type</span><span>Name</span><span>Category</span><span style={{ textAlign: "right" }}>Weekly</span><span style={{ textAlign: "right" }}>Monthly</span><span style={{ textAlign: "right" }}>Yearly (48)</span><span style={{ textAlign: "right" }}>Yearly (52)</span><span />
                 </div>
                 {necItems.length > 0 && <SH color="var(--c-taxable, #556FB5)">Necessity</SH>}
                 {necItems.map(([name, data]) => <SnapItemRow key={name} name={name} data={data} />)}
                 {necItems.length > 0 && <Row label="Subtotal — Necessity" wk={necT / 48} mo={necT / 12} y48={necT} y52={necT} bold border color="var(--c-taxable, #556FB5)" />}
+                <button onClick={() => addSnapItem("N")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Necessity</button>
                 {disItems.length > 0 && <SH color="var(--c-totaltax, #E8573A)">Discretionary</SH>}
                 {disItems.map(([name, data]) => <SnapItemRow key={name} name={name} data={data} />)}
                 {disItems.length > 0 && <Row label="Subtotal — Discretionary" wk={disT / 48} mo={disT / 12} y48={disT} y52={disT} bold border color="var(--c-totaltax, #E8573A)" />}
+                <button onClick={() => addSnapItem("D")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Discretionary</button>
                 <Row label="Total Expenses" wk={expT / 48} mo={expT / 12} y48={expT} y52={expT} bold border />
                 {savItems.length > 0 && <SH color="#2ECC71">Savings</SH>}
                 {savItems.map(([name, data]) => <SnapItemRow key={name} name={name} data={data} />)}
                 {savItems.length > 0 && <Row label="Total Savings" wk={savT / 48} mo={savT / 12} y48={savT} y52={savT * 52 / 48} bold border color="#2ECC71" />}
+                <button onClick={() => addSnapItem("S")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Savings</button>
                 <div style={{ marginTop: 8, padding: "10px 8px", background: remY >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
                   <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY * 52 / 48} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
                 </div>
@@ -1231,15 +1334,15 @@ export default function App() {
                 <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + Math.max(0, remY52)} bold color="#2ECC71" />
               </div>
 
-              {/* EAIP Section */}
+              {/* Bonus Section */}
               {C.eaipGross > 0 && <>
-                <CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.eaip} onToggle={() => toggleSec("eaip")}>EAIP — Annual Bonus</CSH>
+                <CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.eaip} onToggle={() => toggleSec("eaip")}>Bonus — Annual</CSH>
                 {!collapsed.eaip && <>
                 <Row label={p1Name + " Bonus Gross"} wk={0} mo={0} y48={C.cEaipGross} y52={C.cEaipGross} color="var(--c-posttax, #9B59B6)" />
                 <Row label={p2Name + " Bonus Gross"} wk={0} mo={0} y48={C.kEaipGross} y52={C.kEaipGross} color="var(--c-posttax, #9B59B6)" />
-                <Row label="Combined EAIP Gross" wk={0} mo={0} y48={C.eaipGross} y52={C.eaipGross} bold border color="var(--c-posttax, #9B59B6)" />
+                <Row label="Combined Bonus Gross" wk={0} mo={0} y48={C.eaipGross} y52={C.eaipGross} bold border color="var(--c-posttax, #9B59B6)" />
 
-                <CSH color="var(--c-fedtax, #1a5276)" collapsed={collapsed.eaipTax} onToggle={() => toggleSec("eaipTax")}>EAIP Taxes</CSH>
+                <CSH color="var(--c-fedtax, #1a5276)" collapsed={collapsed.eaipTax} onToggle={() => toggleSec("eaipTax")}>Bonus Taxes</CSH>
                 {!collapsed.eaipTax && <>
                 <Row label="Fed Withholding" sub={fp(C.mr)} wk={0} mo={0} y48={-(C.cEaipFed + C.kEaipFed)} y52={-(C.cEaipFed + C.kEaipFed)} color="var(--c-fedtax, #1a5276)" />
                 {showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={0} mo={0} y48={-C.cEaipFed} y52={-C.cEaipFed} color="var(--c-fedtax2, #3a7abf)" /><Row label={`  ↳ ${p2Name}`} wk={0} mo={0} y48={-C.kEaipFed} y52={-C.kEaipFed} color="var(--c-fedtax2, #3a7abf)" /></>}
@@ -1259,16 +1362,16 @@ export default function App() {
                   <Row label={`${p2a} Payroll Tax (${p2Name})`} wk={0} mo={0} y48={-C.kEaipFL} y52={-C.kEaipFL} color="var(--c-sttax, #8B4513)" />
                 </>; })()}
                 </>}
-                <Row label="Total EAIP Taxes" wk={0} mo={0} y48={-(C.cEaipTax + C.kEaipTax)} y52={-(C.cEaipTax + C.kEaipTax)} bold border color="var(--c-totaltax, #E8573A)" />
+                <Row label="Total Bonus Taxes" wk={0} mo={0} y48={-(C.cEaipTax + C.kEaipTax)} y52={-(C.cEaipTax + C.kEaipTax)} bold border color="var(--c-totaltax, #E8573A)" />
                 {showPerPerson && <div style={{ padding: "4px 0", fontSize: 12, color: "var(--tx3,#888)" }}>{p1Name} tax: {fmt(C.cEaipTax)} • {p2Name} tax: {fmt(C.kEaipTax)}</div>}
                 </>}
 
                 <div style={{ marginTop: 4, padding: "8px", background: "#F3E8FF", borderRadius: 8 }}>
-                  <Row label="EAIP Net (take-home)" wk={0} mo={0} y48={C.eaipNet} y52={C.eaipNet} bold color="var(--c-posttax, #9B59B6)" />
+                  <Row label="Bonus Net (take-home)" wk={0} mo={0} y48={C.eaipNet} y52={C.eaipNet} bold color="var(--c-posttax, #9B59B6)" />
                   {showPerPerson && <div style={{ padding: "4px 0", fontSize: 12, color: "var(--tx3,#888)" }}>{p1Name}: {fmt(C.cEaipNet)} • {p2Name}: {fmt(C.kEaipNet)}</div>}
                 </div>
                 <div style={{ marginTop: 4, padding: "8px", background: "#f0faf5", borderRadius: 8 }}>
-                  <Row label="Total Savings + Remaining + EAIP" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW) + C.eaipNet} y52={y5(tSavW) + Math.max(0, remY52) + C.eaipNet} bold color="#2ECC71" />
+                  <Row label="Total Savings + Remaining + Bonus" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW) + C.eaipNet} y52={y5(tSavW) + Math.max(0, remY52) + C.eaipNet} bold color="#2ECC71" />
                 </div>
               </>}
 
@@ -1331,6 +1434,7 @@ export default function App() {
                     cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw,
                     cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
                     eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
+                    cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
                     items: itemSnaps,
                     fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cHsaAnn, kHsaAnn, exp, sav, cats, tax },
                   }]);
@@ -1343,7 +1447,7 @@ export default function App() {
               <span style={{ fontSize: 12, fontWeight: 700, color: "#999" }}>Show as % of:</span>
               <button onClick={() => setSavRateBase("net")} style={{ padding: "5px 14px", fontSize: 12, fontWeight: 600, border: savRateBase === "net" ? "2px solid #4ECDC4" : "2px solid #ddd", borderRadius: 6, background: savRateBase === "net" ? "#E8F8F5" : "#fafafa", color: savRateBase === "net" ? "#4ECDC4" : "#888", cursor: "pointer" }}>Net Income</button>
               <button onClick={() => setSavRateBase("gross")} style={{ padding: "5px 14px", fontSize: 12, fontWeight: 600, border: savRateBase === "gross" ? "2px solid #F2A93B" : "2px solid #ddd", borderRadius: 6, background: savRateBase === "gross" ? "#FEF5E7" : "#fafafa", color: savRateBase === "gross" ? "#F2A93B" : "#888", cursor: "pointer" }}>Gross Income</button>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#999", marginLeft: 8 }}>EAIP:</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#999", marginLeft: 8 }}>Bonus:</span>
               <button onClick={() => setIncludeEaip(p => !p)} style={{ padding: "5px 14px", fontSize: 12, fontWeight: 600, border: includeEaip ? "2px solid #9B59B6" : "2px solid #ddd", borderRadius: 6, background: includeEaip ? "#F3E8FF" : "#fafafa", color: includeEaip ? "#9B59B6" : "#888", cursor: "pointer" }}>
                 {includeEaip ? "Included" : "Excluded"}
               </button>
@@ -1397,11 +1501,11 @@ export default function App() {
                 <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
                   <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Total Expenses (Yearly)</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="Expenses" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></div></Card>
                   <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Necessity" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} /><Line type="monotone" dataKey="Discretionary" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /></LineChart></ResponsiveContainer></div></Card>
-                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Net Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Income" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={includeEaip ? "Net Income + EAIP" : "Net Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1NetKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2NetKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card>
-                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Gross Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Gross Income" stroke="#F2A93B" strokeWidth={2.5} dot={{ r: 4, fill: "#F2A93B" }} name={includeEaip ? "Gross + EAIP" : "Gross Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1GrossKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2GrossKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card>
+                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Net Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Income" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={includeEaip ? "Net Income + Bonus" : "Net Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1NetKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2NetKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card>
+                  <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Gross Income (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Gross Income" stroke="#F2A93B" strokeWidth={2.5} dot={{ r: 4, fill: "#F2A93B" }} name={includeEaip ? "Gross + Bonus" : "Gross Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1GrossKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2GrossKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card>
                   <Card>
-                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Savings Rate (% of {savRateBase}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + EAIP</span>}</h3>
-                    <div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 'auto']} /><Tooltip formatter={v => `${v}%`} contentStyle={cs} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Savings Rate (Gross)" : "Savings Rate (Net)"} stroke="#2ECC71" strokeWidth={2.5} dot={{ r: 4, fill: "#2ECC71" }} name={`Savings Rate (${savRateBase}${includeEaip ? " + EAIP" : ""})`} /></LineChart></ResponsiveContainer></div>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Savings Rate (% of {savRateBase}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</h3>
+                    <div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 'auto']} /><Tooltip formatter={v => `${v}%`} contentStyle={cs} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Savings Rate (Gross)" : "Savings Rate (Net)"} stroke="#2ECC71" strokeWidth={2.5} dot={{ r: 4, fill: "#2ECC71" }} name={`Savings Rate (${savRateBase}${includeEaip ? " + Bonus" : ""})`} /></LineChart></ResponsiveContainer></div>
                   </Card>
                 </div>
               );
@@ -1436,7 +1540,7 @@ export default function App() {
                 <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Snapshot History</h3>
                 <div style={{ overflowX: "auto" }}>
                   <div style={{ display: "grid", gridTemplateColumns: "80px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, fontSize: 9, fontWeight: 700, color: "#999", marginBottom: 6, minWidth: 850 }}>
-                    <span>Date</span><span>Label</span><span style={{ textAlign: "right" }}>Net Income</span><span style={{ textAlign: "right" }}>Expenses</span><span style={{ textAlign: "right" }}>Savings</span><span style={{ textAlign: "right" }}>EAIP</span><span style={{ textAlign: "right" }}>Sav. Rate</span><span style={{ textAlign: "right" }}>Remaining</span><span />
+                    <span>Date</span><span>Label</span><span style={{ textAlign: "right" }}>Net Income</span><span style={{ textAlign: "right" }}>Expenses</span><span style={{ textAlign: "right" }}>Savings</span><span style={{ textAlign: "right" }}>Bonus</span><span style={{ textAlign: "right" }}>Sav. Rate</span><span style={{ textAlign: "right" }}>Remaining</span><span />
                   </div>
                   {[...snapshots].sort((a, b) => b.date.localeCompare(a.date)).map(s => {
                     const ri = snapshots.findIndex(x => x.id === s.id);
