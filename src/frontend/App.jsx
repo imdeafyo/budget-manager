@@ -1446,6 +1446,7 @@ export default function App() {
                   }]);
                   setSnapLabel(""); setSnapDate("");
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
+                <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import Snapshots<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const incoming = d.snapshots || d; if (!Array.isArray(incoming)) { alert("JSON must contain a \"snapshots\" array"); return; } const existingIds = new Set(snapshots.map(s => s.id)); const newSnaps = incoming.filter(s => !existingIds.has(s.id)); setSnapshots(prev => [...prev, ...newSnaps].sort((a, b) => (a.date || "").localeCompare(b.date || ""))); alert(`Imported ${newSnaps.length} new snapshot${newSnaps.length !== 1 ? "s" : ""} (${incoming.length - newSnaps.length} duplicates skipped)`); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
               </div>
             </Card>
 
