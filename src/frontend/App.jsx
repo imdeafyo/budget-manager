@@ -1218,6 +1218,12 @@ export default function App() {
                     </div></div>
                 </div>
                 {(snap.eaipNet > 0 || snap.eaipGross > 0) && <div style={{ marginTop: 6, fontSize: 10, color: "#9B59B6", textAlign: "center" }}>Bonus net: {fmt(snap.eaipNet || 0)} ({p1Name}: {fmt(snap.cEaipNet || 0)} • {p2Name}: {fmt(snap.kEaipNet || 0)})</div>}
+                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p1Name} State</label>
+                    <input list="snap-state-names" value={snapP1s.name || ""} onChange={e => { const abbr = STATE_ABBR[e.target.value]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; upSnap("p1State", { ...snapP1s, name: e.target.value, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) }); }} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /><datalist id="snap-state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                  <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p2Name} State</label>
+                    <input list="snap-state-names-2" value={snapP2s.name || ""} onChange={e => { const abbr = STATE_ABBR[e.target.value]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; upSnap("p2State", { ...snapP2s, name: e.target.value, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) }); }} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /><datalist id="snap-state-names-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                </div>
                 <div style={{ marginTop: 6, fontSize: 10, color: "#777", textAlign: "center" }}>Taxes auto-calculated from {snapYr} rates • Combined gross: {fmt(snapCS + snapKS)}/yr</div>
               </Card>
               <Card>
@@ -1315,16 +1321,16 @@ export default function App() {
               </div>
 
               <CSH color="var(--c-taxable, #556FB5)" collapsed={collapsed.nec} onToggle={() => toggleSec("nec")}>Necessity Expenses</CSH>
-              {!collapsed.nec && necI.map(item => <ExpRowInner key={item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
+              {!collapsed.nec && necI.map(item => <ExpRowInner key={item.n + "_" + item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
               <Row label="Subtotal — Necessity" wk={-tNW} mo={-moC(tNW)} y48={-y4(tNW)} y52={-y4(tNW)} bold border color="var(--c-taxable, #556FB5)" />
 
               <CSH color="var(--c-totaltax, #E8573A)" collapsed={collapsed.dis} onToggle={() => toggleSec("dis")}>Discretionary Expenses</CSH>
-              {!collapsed.dis && disI.map(item => <ExpRowInner key={item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
+              {!collapsed.dis && disI.map(item => <ExpRowInner key={item.n + "_" + item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
               <Row label="Subtotal — Discretionary" wk={-tDW} mo={-moC(tDW)} y48={-y4(tDW)} y52={-y4(tDW)} bold border color="var(--c-totaltax, #E8573A)" />
               <Row label="Total All Expenses" wk={-tExpW} mo={-moC(tExpW)} y48={-y4(tExpW)} y52={-y4(tExpW)} bold border />
 
               <CSH color="#2ECC71" collapsed={collapsed.sav} onToggle={() => toggleSec("sav")}>Savings Goals</CSH>
-              {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.idx} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
+              {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.n + "_" + item.idx} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
               <Row label="Total Savings" wk={-tSavW} mo={-moC(tSavW)} y48={-y4(tSavW)} y52={-y5(tSavW)} bold border color="#2ECC71" />
 
               <div style={{ marginTop: 8, padding: "10px 8px", background: remW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
