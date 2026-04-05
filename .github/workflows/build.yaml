@@ -21,8 +21,9 @@ jobs:
     - name: Set version
       id: version
       run: |
-        SHORT_SHA=$(git rev-parse --short HEAD)
-        TAG="v1.0-${SHORT_SHA}"
+        # Count commits as patch version
+        PATCH=$(git rev-list --count HEAD)
+        TAG="v1.0.${PATCH}"
         echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
         echo "Generated tag: ${TAG}"
 
