@@ -8,7 +8,7 @@ Personal budgeting app with **dual-income tax calculations**, **annual bonus sup
 * Supports annual bonuses
 * Tracks recurring expenses
 * Saves financial snapshots for comparison
-* Displays charts for income, savings, and spending
+* Displays charts for income, savings, and spending history
 
 ## How It Works
 
