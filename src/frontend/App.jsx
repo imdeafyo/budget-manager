@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { PieChart, Pie, Cell, BarChart, Bar, LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 /* ── Formula eval: strips commas, evaluates math, returns number ── */
 function evalF(str) {
@@ -434,6 +434,16 @@ export default function App() {
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [itemHistoryName, setItemHistoryName] = useState("");
   const [viewingSnap, setViewingSnap] = useState(null); // snapshot index being viewed
+  const [snapTab, setSnapTab] = useState("budget"); // "budget" | "deductions" | "tax"
+  const [showBulkAdd, setShowBulkAdd] = useState(false);
+  const [bulkName, setBulkName] = useState("");
+  const [bulkVal, setBulkVal] = useState("");
+  const [bulkPer, setBulkPer] = useState("m");
+  const [bulkType, setBulkType] = useState("N");
+  const [bulkSec, setBulkSec] = useState("exp");
+  const [bulkCat, setBulkCat] = useState("");
+  const [bulkTargets, setBulkTargets] = useState({}); // { current: true, snapId1: true, ... }
+  const [catChartMode, setCatChartMode] = useState("stacked"); // "stacked" | "sankey"
   const [savRateBase, setSavRateBase] = useState("net"); // "net" or "gross"
   const [collapsed, setCollapsed] = useState({});
   const toggleSec = s => setCollapsed(p => ({ ...p, [s]: !p[s] }));
@@ -578,6 +588,60 @@ export default function App() {
   const rmExp = useCallback(idx => { setExp(prev => prev.filter((_, j) => j !== idx)); }, []);
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
+  // recalcSnap — recalculates all aggregate snapshot fields from items + salaries
+  const recalcSnap = useCallback((snapObj) => {
+    const it = snapObj.items || {};
+    let nec = 0, dis = 0, sv = 0;
+    Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; });
+    const sCS = snapObj.cSalary !== undefined ? snapObj.cSalary : (snapObj.cGrossW || 0) * 52;
+    const sKS = snapObj.kSalary !== undefined ? snapObj.kSalary : (snapObj.kGrossW || 0) * 52;
+    const sYr = snapObj.date ? snapObj.date.slice(0, 4) : tax.year;
+    const sTD = allTaxDB[sYr] || allTaxDB[tax.year] || TAX_DB["2026"];
+    const sF = snapObj.fil || fil;
+    const sP1 = snapObj.p1State || (tax.p1State || {});
+    const sP2 = snapObj.p2State || (tax.p2State || {});
+    const sw1 = sCS / 52, sw2 = sKS / 52;
+    const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
+    const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
+    const sCTA = (sw1 + sw2) * 52;
+    const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, sCS - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, sKS - sTD.stdSingle), sTD.fedSingle);
+    const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
+    const sT = sw1 + sw2, sC = sT > 0 ? sw1 / sT : 0.5;
+    const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
+    const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
+    const mc1 = sw1 * mR, mc2 = sw2 * mR;
+    const st1 = calcStateTax(sw1 * 52, sP1.abbr || "", sF) / 52;
+    const st2 = calcStateTax(sw2 * 52, sP2.abbr || "", sF) / 52;
+    const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
+    const n1 = sw1 - f1 - ss1 - mc1 - st1 - fl1;
+    const n2 = sw2 - f2 - ss2 - mc2 - st2 - fl2;
+    const nW = n1 + n2;
+    const gW = sw1 + sw2;
+    const eW = (nec + dis) / 48;
+    const sW = sv / 48;
+    const rW = nW - eW - sW;
+    const cBonusPct = snapObj.cEaipPct !== undefined ? snapObj.cEaipPct : (snapObj.fullState?.cEaip !== undefined ? evalF(snapObj.fullState.cEaip) : 0);
+    const kBonusPct = snapObj.kEaipPct !== undefined ? snapObj.kEaipPct : (snapObj.fullState?.kEaip !== undefined ? evalF(snapObj.fullState.kEaip) : 0);
+    const cBonusGross = sCS * cBonusPct / 100;
+    const kBonusGross = sKS * kBonusPct / 100;
+    const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
+    const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(sw1 * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(sw1 * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
+    const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(sw2 * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(sw2 * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
+    const cBonusNet = cBonusGross - cBonusTax;
+    const kBonusNet = kBonusGross - kBonusTax;
+    const totalSavPlusRem = sW + Math.max(0, rW);
+    return {
+      ...snapObj,
+      necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
+      netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
+      savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
+      savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
+      eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
+      cEaipNet: cBonusNet, kEaipNet: kBonusNet,
+      cEaipPct: cBonusPct, kEaipPct: kBonusPct,
+    };
+  }, [tax, fil, allTaxDB]);
+
   const BrEd = ({ brackets, onChange }) => (
     <div style={{  }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
@@ -650,7 +714,7 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
   useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
-  useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingSnap]);
+  useEffect(() => { window.scrollTo(0, 0); setSnapTab("budget"); }, [tab, viewingSnap]);
   const cycleTheme = () => setDarkMode(p => p === "light" || p === false ? "dark" : p === "dark" || p === true ? "waf" : "light");
   const bg = dk ? "#1e1e1e" : waf ? "#d5d0cb" : "linear-gradient(145deg,#f5f0eb 0%,#ede7e0 50%,#e8e2db 100%)";
   const headerBg = dk ? "#1a1a1a" : waf ? "#486b50" : "#1a1a1a";
@@ -815,6 +879,9 @@ export default function App() {
             </button>}
             <button onClick={() => setShowAddItem(true)} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#fef5f2", color: "#E8573A", cursor: "pointer" }}>
               + Add Item
+            </button>
+            <button onClick={() => { setBulkTargets({ current: true }); setBulkName(""); setBulkVal(""); setBulkCat(cats[0]); setShowBulkAdd(true); }} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #9B59B6", borderRadius: 6, background: "#F3E8FF", color: "#9B59B6", cursor: "pointer" }}>
+              + Add to Multiple
             </button>
           </div>}
         </div>}
@@ -1071,61 +1138,6 @@ export default function App() {
           const remY = netY - expT - savT;
           const cNetY = scNet * 48, kNetY = skNet * 48;
 
-          // Recalculate all snapshot aggregate fields for chart consistency
-          const recalcSnap = (snapObj) => {
-            const it = snapObj.items || {};
-            let nec = 0, dis = 0, sv = 0;
-            Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; });
-            const sCS = snapObj.cSalary !== undefined ? snapObj.cSalary : (snapObj.cGrossW || 0) * 52;
-            const sKS = snapObj.kSalary !== undefined ? snapObj.kSalary : (snapObj.kGrossW || 0) * 52;
-            const sYr = snapObj.date ? snapObj.date.slice(0, 4) : tax.year;
-            const sTD = allTaxDB[sYr] || allTaxDB[tax.year] || TAX_DB["2026"];
-            const sF = snapObj.fil || fil;
-            const sP1 = snapObj.p1State || (tax.p1State || {});
-            const sP2 = snapObj.p2State || (tax.p2State || {});
-            const sw1 = sCS / 52, sw2 = sKS / 52;
-            const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
-            const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
-            const sCTA = (sw1 + sw2) * 52;
-            const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, sCS - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, sKS - sTD.stdSingle), sTD.fedSingle);
-            const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
-            const sT = sw1 + sw2, sC = sT > 0 ? sw1 / sT : 0.5;
-            const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
-            const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
-            const mc1 = sw1 * mR, mc2 = sw2 * mR;
-            const st1 = calcStateTax(sw1 * 52, sP1.abbr || "", sF) / 52;
-            const st2 = calcStateTax(sw2 * 52, sP2.abbr || "", sF) / 52;
-            const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
-            const n1 = sw1 - f1 - ss1 - mc1 - st1 - fl1;
-            const n2 = sw2 - f2 - ss2 - mc2 - st2 - fl2;
-            const nW = n1 + n2;
-            const gW = sw1 + sw2;
-            const eW = (nec + dis) / 48;
-            const sW = sv / 48;
-            const rW = nW - eW - sW;
-            // Bonus
-            const cBonusPct = snapObj.cEaipPct !== undefined ? snapObj.cEaipPct : (snapObj.fullState?.cEaip !== undefined ? evalF(snapObj.fullState.cEaip) : 0);
-            const kBonusPct = snapObj.kEaipPct !== undefined ? snapObj.kEaipPct : (snapObj.fullState?.kEaip !== undefined ? evalF(snapObj.fullState.kEaip) : 0);
-            const cBonusGross = sCS * cBonusPct / 100;
-            const kBonusGross = sKS * kBonusPct / 100;
-            const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
-            const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(sw1 * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(sw1 * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
-            const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(sw2 * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(sw2 * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
-            const cBonusNet = cBonusGross - cBonusTax;
-            const kBonusNet = kBonusGross - kBonusTax;
-            const totalSavPlusRem = sW + Math.max(0, rW);
-            return {
-              ...snapObj,
-              necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
-              netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
-              savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
-              savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
-              eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
-              cEaipNet: cBonusNet, kEaipNet: kBonusNet,
-              cEaipPct: cBonusPct, kEaipPct: kBonusPct,
-            };
-          };
-
           const upSnap = (field, val) => { const n = [...snapshots]; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], [field]: val }); setSnapshots(n); };
           const renameSnapItem = (oldName, newName) => { if (oldName === newName || !newName.trim()) return; const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[newName.trim()] = it[oldName]; delete it[oldName]; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it }); setSnapshots(n); };
           const upSnapItem = (name, field, val) => { const n = [...snapshots]; const it = { ...(n[viewingSnap].items || {}) }; it[name] = { ...it[name], [field]: val }; n[viewingSnap] = recalcSnap({ ...n[viewingSnap], items: it }); setSnapshots(n); };
@@ -1202,6 +1214,13 @@ export default function App() {
                   <button onClick={() => setViewingSnap(null)} style={{ padding: "6px 14px", background: "#fff", color: "#556FB5", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>← Back to Current</button>
                 </div>
               </div>
+              {/* Snapshot sub-tabs */}
+              <div style={{ display: "flex", gap: 2, marginBottom: 16 }}>
+                {[["budget", "Budget"], ["deductions", "Deductions"], ["tax", "Tax"]].map(([k, l]) => (
+                  <button key={k} onClick={() => setSnapTab(k)} style={{ padding: "8px 18px", border: snapTab === k ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 8, background: snapTab === k ? "#EEF1FA" : "transparent", color: snapTab === k ? "#556FB5" : "var(--tx3, #888)", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>{l}</button>
+                ))}
+              </div>
+              {snapTab === "budget" && <>
               <Card dark style={{ marginBottom: 20 }}>
                 <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 12, textAlign: "center" }}>
                   {[["Net Income (yr)", fmt(netY), "#4ECDC4"], ["Necessity (yr)", fmt(necT), "#556FB5"], ["Discretionary (yr)", fmt(disT), "#E8573A"], ["Savings (yr)", fmt(savT), "#2ECC71"], ["Remaining (yr)", fmt(remY), remY >= 0 ? "#2ECC71" : "#E74C3C"]].map(([l, v, c]) => (
@@ -1257,6 +1276,158 @@ export default function App() {
                   <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY * 52 / 48} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
                 </div>
               </Card>
+              </>}
+              {/* Snapshot Deductions Tab */}
+              {snapTab === "deductions" && (() => {
+                const fs = snap.fullState || {};
+                const snapPreDed = fs.preDed || DEF_PRE;
+                const snapPostDed = fs.postDed || DEF_POST;
+                const updateSnapFS = (key, val) => {
+                  const n = [...snapshots];
+                  const s = { ...n[viewingSnap] };
+                  s.fullState = { ...(s.fullState || {}), [key]: val };
+                  n[viewingSnap] = recalcSnap(s);
+                  setSnapshots(n);
+                };
+                const snapC4pre = fs.c4pre !== undefined ? fs.c4pre : "0";
+                const snapC4ro = fs.c4ro !== undefined ? fs.c4ro : "0";
+                const snapK4pre = fs.k4pre !== undefined ? fs.k4pre : "0";
+                const snapK4ro = fs.k4ro !== undefined ? fs.k4ro : "0";
+                const snapCHsa = fs.cHsaAnn !== undefined ? fs.cHsaAnn : "0";
+                const snapKHsa = fs.kHsaAnn !== undefined ? fs.kHsaAnn : "0";
+                return <>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Pre-Tax %</label>
+                        <NI value={String(snapC4pre)} onChange={v => updateSnapFS("c4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Roth %</label>
+                        <NI value={String(snapC4ro)} onChange={v => updateSnapFS("c4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Pre-Tax %</label>
+                        <NI value={String(snapK4pre)} onChange={v => updateSnapFS("k4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Roth %</label>
+                        <NI value={String(snapK4ro)} onChange={v => updateSnapFS("k4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
+                    </div>
+                  </Card>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>HSA Annual Contributions</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Annual HSA</label>
+                        <NI value={String(snapCHsa)} onChange={v => updateSnapFS("cHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Annual HSA</label>
+                        <NI value={String(snapKHsa)} onChange={v => updateSnapFS("kHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                    </div>
+                  </Card>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Pre-Tax Deductions <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(weekly $)</span></h3>
+                    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr 1fr 20px" : "1fr 1fr 1fr 24px", gap: "6px 8px", alignItems: "center" }}>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999" }}>Name</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p1Name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p2Name}</div><div />
+                      {snapPreDed.map((d, i) => [
+                        <div key={i + "n"}><EditTxt value={d.n} onChange={v => { const n = [...snapPreDed]; n[i] = { ...n[i], n: v }; updateSnapFS("preDed", n); }} /></div>,
+                        <NI key={i + "c"} value={d.c} onChange={v => { const n = [...snapPreDed]; n[i] = { ...n[i], c: v }; updateSnapFS("preDed", n); }} onBlurResolve prefix="$" style={{ height: 32 }} />,
+                        <NI key={i + "k"} value={d.k} onChange={v => { const n = [...snapPreDed]; n[i] = { ...n[i], k: v }; updateSnapFS("preDed", n); }} onBlurResolve prefix="$" style={{ height: 32 }} />,
+                        <button key={i + "x"} onClick={() => updateSnapFS("preDed", snapPreDed.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
+                      ])}
+                    </div>
+                    <button onClick={() => updateSnapFS("preDed", [...snapPreDed, { n: "New Item", c: "0", k: "0" }])} style={{ marginTop: 8, padding: "5px 14px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Row</button>
+                  </Card>
+                  <Card>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Post-Tax Deductions <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(weekly $)</span></h3>
+                    <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr 1fr 20px" : "1fr 1fr 1fr 24px", gap: "6px 8px", alignItems: "center" }}>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999" }}>Name</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p1Name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p2Name}</div><div />
+                      {snapPostDed.map((d, i) => [
+                        <div key={i + "n"}><EditTxt value={d.n} onChange={v => { const n = [...snapPostDed]; n[i] = { ...n[i], n: v }; updateSnapFS("postDed", n); }} /></div>,
+                        <NI key={i + "c"} value={d.c} onChange={v => { const n = [...snapPostDed]; n[i] = { ...n[i], c: v }; updateSnapFS("postDed", n); }} onBlurResolve prefix="$" style={{ height: 32 }} />,
+                        <NI key={i + "k"} value={d.k} onChange={v => { const n = [...snapPostDed]; n[i] = { ...n[i], k: v }; updateSnapFS("postDed", n); }} onBlurResolve prefix="$" style={{ height: 32 }} />,
+                        <button key={i + "x"} onClick={() => updateSnapFS("postDed", snapPostDed.filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
+                      ])}
+                    </div>
+                    <button onClick={() => updateSnapFS("postDed", [...snapPostDed, { n: "New Item", c: "0", k: "0" }])} style={{ marginTop: 8, padding: "5px 14px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Row</button>
+                  </Card>
+                </>;
+              })()}
+              {/* Snapshot Tax Tab */}
+              {snapTab === "tax" && (() => {
+                const fs = snap.fullState || {};
+                const snapTax = fs.tax || tax;
+                const updateSnapTax = (key, val) => {
+                  const n = [...snapshots];
+                  const s = { ...n[viewingSnap] };
+                  const newTax = { ...(s.fullState?.tax || tax), [key]: val };
+                  s.fullState = { ...(s.fullState || {}), tax: newTax };
+                  n[viewingSnap] = recalcSnap(s);
+                  setSnapshots(n);
+                };
+                const snapP1 = snapTax.p1State || {};
+                const snapP2 = snapTax.p2State || {};
+                return <>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Tax Settings</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Tax Year</label>
+                        <select value={snapTax.year || "2026"} onChange={e => { const yr = e.target.value; const rates = allTaxDB[yr]; if (rates) { const n = [...snapshots]; const s = { ...n[viewingSnap] }; s.fullState = { ...(s.fullState || {}), tax: { ...snapTax, year: yr, ...rates, p1State: snapP1, p2State: snapP2 } }; n[viewingSnap] = recalcSnap(s); setSnapshots(n); } }} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}>
+                          {Object.keys(allTaxDB).sort().map(y => <option key={y} value={y}>{y}</option>)}
+                        </select></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Filing Status</label>
+                        <select value={snap.fil || fil} onChange={e => { upSnap("fil", e.target.value); const n = [...snapshots]; const s = { ...n[viewingSnap] }; if (s.fullState) s.fullState = { ...s.fullState, fil: e.target.value }; n[viewingSnap] = recalcSnap(s); setSnapshots(n); }} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}>
+                          <option value="mfj">Married Filing Jointly</option><option value="single">Single</option>
+                        </select></div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>SS Rate %</label>
+                        <NI value={String(snapTax.ssRate)} onChange={v => updateSnapTax("ssRate", +v)} onBlurResolve style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>SS Cap</label>
+                        <NI value={String(snapTax.ssCap)} onChange={v => updateSnapTax("ssCap", +v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Medicare Rate %</label>
+                        <NI value={String(snapTax.medRate)} onChange={v => updateSnapTax("medRate", +v)} onBlurResolve style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>401k Limit</label>
+                        <NI value={String(snapTax.k401Lim)} onChange={v => updateSnapTax("k401Lim", +v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                    </div>
+                  </Card>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>State Tax Settings</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} State</label>
+                        <input list="snap-tax-states" value={snapP1.name || ""} onChange={e => { const abbr = STATE_ABBR[e.target.value]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; updateSnapTax("p1State", { ...snapP1, name: e.target.value, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) }); }} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa", boxSizing: "border-box" }} /><datalist id="snap-tax-states">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label>
+                        <input list="snap-tax-states-2" value={snapP2.name || ""} onChange={e => { const abbr = STATE_ABBR[e.target.value]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; updateSnapTax("p2State", { ...snapP2, name: e.target.value, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) }); }} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa", boxSizing: "border-box" }} /><datalist id="snap-tax-states-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Payroll %</label>
+                        <NI value={String(snapP1.famli || 0)} onChange={v => updateSnapTax("p1State", { ...snapP1, famli: +v })} onBlurResolve style={{ height: 32 }} /></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Payroll %</label>
+                        <NI value={String(snapP2.famli || 0)} onChange={v => updateSnapTax("p2State", { ...snapP2, famli: +v })} onBlurResolve style={{ height: 32 }} /></div>
+                    </div>
+                    <div style={{ marginTop: 12, fontSize: 11, color: "var(--tx3, #999)" }}>
+                      Standard deduction ({snap.fil || fil === "mfj" ? "MFJ" : "Single"}): {fmt(snapTax.stdMFJ || 0)} • Fed marginal: {fp(getMarg(Math.max(0, (snapCS + snapKS) - (snap.fil || fil === "mfj" ? snapTax.stdMFJ : snapTax.stdSingle)), snap.fil || fil === "mfj" ? snapTax.fedMFJ : snapTax.fedSingle))}
+                    </div>
+                  </Card>
+                  <Card>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Employer Match Tiers</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 8 }}>{p1Name} Match</div>
+                        <div style={{ fontSize: 11, color: "var(--tx2, #555)", marginBottom: 4 }}>Base: {snapTax.cMatchBase || 0}%</div>
+                        {(snapTax.cMatchTiers || []).map((t, i) => (
+                          <div key={i} style={{ fontSize: 11, color: "var(--tx2, #555)", marginBottom: 2 }}>Up to {t.upTo}% → {(t.rate * 100).toFixed(0)}% match</div>
+                        ))}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 8 }}>{p2Name} Match</div>
+                        <div style={{ fontSize: 11, color: "var(--tx2, #555)", marginBottom: 4 }}>Base: {snapTax.kMatchBase || 0}%</div>
+                        {(snapTax.kMatchTiers || []).map((t, i) => (
+                          <div key={i} style={{ fontSize: 11, color: "var(--tx2, #555)", marginBottom: 2 }}>Up to {t.upTo}% → {(t.rate * 100).toFixed(0)}% match</div>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 10, color: "var(--tx3, #999)" }}>Match tiers are read-only in snapshot view. Edit in Tax Rates tab and save a new snapshot.</div>
+                  </Card>
+                </>;
+              })()}
             </div>
           );
         })()}
@@ -1424,6 +1595,80 @@ export default function App() {
                 </div>
               </div>
             )}
+
+            {/* Bulk add to multiple snapshots + current */}
+            {showBulkAdd && (
+              <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowBulkAdd(false)}>
+                <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 28, maxWidth: 560, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", maxHeight: "85vh", overflowY: "auto" }}>
+                  <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Add Item to Multiple Budgets</h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Name</label>
+                      <input value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="Item name..." style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Section</label>
+                        <select value={bulkSec} onChange={e => setBulkSec(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="exp">Expense</option><option value="sav">Savings</option></select></div>
+                      {bulkSec === "exp" ? <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Type</label>
+                        <select value={bulkType} onChange={e => setBulkType(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="N">Necessity</option><option value="D">Discretionary</option></select></div> : <div />}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Category</label>
+                        <select value={bulkCat} onChange={e => setBulkCat(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}>{(bulkSec === "sav" ? savCats : cats).map(c => <option key={c}>{c}</option>)}</select></div>
+                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Period</label>
+                        <select value={bulkPer} onChange={e => setBulkPer(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="w">Weekly</option><option value="m">Monthly</option><option value="y">Yearly</option></select></div>
+                    </div>
+                    <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Amount</label>
+                      <NI value={bulkVal} onChange={setBulkVal} prefix="$" /></div>
+                    <div style={{ marginTop: 8 }}>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#999", display: "block", marginBottom: 8 }}>Apply to:</label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--bdr, #eee)" }}>
+                        <input type="checkbox" checked={!!bulkTargets.current} onChange={e => setBulkTargets(p => ({ ...p, current: e.target.checked }))} />
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>Current Budget</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 6 }}>
+                        <button onClick={() => { const t = { current: !!bulkTargets.current }; snapshots.forEach(s => { t[s.id] = true; }); setBulkTargets(t); }} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: "1px solid #556FB5", borderRadius: 4, background: "#EEF1FA", color: "#556FB5", cursor: "pointer" }}>Select All Snapshots</button>
+                        <button onClick={() => { setBulkTargets({ current: !!bulkTargets.current }); }} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr, #ddd)", borderRadius: 4, background: "transparent", color: "var(--tx3, #888)", cursor: "pointer" }}>Deselect All</button>
+                      </div>
+                      <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                        {[...snapshots].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(s => (
+                          <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--bdr, #f0f0f0)" }}>
+                            <input type="checkbox" checked={!!bulkTargets[s.id]} onChange={e => setBulkTargets(p => ({ ...p, [s.id]: e.target.checked }))} />
+                            <span style={{ fontSize: 11, color: "var(--tx3, #888)", minWidth: 70 }}>{s.date}</span>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--tx, #333)" }}>{s.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+                      <button onClick={() => setShowBulkAdd(false)} style={{ padding: "9px 18px", border: "2px solid #ddd", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
+                      <button onClick={() => {
+                        if (!bulkName.trim()) return;
+                        const name = bulkName.trim();
+                        const val = bulkVal || "0";
+                        const numVal = evalF(val);
+                        let yearly = numVal;
+                        if (bulkPer === "w") yearly = numVal * 48;
+                        else if (bulkPer === "m") yearly = numVal * 12;
+                        yearly = Math.round(yearly * 100) / 100;
+                        if (bulkTargets.current) {
+                          if (bulkSec === "exp") setExp(prev => [...prev, { n: name, c: bulkCat || cats[0], t: bulkType, v: val, p: bulkPer }]);
+                          else setSav(prev => [...prev, { n: name, c: bulkCat || savCats[0], v: val, p: bulkPer }]);
+                        }
+                        const selectedIds = Object.entries(bulkTargets).filter(([k, v]) => k !== "current" && v).map(([k]) => +k || k);
+                        if (selectedIds.length > 0) {
+                          setSnapshots(prev => prev.map(s => {
+                            if (!selectedIds.includes(s.id)) return s;
+                            const it = { ...(s.items || {}), [name]: { v: yearly, t: bulkSec === "exp" ? bulkType : "S", c: bulkCat || "" } };
+                            return recalcSnap({ ...s, items: it });
+                          }));
+                        }
+                        setShowBulkAdd(false);
+                        setBulkName(""); setBulkVal("");
+                      }} style={{ padding: "9px 18px", background: "#9B59B6", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Add to {Object.values(bulkTargets).filter(Boolean).length} budget{Object.values(bulkTargets).filter(Boolean).length !== 1 ? "s" : ""}</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1550,6 +1795,86 @@ export default function App() {
                   </ResponsiveContainer></div>
                 </Card>
               ) : null;
+            })()}
+
+            {/* Category Budget History — Stacked Area */}
+            {snapshots.length > 1 && (() => {
+              const CAT_COLORS = ["#E8573A", "#F2A93B", "#4ECDC4", "#556FB5", "#9B59B6", "#1ABC9C", "#E67E22", "#2ECC71", "#95A5A6", "#D35400", "#C0392B", "#3498DB", "#8E44AD", "#27AE60", "#F39C12", "#16A085"];
+              const allCats = new Set();
+              snapshots.forEach(s => { if (s.items) Object.values(s.items).forEach(d => { if (d.c && d.t !== "S") allCats.add(d.c); }); });
+              // Also add current budget categories
+              ewk.forEach(e => { if (e.c) allCats.add(e.c); });
+              const catList = [...allCats].sort();
+              const sorted = [...snapshots].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+              // Add current as last point
+              const currentCatTotals = {};
+              ewk.forEach(e => { currentCatTotals[e.c] = (currentCatTotals[e.c] || 0) + e.wk * 48; });
+              const allPointsWithCurrent = [...sorted, { date: "Now", label: "Current", items: null, _current: true }];
+              const catData = allPointsWithCurrent.map(s => {
+                const row = { date: s.date, label: s.label };
+                if (s._current) {
+                  catList.forEach(c => { row[c] = Math.round(currentCatTotals[c] || 0); });
+                } else {
+                  catList.forEach(c => {
+                    let total = 0;
+                    if (s.items) Object.values(s.items).forEach(d => { if (d.c === c && d.t !== "S") total += d.v || 0; });
+                    row[c] = Math.round(total);
+                  });
+                }
+                return row;
+              });
+              const catColorMap = {};
+              catList.forEach((c, i) => { catColorMap[c] = CAT_COLORS[i % CAT_COLORS.length]; });
+              const cs = { borderRadius: 10, border: "none", boxShadow: "0 4px 12px rgba(0,0,0,.1)" };
+
+              if (catChartMode === "sankey" && catData.length >= 2) {
+                // Sankey-style: show flow between two snapshots (first and last)
+                const first = catData[0], last = catData[catData.length - 1];
+                const sankeyData = catList.map(c => ({
+                  name: c, from: first[c] || 0, to: last[c] || 0,
+                  change: (last[c] || 0) - (first[c] || 0),
+                  color: catColorMap[c],
+                })).filter(d => d.from > 0 || d.to > 0).sort((a, b) => b.to - a.to);
+                const maxVal = Math.max(...sankeyData.map(d => Math.max(d.from, d.to)), 1);
+                return (
+                  <Card style={{ marginBottom: 20 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                      <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Category Budget History</h3>
+                      <button onClick={() => setCatChartMode("stacked")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: "#EEF1FA", color: "#556FB5", cursor: "pointer" }}>Stacked</button>
+                      <button onClick={() => setCatChartMode("sankey")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #E8573A", borderRadius: 6, background: "#FEF0ED", color: "#E8573A", cursor: "pointer" }}>Flow</button>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginBottom: 12 }}>
+                      Comparing: {first.label || first.date} → {last.label || last.date}
+                    </div>
+                    {sankeyData.map(d => (
+                      <div key={d.name} style={{ display: "grid", gridTemplateColumns: "120px 1fr 80px 80px", gap: 8, padding: "6px 0", alignItems: "center", borderBottom: "1px solid var(--bdr, #eee)" }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: d.color }}>{d.name}</span>
+                        <div style={{ position: "relative", height: 20, background: "var(--input-bg, #f5f5f5)", borderRadius: 4, overflow: "hidden" }}>
+                          <div style={{ position: "absolute", left: 0, top: 0, height: "50%", width: `${(d.from / maxVal * 100)}%`, background: d.color, opacity: 0.4, borderRadius: "4px 4px 0 0" }} />
+                          <div style={{ position: "absolute", left: 0, bottom: 0, height: "50%", width: `${(d.to / maxVal * 100)}%`, background: d.color, borderRadius: "0 0 4px 4px" }} />
+                        </div>
+                        <span style={{ fontSize: 11, textAlign: "right", color: "var(--tx2, #555)" }}>{fmt(d.to)}</span>
+                        <span style={{ fontSize: 11, textAlign: "right", fontWeight: 600, color: d.change > 0 ? "#E74C3C" : d.change < 0 ? "#2ECC71" : "var(--tx3, #999)" }}>{d.change > 0 ? "+" : ""}{fmt(d.change)}</span>
+                      </div>
+                    ))}
+                  </Card>
+                );
+              }
+
+              return (
+                <Card style={{ marginBottom: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+                    <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Category Budget History</h3>
+                    <button onClick={() => setCatChartMode("stacked")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: catChartMode === "stacked" ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: catChartMode === "stacked" ? "#EEF1FA" : "transparent", color: catChartMode === "stacked" ? "#556FB5" : "var(--tx3, #888)", cursor: "pointer" }}>Stacked</button>
+                    <button onClick={() => setCatChartMode("sankey")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: catChartMode === "sankey" ? "2px solid #E8573A" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: catChartMode === "sankey" ? "#FEF0ED" : "transparent", color: catChartMode === "sankey" ? "#E8573A" : "var(--tx3, #888)", cursor: "pointer" }}>Flow</button>
+                  </div>
+                  <div style={{ width: "100%", minHeight: 300 }}><ResponsiveContainer width="100%" height={300}>
+                    <AreaChart data={catData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 10 }} />
+                      {catList.map((c, i) => <Area key={c} type="monotone" dataKey={c} stackId="1" stroke={catColorMap[c]} fill={catColorMap[c]} fillOpacity={0.6} />)}
+                    </AreaChart>
+                  </ResponsiveContainer></div>
+                </Card>
+              );
             })()}
 
             {snapshots.length > 0 && (
