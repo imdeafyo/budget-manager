@@ -1210,9 +1210,9 @@ export default function App() {
                 <div style={{ marginTop: 8, fontSize: 12, color: "#aaa", textAlign: "center" }}>{p1Name}: {fmt(cNetY)}/yr • {p2Name}: {fmt(kNetY)}/yr • Tax Year: {snapYr}</div>
                 <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p1Name} Annual Salary</label>
-                    <input type="number" value={Math.round(snapCS)} onChange={e => upSnap("cSalary", +e.target.value || 0)} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
+                    <NI value={String(Math.round(snapCS))} onChange={v => upSnap("cSalary", evalF(v))} onBlurResolve prefix="$" style={{ height: 32, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.1)" }} /></div>
                   <div><label style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)" }}>{p2Name} Annual Salary</label>
-                    <input type="number" value={Math.round(snapKS)} onChange={e => upSnap("kSalary", +e.target.value || 0)} style={{ width: "100%", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, padding: "6px 8px", fontSize: 12, background: "rgba(255,255,255,0.1)", color: "#fff", boxSizing: "border-box" }} /></div>
+                    <NI value={String(Math.round(snapKS))} onChange={v => upSnap("kSalary", evalF(v))} onBlurResolve prefix="$" style={{ height: 32, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.1)" }} /></div>
                 </div>
                 <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div><label style={{ fontSize: 10, fontWeight: 700, color: "#9B59B6" }}>{p1Name} Bonus %</label>
@@ -1573,6 +1573,7 @@ export default function App() {
                         <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                           <button onClick={() => { setViewingSnap(ri); setTab("budget"); }} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
                           {s.fullState && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }}>↩</button>}
+                          {!s.fullState && s.items && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }} title="Restores items only">↩</button>}
                           <button onClick={() => setSnapshots(snapshots.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid #ddd", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
                         </div>
                       </div>
@@ -1595,7 +1596,8 @@ export default function App() {
                   <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                     <button onClick={() => setRestoreConfirm(null)} style={{ padding: "9px 20px", border: "2px solid #ddd", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
                     <button onClick={() => {
-                      const fs = snapshots[restoreConfirm]?.fullState;
+                      const snap = snapshots[restoreConfirm];
+                      const fs = snap?.fullState;
                       if (fs) {
                         if (fs.cSal !== undefined) setCS(fs.cSal); if (fs.kSal !== undefined) setKS(fs.kSal);
                         if (fs.fil) setFil(fs.fil); if (fs.cEaip !== undefined) setCE(fs.cEaip); if (fs.kEaip !== undefined) setKE(fs.kEaip);
@@ -1605,6 +1607,17 @@ export default function App() {
                         if (fs.cHsaAnn !== undefined) setCHsaAnn(fs.cHsaAnn); if (fs.kHsaAnn !== undefined) setKHsaAnn(fs.kHsaAnn);
                         if (fs.exp) setExp(fs.exp); if (fs.sav) setSav(fs.sav);
                         if (fs.cats) setCats(fs.cats); if (fs.tax) setTax(fs.tax);
+                      } else if (snap?.items) {
+                        // Rebuild exp/sav from snapshot items
+                        const newExp = []; const newSav = []; const newCats = new Set(cats);
+                        Object.entries(snap.items).forEach(([name, data]) => {
+                          if (data.c) newCats.add(data.c);
+                          if (data.t === "S") { newSav.push({ n: name, v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m", c: data.c || "Other" }); }
+                          else { newExp.push({ n: name, c: data.c || "General", t: data.t || "N", v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m" }); }
+                        });
+                        setExp(newExp); setSav(newSav); setCats([...newCats]);
+                        if (snap.cSalary) setCS(String(snap.cSalary));
+                        if (snap.kSalary) setKS(String(snap.kSalary));
                       }
                       setRestoreConfirm(null); setTab("budget");
                     }} style={{ padding: "9px 20px", background: "#E8573A", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Restore</button>
