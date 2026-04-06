@@ -664,6 +664,14 @@ export default function App() {
     };
   }, [tax, fil, allTaxDB]);
 
+  // Recalculate all snapshot aggregate fields on load to ensure consistency
+  const [snapsRecalced, setSnapsRecalced] = useState(false);
+  useEffect(() => {
+    if (!loaded || snapsRecalced || snapshots.length === 0) return;
+    setSnapsRecalced(true);
+    setSnapshots(prev => prev.map(s => recalcSnap(s)));
+  }, [loaded, recalcSnap, snapshots.length, snapsRecalced]);
+
   const BrEd = ({ brackets, onChange }) => (
     <div style={{  }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 20px", gap: 3, fontSize: 10, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>From</span><span>To</span><span>Rate</span><span /></div>
