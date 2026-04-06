@@ -591,7 +591,7 @@ export default function App() {
   const rmExp = useCallback(idx => { setExp(prev => prev.filter((_, j) => j !== idx)); }, []);
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
-  // recalcSnap — recalculates all aggregate snapshot fields from items + salaries
+  // recalcSnap — recalculates all aggregate snapshot fields from items + salaries + deductions
   const recalcSnap = useCallback((snapObj) => {
     const it = snapObj.items || {};
     let nec = 0, dis = 0, sv = 0;
@@ -604,20 +604,39 @@ export default function App() {
     const sP1 = snapObj.p1State || (tax.p1State || {});
     const sP2 = snapObj.p2State || (tax.p2State || {});
     const sw1 = sCS / 52, sw2 = sKS / 52;
+    // Pre-tax deductions from fullState
+    const fs = snapObj.fullState || {};
+    const snapPreDed = fs.preDed || [];
+    const snapPostDed = fs.postDed || [];
+    const cPreW = snapPreDed.reduce((s, d) => s + evalF(d.c), 0);
+    const kPreW = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
+    // 401k from fullState
+    const c4prePct = Math.min(evalF(fs.c4pre || 0) / 100, 1);
+    const c4roPct = Math.min(evalF(fs.c4ro || 0) / 100, 1);
+    const k4prePct = Math.min(evalF(fs.k4pre || 0) / 100, 1);
+    const k4roPct = Math.min(evalF(fs.k4ro || 0) / 100, 1);
+    const c4preW = sCS * c4prePct / 52, c4roW = sCS * c4roPct / 52;
+    const k4preW = sKS * k4prePct / 52, k4roW = sKS * k4roPct / 52;
+    // Taxable = gross - pre-tax deductions - pre-tax 401k
+    const cTxW = sw1 - cPreW - c4preW, kTxW = sw2 - kPreW - k4preW;
     const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
     const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
-    const sCTA = (sw1 + sw2) * 52;
-    const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, sCS - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, sKS - sTD.stdSingle), sTD.fedSingle);
+    const sCTA = (cTxW + kTxW) * 52;
+    const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, cTxW * 52 - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, kTxW * 52 - sTD.stdSingle), sTD.fedSingle);
     const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
-    const sT = sw1 + sw2, sC = sT > 0 ? sw1 / sT : 0.5;
+    const sT = cTxW + kTxW, sC = sT > 0 ? cTxW / sT : 0.5;
     const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
     const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
     const mc1 = sw1 * mR, mc2 = sw2 * mR;
-    const st1 = calcStateTax(sw1 * 52, sP1.abbr || "", sF) / 52;
-    const st2 = calcStateTax(sw2 * 52, sP2.abbr || "", sF) / 52;
+    const st1 = calcStateTax(cTxW * 52, sP1.abbr || "", sF) / 52;
+    const st2 = calcStateTax(kTxW * 52, sP2.abbr || "", sF) / 52;
     const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
-    const n1 = sw1 - f1 - ss1 - mc1 - st1 - fl1;
-    const n2 = sw2 - f2 - ss2 - mc2 - st2 - fl2;
+    // Post-tax deductions
+    const cPostW = c4roW + snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
+    const kPostW = k4roW + snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
+    // Net = gross - preTax - 401k(all) - taxes - postTax deductions
+    const n1 = sw1 - cPreW - c4preW - c4roW - f1 - ss1 - mc1 - st1 - fl1 - snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
+    const n2 = sw2 - kPreW - k4preW - k4roW - f2 - ss2 - mc2 - st2 - fl2 - snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
     const nW = n1 + n2;
     const gW = sw1 + sw2;
     const eW = (nec + dis) / 48;
@@ -628,8 +647,8 @@ export default function App() {
     const cBonusGross = sCS * cBonusPct / 100;
     const kBonusGross = sKS * kBonusPct / 100;
     const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
-    const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(sw1 * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(sw1 * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
-    const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(sw2 * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(sw2 * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
+    const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(cTxW * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(cTxW * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
+    const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(kTxW * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(kTxW * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
     const cBonusNet = cBonusGross - cBonusTax;
     const kBonusNet = kBonusGross - kBonusTax;
     const totalSavPlusRem = sW + Math.max(0, rW);
@@ -717,7 +736,15 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
   useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
-  useEffect(() => { window.scrollTo(0, 0); setSnapTab("budget"); }, [tab, viewingSnap]);
+  useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingSnap]);
+  // Only reset snapTab when entering/leaving snapshot view, not when paging between snapshots
+  const prevViewingSnap = useRef(viewingSnap);
+  useEffect(() => {
+    const wasNull = prevViewingSnap.current === null;
+    const isNull = viewingSnap === null;
+    if (wasNull !== isNull) setSnapTab("budget");
+    prevViewingSnap.current = viewingSnap;
+  }, [viewingSnap]);
   const cycleTheme = () => setDarkMode(p => p === "light" || p === false ? "dark" : p === "dark" || p === true ? "waf" : "light");
   const bg = dk ? "#1e1e1e" : waf ? "#d5d0cb" : "linear-gradient(145deg,#f5f0eb 0%,#ede7e0 50%,#e8e2db 100%)";
   const headerBg = dk ? "#1a1a1a" : waf ? "#486b50" : "#1a1a1a";
@@ -1111,31 +1138,42 @@ export default function App() {
           const savT = savItems.reduce((s, [, d]) => s + (d.v || 0), 0);
           const expT = necT + disT;
 
-          // Salary-based tax calc for snapshot — use snapshot's grossW*52 as salaries if no explicit salary stored
+          // Salary-based tax calc for snapshot — includes deductions from fullState
           const snapCS = snap.cSalary !== undefined ? snap.cSalary : (snap.cGrossW || 0) * 52;
           const snapKS = snap.kSalary !== undefined ? snap.kSalary : (snap.kGrossW || 0) * 52;
-          // Look up tax year from snapshot date
           const snapYr = snap.date ? snap.date.slice(0, 4) : tax.year;
           const snapTaxData = allTaxDB[snapYr] || allTaxDB[tax.year] || TAX_DB["2026"];
           const snapFil = snap.fil || fil;
           const snapP1s = snap.p1State || (tax.p1State || {});
           const snapP2s = snap.p2State || (tax.p2State || {});
-          // Calc net from salaries (simplified — no 401k/deductions, just tax)
           const scw = snapCS / 52, skw = snapKS / 52;
+          // Deductions from fullState
+          const sFS = snap.fullState || {};
+          const sPreDed = sFS.preDed || [];
+          const sPostDed = sFS.postDed || [];
+          const scPreW = sPreDed.reduce((s, d) => s + evalF(d.c), 0);
+          const skPreW = sPreDed.reduce((s, d) => s + evalF(d.k), 0);
+          const sc4preW = snapCS * Math.min(evalF(sFS.c4pre || 0) / 100, 1) / 52;
+          const sc4roW = snapCS * Math.min(evalF(sFS.c4ro || 0) / 100, 1) / 52;
+          const sk4preW = snapKS * Math.min(evalF(sFS.k4pre || 0) / 100, 1) / 52;
+          const sk4roW = snapKS * Math.min(evalF(sFS.k4ro || 0) / 100, 1) / 52;
+          const scTxW = scw - scPreW - sc4preW, skTxW = skw - skPreW - sk4preW;
           const sBr = snapFil === "mfj" ? snapTaxData.fedMFJ : snapTaxData.fedSingle;
           const sSd = snapFil === "mfj" ? snapTaxData.stdMFJ : snapTaxData.stdSingle;
-          const sCombTxA = (scw + skw) * 52;
-          const sFedTax = snapFil === "mfj" ? calcFed(Math.max(0, sCombTxA - sSd), sBr) : calcFed(Math.max(0, snapCS - snapTaxData.stdSingle), snapTaxData.fedSingle) + calcFed(Math.max(0, snapKS - snapTaxData.stdSingle), snapTaxData.fedSingle);
+          const sCombTxA = (scTxW + skTxW) * 52;
+          const sFedTax = snapFil === "mfj" ? calcFed(Math.max(0, sCombTxA - sSd), sBr) : calcFed(Math.max(0, scTxW * 52 - snapTaxData.stdSingle), snapTaxData.fedSingle) + calcFed(Math.max(0, skTxW * 52 - snapTaxData.stdSingle), snapTaxData.fedSingle);
           const sSsR = snapTaxData.ssRate / 100, sMedR = snapTaxData.medRate / 100;
-          const sTot = scw + skw, sCr = sTot > 0 ? scw / sTot : 0.5;
+          const sTot = scTxW + skTxW, sCr = sTot > 0 ? scTxW / sTot : 0.5;
           const scFed = (sFedTax / 52) * sCr, skFed = (sFedTax / 52) * (1 - sCr);
           const scSS = Math.min(scw, snapTaxData.ssCap / 52) * sSsR, skSS = Math.min(skw, snapTaxData.ssCap / 52) * sSsR;
           const scMc = scw * sMedR, skMc = skw * sMedR;
-          const scSt = calcStateTax(scw * 52, snapP1s.abbr || "", snapFil) / 52;
-          const skSt = calcStateTax(skw * 52, snapP2s.abbr || "", snapFil) / 52;
+          const scSt = calcStateTax(scTxW * 52, snapP1s.abbr || "", snapFil) / 52;
+          const skSt = calcStateTax(skTxW * 52, snapP2s.abbr || "", snapFil) / 52;
           const scFL = scw * (snapP1s.famli || 0) / 100, skFL = skw * (snapP2s.famli || 0) / 100;
-          const scNet = scw - scFed - scSS - scMc - scSt - scFL;
-          const skNet = skw - skFed - skSS - skMc - skSt - skFL;
+          const scPostW = sPostDed.reduce((s, d) => s + evalF(d.c), 0);
+          const skPostW = sPostDed.reduce((s, d) => s + evalF(d.k), 0);
+          const scNet = scw - scPreW - sc4preW - sc4roW - scFed - scSS - scMc - scSt - scFL - scPostW;
+          const skNet = skw - skPreW - sk4preW - sk4roW - skFed - skSS - skMc - skSt - skFL - skPostW;
           const snapNetW = scNet + skNet;
           const netY = snapNetW * 48;
           const remY = netY - expT - savT;
@@ -1298,27 +1336,50 @@ export default function App() {
                 const snapK4ro = fs.k4ro !== undefined ? fs.k4ro : "0";
                 const snapCHsa = fs.cHsaAnn !== undefined ? fs.cHsaAnn : "0";
                 const snapKHsa = fs.kHsaAnn !== undefined ? fs.kHsaAnn : "0";
+                // Calculate dollar amounts from percentages
+                const c4preAnn = snapCS * evalF(snapC4pre) / 100;
+                const c4roAnn = snapCS * evalF(snapC4ro) / 100;
+                const k4preAnn = snapKS * evalF(snapK4pre) / 100;
+                const k4roAnn = snapKS * evalF(snapK4ro) / 100;
+                const cPreTotal = snapPreDed.reduce((s, d) => s + evalF(d.c), 0);
+                const kPreTotal = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
+                const cPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
+                const kPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
+                const cTotalDed = cPreTotal * 52 + c4preAnn + c4roAnn + cPostTotal * 52 + evalF(snapCHsa);
+                const kTotalDed = kPreTotal * 52 + k4preAnn + k4roAnn + kPostTotal * 52 + evalF(snapKHsa);
                 return <>
                   <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Pre-Tax %</label>
-                        <NI value={String(snapC4pre)} onChange={v => updateSnapFS("c4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Roth %</label>
-                        <NI value={String(snapC4ro)} onChange={v => updateSnapFS("c4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Pre-Tax %</label>
-                        <NI value={String(snapK4pre)} onChange={v => updateSnapFS("k4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Roth %</label>
-                        <NI value={String(snapK4ro)} onChange={v => updateSnapFS("k4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} /></div>
+                    <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr", gap: 8, alignItems: "center" }}>
+                      <div />
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p1Name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p2Name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Pre-Tax %</div>
+                      <NI value={String(snapC4pre)} onChange={v => updateSnapFS("c4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} />
+                      <NI value={String(snapK4pre)} onChange={v => updateSnapFS("k4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} />
+                      <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>Pre-Tax $/yr</div>
+                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-presav, #1ABC9C)", fontWeight: 600, padding: "4px 8px" }}>{fmt(c4preAnn)}</div>
+                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-presav, #1ABC9C)", fontWeight: 600, padding: "4px 8px" }}>{fmt(k4preAnn)}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Roth %</div>
+                      <NI value={String(snapC4ro)} onChange={v => updateSnapFS("c4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
+                      <NI value={String(snapK4ro)} onChange={v => updateSnapFS("k4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
+                      <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>Roth $/yr</div>
+                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-posttax, #9B59B6)", fontWeight: 600, padding: "4px 8px" }}>{fmt(c4roAnn)}</div>
+                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-posttax, #9B59B6)", fontWeight: 600, padding: "4px 8px" }}>{fmt(k4roAnn)}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>Total 401k/yr</div>
+                      <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(c4preAnn + c4roAnn)}</div>
+                      <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(k4preAnn + k4roAnn)}</div>
                     </div>
                   </Card>
                   <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>HSA Annual Contributions</h3>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                       <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Annual HSA</label>
-                        <NI value={String(snapCHsa)} onChange={v => updateSnapFS("cHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                        <NI value={String(snapCHsa)} onChange={v => updateSnapFS("cHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
+                        <div style={{ fontSize: 10, color: "var(--tx3, #999)", marginTop: 2 }}>{fmt(evalF(snapCHsa) / 52)}/wk</div></div>
                       <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Annual HSA</label>
-                        <NI value={String(snapKHsa)} onChange={v => updateSnapFS("kHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} /></div>
+                        <NI value={String(snapKHsa)} onChange={v => updateSnapFS("kHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
+                        <div style={{ fontSize: 10, color: "var(--tx3, #999)", marginTop: 2 }}>{fmt(evalF(snapKHsa) / 52)}/wk</div></div>
                     </div>
                   </Card>
                   <Card style={{ marginBottom: 20 }}>
@@ -1350,6 +1411,31 @@ export default function App() {
                       ])}
                     </div>
                     <button onClick={() => updateSnapFS("postDed", [...snapPostDed, { n: "New Item", c: "0", k: "0" }])} style={{ marginTop: 8, padding: "5px 14px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Row</button>
+                  </Card>
+                  <Card dark style={{ marginTop: 20 }}>
+                    <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Deductions Summary (Annual)</h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, fontSize: 11 }}>
+                      <div style={{ fontWeight: 700, color: "#888" }}>Category</div>
+                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>{p1Name}</div>
+                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>{p2Name}</div>
+                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>Total</div>
+                      {[
+                        ["401k Pre-Tax", c4preAnn, k4preAnn, "#1ABC9C"],
+                        ["401k Roth", c4roAnn, k4roAnn, "#9B59B6"],
+                        ["HSA", evalF(snapCHsa), evalF(snapKHsa), "#1ABC9C"],
+                        ["Pre-Tax Deductions", cPreTotal * 52, kPreTotal * 52, "#c0392b"],
+                        ["Post-Tax Deductions", cPostTotal * 52, kPostTotal * 52, "#9B59B6"],
+                      ].map(([label, v1, v2, color]) => [
+                        <div key={label + "l"} style={{ color, padding: "3px 0" }}>{label}</div>,
+                        <div key={label + "1"} style={{ textAlign: "right", color: "#ccc", padding: "3px 0" }}>{fmt(v1)}</div>,
+                        <div key={label + "2"} style={{ textAlign: "right", color: "#ccc", padding: "3px 0" }}>{fmt(v2)}</div>,
+                        <div key={label + "t"} style={{ textAlign: "right", color: "#fff", fontWeight: 600, padding: "3px 0" }}>{fmt(v1 + v2)}</div>,
+                      ])}
+                      <div style={{ fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>Total Deductions</div>
+                      <div style={{ textAlign: "right", fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(cTotalDed)}</div>
+                      <div style={{ textAlign: "right", fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(kTotalDed)}</div>
+                      <div style={{ textAlign: "right", fontWeight: 700, color: "#4ECDC4", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(cTotalDed + kTotalDed)}</div>
+                    </div>
                   </Card>
                 </>;
               })()}
