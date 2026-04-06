@@ -650,6 +650,7 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
   useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
+  useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingSnap]);
   const cycleTheme = () => setDarkMode(p => p === "light" || p === false ? "dark" : p === "dark" || p === true ? "waf" : "light");
   const bg = dk ? "#1e1e1e" : waf ? "#d5d0cb" : "linear-gradient(145deg,#f5f0eb 0%,#ede7e0 50%,#e8e2db 100%)";
   const headerBg = dk ? "#1a1a1a" : waf ? "#486b50" : "#1a1a1a";
@@ -1179,6 +1180,11 @@ export default function App() {
               </div>
             );
           };
+          // Build sorted snapshot indices for paging
+          const sortedSnapIdx = snapshots.map((s, i) => ({ i, date: s.date || "" })).sort((a, b) => a.date.localeCompare(b.date));
+          const curPosInSorted = sortedSnapIdx.findIndex(x => x.i === viewingSnap);
+          const prevSnapIdx = curPosInSorted > 0 ? sortedSnapIdx[curPosInSorted - 1].i : null;
+          const nextSnapIdx = curPosInSorted < sortedSnapIdx.length - 1 ? sortedSnapIdx[curPosInSorted + 1].i : null;
           return (
             <div>
               <div style={{ background: "#556FB5", color: "#fff", padding: "12px 20px", borderRadius: 12, marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -1187,7 +1193,10 @@ export default function App() {
                   <input type="date" value={snap.date || ""} onChange={e => upSnap("date", e.target.value)} style={{ border: "none", borderBottom: "2px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 13, fontFamily: "'DM Sans',sans-serif", padding: "2px 4px", outline: "none" }} />
                   <input value={snap.label || ""} onChange={e => upSnap("label", e.target.value)} style={{ border: "none", borderBottom: "2px solid rgba(255,255,255,0.4)", background: "transparent", color: "#fff", fontSize: 13, fontFamily: "'DM Sans',sans-serif", padding: "2px 4px", outline: "none", flex: 1, minWidth: 120 }} />
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button disabled={prevSnapIdx === null} onClick={() => prevSnapIdx !== null && setViewingSnap(prevSnapIdx)} style={{ padding: "6px 10px", background: prevSnapIdx !== null ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.05)", color: prevSnapIdx !== null ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 700, cursor: prevSnapIdx !== null ? "pointer" : "default" }}>◀</button>
+                  <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", minWidth: 40, textAlign: "center" }}>{curPosInSorted + 1}/{sortedSnapIdx.length}</span>
+                  <button disabled={nextSnapIdx === null} onClick={() => nextSnapIdx !== null && setViewingSnap(nextSnapIdx)} style={{ padding: "6px 10px", background: nextSnapIdx !== null ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.05)", color: nextSnapIdx !== null ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 700, cursor: nextSnapIdx !== null ? "pointer" : "default" }}>▶</button>
                   <button onClick={() => setRestoreConfirm(viewingSnap)} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore This</button>
                   <button onClick={() => setViewingSnap(null)} style={{ padding: "6px 14px", background: "#fff", color: "#556FB5", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>← Back to Current</button>
                 </div>
@@ -1446,7 +1455,7 @@ export default function App() {
                   }]);
                   setSnapLabel(""); setSnapDate("");
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
-                <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import Snapshots<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const incoming = d.snapshots || d; if (!Array.isArray(incoming)) { alert("JSON must contain a \"snapshots\" array"); return; } const existingIds = new Set(snapshots.map(s => s.id)); const newSnaps = incoming.filter(s => !existingIds.has(s.id)); setSnapshots(prev => [...prev, ...newSnaps].sort((a, b) => (a.date || "").localeCompare(b.date || ""))); alert(`Imported ${newSnaps.length} new snapshot${newSnaps.length !== 1 ? "s" : ""} (${incoming.length - newSnaps.length} duplicates skipped)`); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
+                <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import Snapshots<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const incoming = d.snapshots || d; if (!Array.isArray(incoming)) { alert("JSON must contain a \"snapshots\" array"); return; } setSnapshots(prev => { const byId = new Map(prev.map(s => [s.id, s])); let updated = 0, added = 0; for (const s of incoming) { if (byId.has(s.id)) { byId.set(s.id, { ...byId.get(s.id), ...s }); updated++; } else { byId.set(s.id, s); added++; } } setTimeout(() => alert(`Imported: ${added} new, ${updated} updated`), 100); return Array.from(byId.values()).sort((a, b) => (a.date || "").localeCompare(b.date || "")); }); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
               </div>
             </Card>
 
