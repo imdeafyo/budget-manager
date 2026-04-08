@@ -443,11 +443,18 @@ export default function App() {
   const [bulkSec, setBulkSec] = useState("exp");
   const [bulkCat, setBulkCat] = useState("");
   const [bulkTargets, setBulkTargets] = useState({}); // { current: true, snapId1: true, ... }
-  const [catChartMode, setCatChartMode] = useState("stacked"); // "stacked" | "sankey"
+  const [catChartMode, setCatChartMode] = useState("stacked"); // "stacked" (only mode now)
   const [catHistoryName, setCatHistoryName] = useState(""); // selected category for history chart
+  const [catHistMode, setCatHistMode] = useState("line"); // "line" | "stacked" for Budget History chart style
+  const [itemHistMode, setItemHistMode] = useState("category"); // "category" | "item" for Budget History view toggle
+  const [necDisMode, setNecDisMode] = useState("line"); // "line" | "stacked" for Nec vs Dis
   const [snapHistView, setSnapHistView] = useState("years"); // "years" | "all"
   const [snapHistYear, setSnapHistYear] = useState(null); // which year tab is selected
   const [savRateBase, setSavRateBase] = useState("net"); // "net" or "gross"
+  const [snapVisCols, setSnapVisCols] = useState(() => { try { const v = localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } }); // snapshot column toggle
+  const DEF_CHART_ORDER = ["budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "budgetHistory"];
+  const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
+  const [dragChart, setDragChart] = useState(null);
   const [collapsed, setCollapsed] = useState({});
   const toggleSec = s => setCollapsed(p => ({ ...p, [s]: !p[s] }));
   const allExpanded = !collapsed.nec && !collapsed.dis && !collapsed.sav && !collapsed.preTax && !collapsed.postTax && !collapsed.fedTax && !collapsed.stTax && !collapsed.preSav && !collapsed.eaip && !collapsed.eaipTax;
@@ -457,43 +464,6 @@ export default function App() {
   const collapseAll = () => setCollapsed({ nec: true, dis: true, sav: true, preTax: true, postTax: true, fedTax: true, stTax: true, preSav: true, eaip: true, eaipTax: true });
   const toggleAll = () => { if (allExpanded) collapseAll(); else expandAll(); };
   const [includeEaip, setIncludeEaip] = useState(false);
-  const [hiddenCharts, setHiddenCharts] = useState(() => { try { const v = localStorage.getItem("budget-hidden-charts"); return v ? JSON.parse(v) : {}; } catch { return {}; } });
-  const DEFAULT_CHART_ORDER = ["pies", "trendCharts", "catHistory", "itemHistory", "catBudgetHistory", "snapHistory"];
-  const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); if (v) { const parsed = JSON.parse(v); const defaults = DEFAULT_CHART_ORDER.filter(k => !parsed.includes(k)); return [...parsed, ...defaults]; } return DEFAULT_CHART_ORDER; } catch { return DEFAULT_CHART_ORDER; } });
-  const [pieOrder, setPieOrder] = useState(() => { try { const v = localStorage.getItem("budget-pie-order"); return v ? JSON.parse(v) : ["catPie", "typPie"]; } catch { return ["catPie", "typPie"]; } });
-  const [budgetHistPeriod, setBudgetHistPeriod] = useState("yearly"); // "yearly" | "monthly"
-  useEffect(() => { try { localStorage.setItem("budget-hidden-charts", JSON.stringify(hiddenCharts)); } catch {} }, [hiddenCharts]);
-  useEffect(() => { try { localStorage.setItem("budget-pie-order", JSON.stringify(pieOrder)); } catch {} }, [pieOrder]);
-  useEffect(() => { try { localStorage.setItem("budget-chart-order", JSON.stringify(chartOrder)); } catch {} }, [chartOrder]);
-  const toggleChart = k => setHiddenCharts(p => ({ ...p, [k]: !p[k] }));
-  const dragRef = useRef({ dragging: null, over: null });
-  const [dragId, setDragId] = useState(null);
-  const ChartWrap = ({ id, title, children, style }) => (
-    <div style={style}>
-      <div onClick={() => toggleChart(id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none", marginBottom: hiddenCharts[id] ? 0 : 12 }}>
-        <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>{title}</h3>
-        <span style={{ fontSize: 14, color: "var(--tx3,#999)", padding: "2px 8px" }}>{hiddenCharts[id] ? "▸" : "▾"}</span>
-      </div>
-      {!hiddenCharts[id] && children}
-    </div>
-  );
-  const SECTION_LABELS = { pies: "Pie Charts", trendCharts: "Budget History Trends", catHistory: "Category History", itemHistory: "Item History", catBudgetHistory: "Category Budget (Stacked/Flow)", snapHistory: "Snapshot History" };
-  const SectionWrap = ({ id, children }) => {
-    if (!children) return null;
-    return (
-      <div
-        draggable
-        onDragStart={e => { dragRef.current.dragging = id; setDragId(id); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", id); }}
-        onDragEnd={() => { dragRef.current.dragging = null; dragRef.current.over = null; setDragId(null); }}
-        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; dragRef.current.over = id; }}
-        onDrop={e => { e.preventDefault(); const from = dragRef.current.dragging; const to = id; if (from && to && from !== to) { setChartOrder(prev => { const n = [...prev]; const fi = n.indexOf(from), ti = n.indexOf(to); if (fi < 0 || ti < 0) return prev; n.splice(fi, 1); n.splice(ti, 0, from); return n; }); } dragRef.current.dragging = null; dragRef.current.over = null; setDragId(null); }}
-        style={{ position: "relative", opacity: dragId === id ? 0.5 : 1, transition: "opacity 0.15s" }}
-      >
-        <div style={{ position: "absolute", top: 8, left: -4, cursor: "grab", padding: "4px 6px", fontSize: 14, color: "var(--tx3,#aaa)", zIndex: 5, userSelect: "none", touchAction: "none" }} title={`Drag to reorder: ${SECTION_LABELS[id] || id}`}>⠿</div>
-        {children}
-      </div>
-    );
-  };
 
   // Load
   useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cHsaAnn:setCHsaAnn,kHsaAnn:setKHsaAnn,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
@@ -612,15 +582,14 @@ export default function App() {
     let n = 0, d = 0, s = 0;
     ewk.forEach(e => { e.t === "N" ? n += e.wk * 48 : d += e.wk * 48; });
     savSorted.forEach(e => s += e.wk * 48);
+    s += Math.max(0, remW) * 48; // add remaining to savings
     if (includeEaip) s += C.eaipNet; // add Bonus to savings
     const base = savRateBase === "gross" ? (C.cw + C.kw) * 48 + (includeEaip ? C.eaipGross : 0) : C.net * 48 + (includeEaip ? C.eaipNet : 0);
-    const unbudgeted = Math.max(0, base - n - d - s);
-    const vals = [n, d, s, unbudgeted];
+    const vals = [n, d, s, Math.max(0, base - n - d - s)];
     return [
-      { name: "Necessity", value: Math.round(n), _allValues: vals, _base: base, color: "#556FB5" },
-      { name: "Discretionary", value: Math.round(d), _allValues: vals, _base: base, color: "#E8573A" },
-      { name: "Savings" + (includeEaip ? " + Bonus" : ""), value: Math.round(s), _allValues: vals, _base: base, color: "#2ECC71" },
-      { name: "Unbudgeted", value: Math.round(unbudgeted), _allValues: vals, _base: base, color: "#95A5A6" },
+      { name: "Necessity", value: Math.round(n), _allValues: vals, color: "#556FB5" },
+      { name: "Discretionary", value: Math.round(d), _allValues: vals, color: "#E8573A" },
+      { name: "Savings" + (includeEaip ? " + Bonus" : ""), value: Math.round(s), _allValues: vals, color: "#2ECC71" },
     ].filter(x => x.value > 0);
   }, [ewk, savSorted, savRateBase, C, includeEaip, remW]);
 
@@ -782,6 +751,8 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
   useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
+  useEffect(() => { try { localStorage.setItem("budget-snap-cols", JSON.stringify(snapVisCols)); } catch {} }, [snapVisCols]);
+  useEffect(() => { try { localStorage.setItem("budget-chart-order", JSON.stringify(chartOrder)); } catch {} }, [chartOrder]);
   useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingSnap]);
   // Only reset snapTab when entering/leaving snapshot view, not when paging between snapshots
   const prevViewingSnap = useRef(viewingSnap);
@@ -1258,8 +1229,11 @@ export default function App() {
               upSnapItem(name, "v", Math.round(yearly * 100) / 100);
               setEditPer(null);
             };
+            const svc = snapVisCols;
+            const snapItemCols = ["50px", "1.6fr", "90px", svc.wk && "1fr", svc.mo && "1fr", svc.y48 && "1fr", svc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
+            const periods = [svc.wk && "w", svc.mo && "m", svc.y48 && "y"].filter(Boolean);
             return (
-              <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 1fr 1fr 1fr 1fr 20px", gap: 4, padding: "3px 0", alignItems: "center", fontSize: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: snapItemCols, gap: 4, padding: "3px 0", alignItems: "center", fontSize: 12 }}>
                 <select value={data.t || "N"} onChange={e => upSnapItem(name, "t", e.target.value)} style={{ fontSize: 9, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: "3px 4px", background: data.t === "N" ? "#556FB5" : data.t === "D" ? "#E8573A" : "#2ECC71", cursor: "pointer" }}>
                   <option value="N">NEC</option><option value="D">DIS</option><option value="S">SAV</option>
                 </select>
@@ -1268,13 +1242,13 @@ export default function App() {
                   <option value="">—</option>
                   {allCats.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
-                {["w", "m", "y"].map(per => {
+                {periods.map(per => {
                   if (editPer === per) {
                     return <div key={per}><NI value={String(Math.round(valFor(per) * 100) / 100)} onChange={(v) => saveEditVal(v, per)} autoFocus onBlurResolve prefix="$" style={{ height: 28 }} /></div>;
                   }
                   return <div key={per} onClick={() => setEditPer(per)} style={{ textAlign: "right", color: "var(--tx2,#555)", cursor: "text", padding: "4px 2px", borderRadius: 4, fontSize: 11 }}>{fmt(valFor(per))}</div>;
                 })}
-                <div style={{ textAlign: "right", color: "var(--tx3,#888)", fontSize: 11 }}>{fmt(yr)}</div>
+                {svc.y52 && <div style={{ textAlign: "right", color: "var(--tx3,#888)", fontSize: 11 }}>{fmt(yr)}</div>}
                 <button onClick={() => rmSnapItem(name)} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "var(--tx3,#ccc)", padding: 0 }}>×</button>
               </div>
             );
@@ -1308,6 +1282,7 @@ export default function App() {
                 ))}
               </div>
               {snapTab === "budget" && <>
+              <VisColsCtx.Provider value={{ wk: snapVisCols.wk, mo: snapVisCols.mo, y48: snapVisCols.y48, y52: snapVisCols.y52 }}>
               <Card dark style={{ marginBottom: 20 }}>
                 <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 12, textAlign: "center" }}>
                   {[["Net Income (yr)", fmt(netY), "#4ECDC4"], ["Necessity (yr)", fmt(necT), "#556FB5"], ["Discretionary (yr)", fmt(disT), "#E8573A"], ["Savings (yr)", fmt(savT), "#2ECC71"], ["Remaining (yr)", fmt(remY), remY >= 0 ? "#2ECC71" : "#E74C3C"]].map(([l, v, c]) => (
@@ -1343,8 +1318,18 @@ export default function App() {
                 <div style={{ marginTop: 6, fontSize: 10, color: "#777", textAlign: "center" }}>Taxes auto-calculated from {snapYr} rates • Combined gross: {fmt(snapCS + snapKS)}/yr</div>
               </Card>
               <Card>
-                <div style={{ display: "grid", gridTemplateColumns: "50px 1.6fr 90px 1fr 1fr 1fr 1fr 20px", gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
-                  <span>Type</span><span>Name</span><span>Category</span><span style={{ textAlign: "right" }}>Weekly</span><span style={{ textAlign: "right" }}>Monthly</span><span style={{ textAlign: "right" }}>Yearly (48)</span><span style={{ textAlign: "right" }}>Yearly (52)</span><span />
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#999" }}>Columns:</span>
+                  {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y×48"], ["y52", "Y×52"]].map(([k, l]) => (
+                    <button key={k} onClick={() => setSnapVisCols(p => ({ ...p, [k]: !p[k] }))} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: snapVisCols[k] ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 5, background: snapVisCols[k] ? "#EEF1FA" : "transparent", color: snapVisCols[k] ? "#556FB5" : "var(--tx3, #888)", cursor: "pointer" }}>{l}</button>
+                  ))}
+                </div>
+                {(() => {
+                  const svc = snapVisCols;
+                  const snapCols = ["50px", "1.6fr", "90px", svc.wk && "1fr", svc.mo && "1fr", svc.y48 && "1fr", svc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
+                  return <>
+                <div style={{ display: "grid", gridTemplateColumns: snapCols, gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
+                  <span>Type</span><span>Name</span><span>Category</span>{svc.wk && <span style={{ textAlign: "right" }}>Weekly</span>}{svc.mo && <span style={{ textAlign: "right" }}>Monthly</span>}{svc.y48 && <span style={{ textAlign: "right" }}>Yearly (48)</span>}{svc.y52 && <span style={{ textAlign: "right" }}>Yearly (52)</span>}<span />
                 </div>
                 {necItems.length > 0 && <SH color="var(--c-taxable, #556FB5)">Necessity</SH>}
                 {necItems.map(([name, data]) => <SnapItemRow key={name} name={name} data={data} />)}
@@ -1362,7 +1347,9 @@ export default function App() {
                 <div style={{ marginTop: 8, padding: "10px 8px", background: remY >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
                   <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY * 52 / 48} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
                 </div>
+              </>; })()}
               </Card>
+              </VisColsCtx.Provider>
               </>}
               {/* Snapshot Deductions Tab */}
               {snapTab === "deductions" && (() => {
@@ -1904,82 +1891,158 @@ export default function App() {
               </button>
             </div>
 
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
+              <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>By Category <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>(% of {savRateBase} income)</span></h3>
+                <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={catTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={2} dataKey="value" stroke="none">{catTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
+              </Card>
+              <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(% of {savRateBase} income)</span></h3>
+                <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={typTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={3} dataKey="value" stroke="none">{typTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
+              </Card>
+            </div>
 
-            {/* ── Orderable chart sections ── */}
             {(() => {
-              const chartSections = {};
-
-              /* PIES */
-              chartSections.pies = (
-                <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20, position: "relative" }}>
-                  {pieOrder.map(k => {
-                    if (k === "catPie") return <Card key="catPie"><ChartWrap id="catPie" title={<>By Category <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>(% of {savRateBase} income)</span></>}>
-                      <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={catTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={2} dataKey="value" stroke="none">{catTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
-                    </ChartWrap></Card>;
-                    return <Card key="typPie"><ChartWrap id="typPie" title={<>Necessity vs Discretionary <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(% of {savRateBase} income)</span></>}>
-                      <div style={{ width: "100%", minHeight: 280 }}><ResponsiveContainer width="100%" height={280}><PieChart><Pie data={typTot} cx="50%" cy="50%" outerRadius={95} innerRadius={48} paddingAngle={3} dataKey="value" stroke="none">{typTot.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip content={<PieTooltip />} /><Legend wrapperStyle={{ fontSize: 11 }} /></PieChart></ResponsiveContainer></div>
-                    </ChartWrap></Card>;
-                  })}
-                  <button onClick={() => setPieOrder(p => [p[1], p[0]])} style={{ position: "absolute", top: -28, right: 0, padding: "2px 10px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr, #ddd)", borderRadius: 4, background: "var(--input-bg, #fafafa)", color: "var(--tx3,#888)", cursor: "pointer" }} title="Swap pie chart positions">⇄ Swap</button>
+              const livePoint = { date: "Now", label: "Current", grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW, remW, cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw, eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet };
+              const allPoints = [...snapshots, livePoint];
+              const sorted = allPoints.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+              const curEaipNet = C.eaipNet, curEaipGross = C.eaipGross;
+              const curCEaipNet = C.cEaipNet, curKEaipNet = C.kEaipNet;
+              const p1NetKey = `${p1Name} Net`, p2NetKey = `${p2Name} Net`;
+              const p1GrossKey = `${p1Name} Gross`, p2GrossKey = `${p2Name} Gross`;
+              const trendData = sorted.map(s => {
+                const snapEaipNet = s.eaipNet !== undefined ? s.eaipNet : curEaipNet;
+                const snapEaipGross = s.eaipGross !== undefined ? s.eaipGross : curEaipGross;
+                const eaip = includeEaip ? snapEaipNet : 0;
+                const eaipG = includeEaip ? snapEaipGross : 0;
+                const netInc = (s.netW || 0) * 48 + eaip;
+                const grossInc = (s.grossW || 0) * 52 + eaipG;
+                const savBudgeted = Math.round((s.savW || 0) * 48);
+                const remBudgeted = Math.round((s.remW || 0) * 48);
+                const notBudgeted = Math.max(0, remBudgeted);
+                const snapCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet;
+                const snapKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
+                return {
+                  date: s.date, label: s.label,
+                  Expenses: Math.round((s.expW || 0) * 48),
+                  Necessity: Math.round((s.necW || 0) * 48),
+                  Discretionary: Math.round((s.disW || 0) * 48),
+                  Savings: savBudgeted,
+                  "Not Budgeted": notBudgeted,
+                  "Net Salary": Math.round(netInc),
+                  [p1NetKey]: Math.round(((s.cNetW || 0) * 48) + (includeEaip ? snapCEaip : 0)),
+                  [p2NetKey]: Math.round(((s.kNetW || 0) * 48) + (includeEaip ? snapKEaip : 0)),
+                  "Gross Salary": Math.round(grossInc),
+                  [p1GrossKey]: Math.round((s.cGrossW || 0) * 52),
+                  [p2GrossKey]: Math.round((s.kGrossW || 0) * 52),
+                };
+              });
+              const cs = { borderRadius: 10, border: "none", boxShadow: "0 4px 12px rgba(0,0,0,.1)" };
+              const hasPerPerson = sorted.some(s => (s.cNetW && s.kNetW) || (s.cGrossW && s.kGrossW));
+              const modeBtn = (cur, val, label, color, setter) => <button onClick={() => setter(val)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: cur === val ? `2px solid ${color}` : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: cur === val ? (color === "#556FB5" ? "#EEF1FA" : color + "22") : "transparent", color: cur === val ? color : "var(--tx3, #888)", cursor: "pointer" }}>{label}</button>;
+              const xTF = v => v === "Now" ? "Now" : String(v).slice(0, 4);
+              const CAT_COLORS_H = ["#E8573A", "#F2A93B", "#4ECDC4", "#556FB5", "#9B59B6", "#1ABC9C", "#E67E22", "#2ECC71", "#95A5A6", "#D35400", "#C0392B", "#3498DB", "#8E44AD", "#27AE60", "#F39C12", "#16A085"];
+              const histMode = catHistMode, histView = itemHistMode, isCat = histView === "category";
+              const allCatsH = new Set(); snapshots.forEach(sn => { if (sn.items) Object.values(sn.items).forEach(d => { if (d.c && d.t !== "S") allCatsH.add(d.c); }); }); ewk.forEach(e => { if (e.c) allCatsH.add(e.c); });
+              const catListH = [...allCatsH].sort();
+              const allNamesH = new Set(); snapshots.forEach(sn => { if (sn.items) Object.keys(sn.items).forEach(k => allNamesH.add(k)); }); ewk.forEach(e => allNamesH.add(e.n)); savSorted.forEach(sv => allNamesH.add(sv.n));
+              const namesH = [...allNamesH].sort();
+              const selCat = catHistoryName || catListH[0] || "", selItem = itemHistoryName || namesH[0] || "";
+              const ccMap = {}; catListH.forEach((c, i) => { ccMap[c] = CAT_COLORS_H[i % CAT_COLORS_H.length]; });
+              const icMap = {}; namesH.forEach((n, i) => { icMap[n] = CAT_COLORS_H[i % CAT_COLORS_H.length]; });
+              const sortedH = [...snapshots].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+              const hPts = [...sortedH, { date: "Now", label: "Current", _current: true }];
+              const sCatD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { catListH.forEach(c => { row[c] = Math.round(ewk.filter(e => e.c === c).reduce((sm, e) => sm + e.wk * 48, 0)); }); row._netInc = Math.round(C.net * 48); } else { catListH.forEach(c => { let tot = 0; if (sn.items) Object.values(sn.items).forEach(d => { if (d.c === c && d.t !== "S") tot += d.v || 0; }); row[c] = Math.round(tot); }); row._netInc = Math.round((sn.netW || 0) * 48); } return row; });
+              const lcp = sCatD[sCatD.length - 1] || {}; const clSorted = [...catListH].sort((a, b) => (lcp[b] || 0) - (lcp[a] || 0));
+              const sItemD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { namesH.forEach(n => { const ex = ewk.find(x => x.n === n); const sv = savSorted.find(x => x.n === n); row[n] = Math.round((ex ? ex.wk * 48 : sv ? sv.wk * 48 : 0) * 100) / 100; }); row._netInc = Math.round(C.net * 48); } else { namesH.forEach(n => { row[n] = sn.items?.[n]?.v || 0; }); row._netInc = Math.round((sn.netW || 0) * 48); } return row; });
+              const lip = sItemD[sItemD.length - 1] || {}; const nlSorted = [...namesH].sort((a, b) => (lip[b] || 0) - (lip[a] || 0)).slice(0, 12);
+              const curCatT = ewk.filter(e => e.c === selCat).reduce((sm, e) => sm + e.wk * 48, 0);
+              const catLD = hPts.map(sn => { if (sn._current) return { date: "Now", label: "Current", value: Math.round(curCatT) }; let tot = 0; if (sn.items) Object.values(sn.items).forEach(d => { if (d.c === selCat && d.t !== "S") tot += d.v || 0; }); return { date: sn.date, label: sn.label, value: Math.round(tot) }; });
+              const curItemV = (() => { const ex = ewk.find(x => x.n === selItem); const sv = savSorted.find(x => x.n === selItem); return ex ? ex.wk * 48 : sv ? sv.wk * 48 : 0; })();
+              const itemLD = hPts.map(sn => { if (sn._current) return { date: "Now", label: "Current", value: Math.round(curItemV * 100) / 100 }; return { date: sn.date, label: sn.label, value: sn.items?.[selItem]?.v || 0 }; });
+              const DragWrap = ({ id, children, span }) => (
+                <div draggable onDragStart={() => setDragChart(id)} onDragOver={e => e.preventDefault()} onDrop={() => { if (dragChart && dragChart !== id) { setChartOrder(prev => { const n = prev.filter(x => x !== dragChart); const idx = n.indexOf(id); n.splice(idx, 0, dragChart); return [...n]; }); setDragChart(null); } }} style={{ gridColumn: span ? "1 / -1" : undefined, opacity: dragChart === id ? 0.5 : 1, cursor: "grab", position: "relative" }}>
+                  <div style={{ position: "absolute", top: 6, right: 10, fontSize: 12, color: "var(--tx3, #bbb)", cursor: "grab", userSelect: "none", zIndex: 1 }} title="Drag to reorder">⠿</div>
+                  {children}
                 </div>
               );
-
-              /* TREND CHARTS */
-              chartSections.trendCharts = (() => {
-                const livePoint = { date: "Now", label: "Current", grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW, remW, cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw, eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet };
-                const allPts = [...snapshots, livePoint];
-                const sorted = allPts.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
-                const curEaipNet = C.eaipNet, curEaipGross = C.eaipGross, curCEaipNet = C.cEaipNet, curKEaipNet = C.kEaipNet;
-                const p1NetKey = `${p1Name} Net`, p2NetKey = `${p2Name} Net`, p1GrossKey = `${p1Name} Gross`, p2GrossKey = `${p2Name} Gross`;
-                const isMo = budgetHistPeriod === "monthly", pDiv = isMo ? 12 : 1;
-                const trendData = sorted.map(s => {
-                  const snapEaipNet = s.eaipNet !== undefined ? s.eaipNet : curEaipNet, snapEaipGross = s.eaipGross !== undefined ? s.eaipGross : curEaipGross;
-                  const eaip = includeEaip ? snapEaipNet : 0, eaipG = includeEaip ? snapEaipGross : 0;
-                  const netInc = (s.netW || 0) * 48 + eaip, grossInc = (s.grossW || 0) * 52 + eaipG;
-                  const savAmt = (s.savW || 0) * 48 + (s.remW || 0) * 48 + eaip;
-                  const snapCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet, snapKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
-                  const snapIdx = s.date === "Now" ? null : snapshots.findIndex(x => x.id === s.id);
-                  return { date: s.date, label: s.label, _snapIdx: snapIdx, Expenses: Math.round((s.expW || 0) * 48 / pDiv), Necessity: Math.round((s.necW || 0) * 48 / pDiv), Discretionary: Math.round((s.disW || 0) * 48 / pDiv), "Net Income": Math.round(netInc / pDiv), [p1NetKey]: Math.round(((s.cNetW || 0) * 48 + (includeEaip ? snapCEaip : 0)) / pDiv), [p2NetKey]: Math.round(((s.kNetW || 0) * 48 + (includeEaip ? snapKEaip : 0)) / pDiv), "Gross Income": Math.round(grossInc / pDiv), [p1GrossKey]: Math.round((s.cGrossW || 0) * 52 / pDiv), [p2GrossKey]: Math.round((s.kGrossW || 0) * 52 / pDiv), "Savings Rate (Net)": netInc > 0 ? Math.round(savAmt / netInc * 1000) / 10 : 0, "Savings Rate (Gross)": grossInc > 0 ? Math.round(savAmt / grossInc * 1000) / 10 : 0 };
-                });
-                const cs = { borderRadius: 10, border: "none", boxShadow: "0 4px 12px rgba(0,0,0,.1)" };
-                const hasPerPerson = sorted.some(s => (s.cNetW && s.kNetW) || (s.cGrossW && s.kGrossW));
-                const navClick = (data) => { if (data?._snapIdx != null && data._snapIdx >= 0) { setViewingSnap(data._snapIdx); setTab("budget"); } };
-                const ClickDot = ({ cx, cy, r, fill, payload }) => (<circle cx={cx} cy={cy} r={r} fill={fill} stroke="none" style={{ cursor: payload?._snapIdx != null && payload._snapIdx >= 0 ? "pointer" : "default" }} onClick={() => navClick(payload)} />);
-                const perLabel = isMo ? "Monthly" : "Yearly";
-                return (<>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#999" }}>Budget History:</span>
-                    <button onClick={() => setBudgetHistPeriod("monthly")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: isMo ? "2px solid #4ECDC4" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: isMo ? "#E8F8F5" : "transparent", color: isMo ? "#4ECDC4" : "var(--tx3, #888)", cursor: "pointer" }}>Monthly</button>
-                    <button onClick={() => setBudgetHistPeriod("yearly")} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, border: !isMo ? "2px solid #4ECDC4" : "2px solid var(--bdr, #ddd)", borderRadius: 6, background: !isMo ? "#E8F8F5" : "transparent", color: !isMo ? "#4ECDC4" : "var(--tx3, #888)", cursor: "pointer" }}>Yearly</button>
-                    <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>Click a point to view that snapshot</span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
-                    <Card><ChartWrap id="trendExp" title={`Total Expenses (${perLabel})`}><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="Expenses" stroke="#E8573A" strokeWidth={2.5} dot={<ClickDot r={4} fill="#E8573A" />} /></LineChart></ResponsiveContainer></div></ChartWrap></Card>
-                    <Card><ChartWrap id="trendNecDis" title={`Necessity vs Discretionary (${perLabel})`}><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Necessity" stroke="#556FB5" strokeWidth={2.5} dot={<ClickDot r={4} fill="#556FB5" />} /><Line type="monotone" dataKey="Discretionary" stroke="#E8573A" strokeWidth={2.5} dot={<ClickDot r={4} fill="#E8573A" />} /></LineChart></ResponsiveContainer></div></ChartWrap></Card>
-                    <Card><ChartWrap id="trendNet" title={<>Net Income ({perLabel}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</>}><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Income" stroke="#4ECDC4" strokeWidth={2.5} dot={<ClickDot r={4} fill="#4ECDC4" />} name={includeEaip ? "Net Income + Bonus" : "Net Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1NetKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={<ClickDot r={3} fill="#556FB5" />} />}{hasPerPerson && <Line type="monotone" dataKey={p2NetKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={<ClickDot r={3} fill="#E8573A" />} />}</LineChart></ResponsiveContainer></div></ChartWrap></Card>
-                    <Card><ChartWrap id="trendGross" title={<>Gross Income ({perLabel}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</>}><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Gross Income" stroke="#F2A93B" strokeWidth={2.5} dot={<ClickDot r={4} fill="#F2A93B" />} name={includeEaip ? "Gross + Bonus" : "Gross Income"} />{hasPerPerson && <Line type="monotone" dataKey={p1GrossKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={<ClickDot r={3} fill="#556FB5" />} />}{hasPerPerson && <Line type="monotone" dataKey={p2GrossKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={<ClickDot r={3} fill="#E8573A" />} />}</LineChart></ResponsiveContainer></div></ChartWrap></Card>
-                    <Card><ChartWrap id="trendSavRate" title={<>Savings Rate (% of {savRateBase}){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</>}><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}%`} domain={[0, 'auto']} /><Tooltip formatter={v => `${v}%`} contentStyle={cs} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Savings Rate (Gross)" : "Savings Rate (Net)"} stroke="#2ECC71" strokeWidth={2.5} dot={<ClickDot r={4} fill="#2ECC71" />} name={`Savings Rate (${savRateBase}${includeEaip ? " + Bonus" : ""})`} /></LineChart></ResponsiveContainer></div></ChartWrap></Card>
-                  </div>
-                </>);
-              })();
-
-              /* CATEGORY HISTORY */
-              chartSections.catHistory = snapshots.length > 1 ? (() => { const CAT_COLORS=["#E8573A","#F2A93B","#4ECDC4","#556FB5","#9B59B6","#1ABC9C","#E67E22","#2ECC71","#95A5A6","#D35400","#C0392B","#3498DB","#8E44AD","#27AE60"]; const allCats=new Set(); snapshots.forEach(s=>{if(s.items)Object.values(s.items).forEach(d=>{if(d.c&&d.t!=="S")allCats.add(d.c)})}); ewk.forEach(e=>{if(e.c)allCats.add(e.c)}); const catList=[...allCats].sort(); if(!catList.length)return null; const selCat=catHistoryName||catList[0]||""; const sorted=[...snapshots].sort((a,b)=>(a.date||"").localeCompare(b.date||"")); const curT=ewk.filter(e=>e.c===selCat).reduce((s,e)=>s+e.wk*48,0); const catData=[...sorted,{date:"Now",label:"Current",_current:true}].map(s=>{if(s._current)return{date:"Now",label:"Current",value:Math.round(curT)};let t=0;if(s.items)Object.values(s.items).forEach(d=>{if(d.c===selCat&&d.t!=="S")t+=d.v||0});return{date:s.date,label:s.label,value:Math.round(t)}}); const ccm={}; catList.forEach((c,i)=>{ccm[c]=CAT_COLORS[i%CAT_COLORS.length]}); return (<Card style={{marginBottom:20}}><ChartWrap id="catHistory" title={<><span>Category History</span>{!hiddenCharts.catHistory&&<select value={selCat} onChange={e=>setCatHistoryName(e.target.value)} onClick={e=>e.stopPropagation()} style={{border:"2px solid #e0e0e0",borderRadius:8,padding:"6px 10px",fontSize:13,fontFamily:"'DM Sans',sans-serif",background:"#fafafa",marginLeft:12}}>{catList.map(c=><option key={c} value={c}>{c}</option>)}</select>}</>}><div style={{width:"100%",minHeight:250}}><ResponsiveContainer width="100%" height={250}><LineChart data={catData}><XAxis dataKey="date" tick={{fontSize:10}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>fmt(v)}/><Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"none",boxShadow:"0 4px 12px rgba(0,0,0,.1)"}}/><Line type="monotone" dataKey="value" stroke={ccm[selCat]||"#556FB5"} strokeWidth={2.5} dot={{r:4,fill:ccm[selCat]||"#556FB5"}} name={selCat}/></LineChart></ResponsiveContainer></div></ChartWrap></Card>);})():null;
-
-              /* ITEM HISTORY */
-              chartSections.itemHistory = snapshots.length > 1 ? (() => { const allN=new Set(); snapshots.forEach(s=>{if(s.items)Object.keys(s.items).forEach(k=>allN.add(k))}); const names=[...allN].sort(); const selName=itemHistoryName||names[0]||""; const itemData=[...snapshots].sort((a,b)=>a.date.localeCompare(b.date)).map(s=>({date:s.date,label:s.label,value:s.items?.[selName]?.v||0})); return names.length>0?(<Card style={{marginBottom:20}}><ChartWrap id="itemHistory" title={<><span>Item History</span>{!hiddenCharts.itemHistory&&<select value={selName} onChange={e=>setItemHistoryName(e.target.value)} onClick={e=>e.stopPropagation()} style={{border:"2px solid #e0e0e0",borderRadius:8,padding:"6px 10px",fontSize:13,fontFamily:"'DM Sans',sans-serif",background:"#fafafa",marginLeft:12}}>{names.map(n=><option key={n} value={n}>{n}</option>)}</select>}</>}><div style={{width:"100%",minHeight:250}}><ResponsiveContainer width="100%" height={250}><LineChart data={itemData}><XAxis dataKey="date" tick={{fontSize:10}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>fmt(v)}/><Tooltip formatter={v=>fmt(v)} contentStyle={{borderRadius:10,border:"none",boxShadow:"0 4px 12px rgba(0,0,0,.1)"}}/><Line type="monotone" dataKey="value" stroke="#556FB5" strokeWidth={2.5} dot={{r:4,fill:"#556FB5"}} name={selName}/></LineChart></ResponsiveContainer></div></ChartWrap></Card>):null;})():null;
-
-              /* CAT BUDGET HISTORY — STACKED / FLOW */
-              chartSections.catBudgetHistory = snapshots.length > 1 ? (() => { const CC=["#E8573A","#F2A93B","#4ECDC4","#556FB5","#9B59B6","#1ABC9C","#E67E22","#2ECC71","#95A5A6","#D35400","#C0392B","#3498DB","#8E44AD","#27AE60","#F39C12","#16A085"]; const allC=new Set(); snapshots.forEach(s=>{if(s.items)Object.values(s.items).forEach(d=>{if(d.c&&d.t!=="S")allC.add(d.c)})}); ewk.forEach(e=>{if(e.c)allC.add(e.c)}); const cL=[...allC].sort(); const srt=[...snapshots].sort((a,b)=>(a.date||"").localeCompare(b.date||"")); const cCT={}; ewk.forEach(e=>{cCT[e.c]=(cCT[e.c]||0)+e.wk*48}); const aP=[...srt,{date:"Now",label:"Current",items:null,_current:true}]; const cD=aP.map(s=>{const row={date:s.date,label:s.label};if(s._current){cL.forEach(c=>{row[c]=Math.round(cCT[c]||0)})}else{cL.forEach(c=>{let t=0;if(s.items)Object.values(s.items).forEach(d=>{if(d.c===c&&d.t!=="S")t+=d.v||0});row[c]=Math.round(t)})}return row}); const cm={}; cL.forEach((c,i)=>{cm[c]=CC[i%CC.length]}); const cs2={borderRadius:10,border:"none",boxShadow:"0 4px 12px rgba(0,0,0,.1)"}; const modeBtn=(mode,label,clr,bg)=>(<button onClick={e=>{e.stopPropagation();setCatChartMode(mode)}} style={{padding:"4px 12px",fontSize:11,fontWeight:600,border:catChartMode===mode?`2px solid ${clr}`:"2px solid var(--bdr, #ddd)",borderRadius:6,background:catChartMode===mode?bg:"transparent",color:catChartMode===mode?clr:"var(--tx3, #888)",cursor:"pointer",marginLeft:4}}>{label}</button>);
-                if(catChartMode==="sankey"&&cD.length>=2){const first=cD[0],last=cD[cD.length-1];const sd=cL.map(c=>({name:c,from:first[c]||0,to:last[c]||0,change:(last[c]||0)-(first[c]||0),color:cm[c]})).filter(d=>d.from>0||d.to>0).sort((a,b)=>b.to-a.to);const mx=Math.max(...sd.map(d=>Math.max(d.from,d.to)),1);return(<Card style={{marginBottom:20}}><ChartWrap id="catBudgetHistory" title={<><span>Category Budget History</span>{!hiddenCharts.catBudgetHistory&&<>{modeBtn("stacked","Stacked","#556FB5","#EEF1FA")}{modeBtn("sankey","Flow","#E8573A","#FEF0ED")}</>}</>}><div style={{fontSize:11,color:"var(--tx3, #999)",marginBottom:12}}>Comparing: {first.label||first.date} → {last.label||last.date}</div>{sd.map(d=>(<div key={d.name} style={{display:"grid",gridTemplateColumns:"120px 1fr 80px 80px",gap:8,padding:"6px 0",alignItems:"center",borderBottom:"1px solid var(--bdr, #eee)"}}><span style={{fontSize:12,fontWeight:600,color:d.color}}>{d.name}</span><div style={{position:"relative",height:20,background:"var(--input-bg, #f5f5f5)",borderRadius:4,overflow:"hidden"}}><div style={{position:"absolute",left:0,top:0,height:"50%",width:`${d.from/mx*100}%`,background:d.color,opacity:0.4,borderRadius:"4px 4px 0 0"}}/><div style={{position:"absolute",left:0,bottom:0,height:"50%",width:`${d.to/mx*100}%`,background:d.color,borderRadius:"0 0 4px 4px"}}/></div><span style={{fontSize:11,textAlign:"right",color:"var(--tx2, #555)"}}>{fmt(d.to)}</span><span style={{fontSize:11,textAlign:"right",fontWeight:600,color:d.change>0?"#E74C3C":d.change<0?"#2ECC71":"var(--tx3, #999)"}}>{d.change>0?"+":""}{fmt(d.change)}</span></div>))}</ChartWrap></Card>)}
-                return(<Card style={{marginBottom:20}}><ChartWrap id="catBudgetHistory" title={<><span>Category Budget History</span>{!hiddenCharts.catBudgetHistory&&<>{modeBtn("stacked","Stacked","#556FB5","#EEF1FA")}{modeBtn("sankey","Flow","#E8573A","#FEF0ED")}</>}</>}><div style={{width:"100%",minHeight:300}}><ResponsiveContainer width="100%" height={300}><AreaChart data={cD}><XAxis dataKey="date" tick={{fontSize:10}} axisLine={false} tickLine={false}/><YAxis tick={{fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>fmt(v)}/><Tooltip formatter={v=>fmt(v)} contentStyle={cs2}/><Legend wrapperStyle={{fontSize:10}}/>{cL.map(c=><Area key={c} type="monotone" dataKey={c} stackId="1" stroke={cm[c]} fill={cm[c]} fillOpacity={0.6}/>)}</AreaChart></ResponsiveContainer></div></ChartWrap></Card>);})():null;
-
-              /* SNAPSHOT HISTORY TABLE */
-              chartSections.snapHistory = snapshots.length > 0 ? (<Card><div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}><h3 style={{margin:0,fontFamily:"'Fraunces',serif",fontSize:18,fontWeight:800}}>Snapshot History</h3><button onClick={()=>setSnapHistView(p=>p==="years"?"all":"years")} style={{padding:"5px 14px",fontSize:11,fontWeight:600,border:"2px solid #556FB5",borderRadius:6,background:snapHistView==="all"?"#EEF1FA":"transparent",color:"#556FB5",cursor:"pointer"}}>{snapHistView==="years"?"Show All":"Group by Year"}</button></div><div style={{overflowX:"auto"}}><div style={{display:"grid",gridTemplateColumns:"100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px",gap:4,fontSize:9,fontWeight:700,color:"#999",marginBottom:6,minWidth:850}}><span>Date</span><span>Label</span><span style={{textAlign:"right"}}>Net Income</span><span style={{textAlign:"right"}}>Expenses</span><span style={{textAlign:"right"}}>Savings</span><span style={{textAlign:"right"}}>Bonus</span><span style={{textAlign:"right"}}>Sav. Rate</span><span style={{textAlign:"right"}}>Remaining</span><span/></div>{(()=>{const sorted=[...snapshots].sort((a,b)=>(b.date||"").localeCompare(a.date||""));const years={};sorted.forEach(s=>{const yr=(s.date||"").slice(0,4)||"Unknown";if(!years[yr])years[yr]=[];years[yr].push(s)});const yearKeys=Object.keys(years).sort((a,b)=>b.localeCompare(a));const activeYear=snapHistYear||yearKeys[0];const renderRow=(s)=>{const ri=snapshots.findIndex(x=>x.id===s.id);const dateStr=s.date||"";const dateObj=dateStr?new Date(dateStr+"T00:00:00"):null;const formattedDate=dateObj?dateObj.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):dateStr;return(<div key={s.id} style={{display:"grid",gridTemplateColumns:"100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px",gap:4,padding:"6px 0",alignItems:"center",borderTop:"1px solid var(--bdr,#f0f0f0)",fontSize:11,minWidth:850}}><div style={{display:"flex",flexDirection:"column"}}><span style={{fontSize:12,fontWeight:700,color:"var(--tx, #333)"}}>{formattedDate}</span><input type="date" value={s.date} onChange={e=>{const n=[...snapshots];n[ri]={...n[ri],date:e.target.value};setSnapshots(n)}} style={{fontSize:9,border:"1px solid var(--bdr,#e0e0e0)",borderRadius:4,padding:"1px 3px",color:"var(--tx3,#888)",background:"transparent",marginTop:2}}/></div><input value={s.label} onChange={e=>{const n=[...snapshots];n[ri]={...n[ri],label:e.target.value};setSnapshots(n)}} style={{fontSize:11,fontWeight:600,border:"1px solid var(--bdr,#e0e0e0)",borderRadius:4,padding:"2px 4px",color:"var(--tx,#333)",background:"transparent"}}/><span style={{textAlign:"right",color:"#4ECDC4"}}>{fmt((s.netW||0)*48)}</span><span style={{textAlign:"right",color:"#E8573A"}}>{fmt((s.expW||0)*48)}</span><span style={{textAlign:"right",color:"#2ECC71"}}>{fmt((s.savW||0)*48)}</span><span style={{textAlign:"right",color:"#9B59B6"}}>{fmt(s.eaipNet||0)}</span><span style={{textAlign:"right",color:"#556FB5"}}>{(s.savRate||0).toFixed(1)}%</span><span style={{textAlign:"right",color:(s.remW||0)>=0?"#2ECC71":"#E74C3C"}}>{fmt((s.remW||0)*48)}</span><div style={{display:"flex",gap:4,justifyContent:"flex-end"}}><button onClick={()=>{setViewingSnap(ri);setTab("budget")}} style={{padding:"3px 8px",background:"#556FB5",color:"#fff",border:"none",borderRadius:4,fontSize:10,fontWeight:700,cursor:"pointer"}}>View</button>{(s.fullState||s.items)&&<button onClick={()=>setRestoreConfirm(ri)} style={{padding:"3px 6px",background:"none",border:"1px solid #F2A93B",borderRadius:4,fontSize:10,fontWeight:600,cursor:"pointer",color:"#F2A93B"}} title={s.fullState?"Full restore":"Restores items only"}>↩</button>}<button onClick={()=>setSnapshots(snapshots.filter((_,j)=>j!==ri))} style={{padding:"3px 6px",background:"none",border:"1px solid #ddd",borderRadius:4,fontSize:10,cursor:"pointer",color:"#ccc"}}>×</button></div></div>)};if(snapHistView==="all"){return sorted.map(renderRow)}return yearKeys.map(yr=>(<div key={yr}><div onClick={()=>setSnapHistYear(p=>p===yr?null:yr)} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",cursor:"pointer",borderTop:"2px solid var(--bdr2, #d0cdc8)",userSelect:"none"}}><span style={{fontSize:14,fontWeight:800,fontFamily:"'Fraunces',serif",color:"var(--tx, #333)"}}>{yr}</span><span style={{fontSize:11,color:"var(--tx3, #999)"}}>({years[yr].length} snapshot{years[yr].length!==1?"s":""})</span><span style={{fontSize:12,color:"var(--tx3, #999)",marginLeft:"auto"}}>{activeYear===yr?"▾":"▸"}</span></div>{activeYear===yr&&years[yr].map(renderRow)}</div>))})()}</div></Card>):null;
-
-              /* ── Render in chartOrder ── */
-              return chartOrder.map(id => chartSections[id] ? <SectionWrap key={id} id={id}>{chartSections[id]}</SectionWrap> : null);
+              const chartComponents = {
+                budgetVsSalary: <DragWrap key="bvs" id="budgetVsSalary"><Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Budget vs {savRateBase === "gross" ? "Gross" : "Net"} Salary</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><AreaChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 10 }} /><Area type="monotone" dataKey="Expenses" stackId="1" stroke="#E8573A" fill="#E8573A" fillOpacity={0.6} /><Area type="monotone" dataKey="Savings" stackId="1" stroke="#2ECC71" fill="#2ECC71" fillOpacity={0.6} /><Area type="monotone" dataKey="Not Budgeted" stackId="1" stroke="#95A5A6" fill="#95A5A6" fillOpacity={0.3} /><Line type="monotone" dataKey={savRateBase === "gross" ? "Gross Salary" : "Net Salary"} stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={savRateBase === "gross" ? "Gross Salary" : "Net Salary"} /></AreaChart></ResponsiveContainer></div></Card></DragWrap>,
+                necVsDis: <DragWrap key="nvd" id="necVsDis"><Card><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}><h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Necessity vs Discretionary</h3>{modeBtn(necDisMode, "line", "Line", "#556FB5", setNecDisMode)}{modeBtn(necDisMode, "stacked", "Stacked", "#E8573A", setNecDisMode)}</div><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}>{necDisMode === "stacked" ? (<AreaChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 10 }} /><Area type="monotone" dataKey="Necessity" stackId="1" stroke="#556FB5" fill="#556FB5" fillOpacity={0.6} /><Area type="monotone" dataKey="Discretionary" stackId="1" stroke="#E8573A" fill="#E8573A" fillOpacity={0.6} /><Area type="monotone" dataKey="Savings" stackId="1" stroke="#2ECC71" fill="#2ECC71" fillOpacity={0.6} /><Area type="monotone" dataKey="Not Budgeted" stackId="1" stroke="#95A5A6" fill="#95A5A6" fillOpacity={0.3} /></AreaChart>) : (<LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Necessity" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} /><Line type="monotone" dataKey="Discretionary" stroke="#E8573A" strokeWidth={2.5} dot={{ r: 4, fill: "#E8573A" }} /><Line type="monotone" dataKey="Savings" stroke="#2ECC71" strokeWidth={2} dot={{ r: 3, fill: "#2ECC71" }} /><Line type="monotone" dataKey="Not Budgeted" stroke="#95A5A6" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3, fill: "#95A5A6" }} /></LineChart>)}</ResponsiveContainer></div></Card></DragWrap>,
+                netSalary: <DragWrap key="ns" id="netSalary"><Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Net Salary (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Net Salary" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={includeEaip ? "Net Salary + Bonus" : "Net Salary"} />{hasPerPerson && <Line type="monotone" dataKey={p1NetKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2NetKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card></DragWrap>,
+                grossSalary: <DragWrap key="gs" id="grossSalary"><Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Gross Salary (Yearly){includeEaip && <span style={{ fontSize: 12, fontWeight: 500, color: "#9B59B6" }}> + Bonus</span>}</h3><div style={{ width: "100%", minHeight: 250 }}><ResponsiveContainer width="100%" height={250}><LineChart data={trendData}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 11 }} /><Line type="monotone" dataKey="Gross Salary" stroke="#F2A93B" strokeWidth={2.5} dot={{ r: 4, fill: "#F2A93B" }} name={includeEaip ? "Gross + Bonus" : "Gross Salary"} />{hasPerPerson && <Line type="monotone" dataKey={p1GrossKey} stroke="#556FB5" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#556FB5" }} />}{hasPerPerson && <Line type="monotone" dataKey={p2GrossKey} stroke="#E8573A" strokeWidth={1.5} strokeDasharray="5 5" dot={{ r: 3, fill: "#E8573A" }} />}</LineChart></ResponsiveContainer></div></Card></DragWrap>,
+                budgetHistory: snapshots.length > 1 ? <DragWrap key="bh" id="budgetHistory" span><Card><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}><h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Budget History</h3>{modeBtn(histView, "category", "Category", "#556FB5", setItemHistMode)}{modeBtn(histView, "item", "Item", "#E67E22", setItemHistMode)}<span style={{ width: 1, height: 20, background: "var(--bdr, #ddd)" }} />{modeBtn(histMode, "line", "Line", "#4ECDC4", setCatHistMode)}{modeBtn(histMode, "stacked", "Stacked", "#E8573A", setCatHistMode)}{histMode === "line" && isCat && <select value={selCat} onChange={e => setCatHistoryName(e.target.value)} style={{ border: "2px solid #e0e0e0", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa" }}>{catListH.map(c => <option key={c} value={c}>{c}</option>)}</select>}{histMode === "line" && !isCat && <select value={selItem} onChange={e => setItemHistoryName(e.target.value)} style={{ border: "2px solid #e0e0e0", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa" }}>{namesH.map(n => <option key={n} value={n}>{n}</option>)}</select>}</div><div style={{ width: "100%", minHeight: 300 }}><ResponsiveContainer width="100%" height={300}>{histMode === "stacked" ? (isCat ? (<AreaChart data={sCatD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{clSorted.map(c => <Area key={c} type="monotone" dataKey={c} stackId="1" stroke={ccMap[c]} fill={ccMap[c]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_netInc" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name="Net Income" /></AreaChart>) : (<AreaChart data={sItemD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{nlSorted.map(n => <Area key={n} type="monotone" dataKey={n} stackId="1" stroke={icMap[n]} fill={icMap[n]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_netInc" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name="Net Income" /></AreaChart>)) : (isCat ? (<LineChart data={catLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke={ccMap[selCat] || "#556FB5"} strokeWidth={2.5} dot={{ r: 4, fill: ccMap[selCat] || "#556FB5" }} name={selCat} /></LineChart>) : (<LineChart data={itemLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} name={selItem} /></LineChart>))}</ResponsiveContainer></div></Card></DragWrap> : null,
+              };
+              const validOrder = chartOrder.filter(k => chartComponents[k] !== undefined);
+              Object.keys(chartComponents).forEach(k => { if (!validOrder.includes(k)) validOrder.push(k); });
+              return (
+                <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 20, marginBottom: 20 }}>
+                  {validOrder.filter(k => chartComponents[k]).map(k => chartComponents[k])}
+                </div>
+              );
             })()}
+
+            {snapshots.length > 0 && (
+              <Card>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Snapshot History</h3>
+                  <button onClick={() => setSnapHistView(p => p === "years" ? "all" : "years")} style={{ padding: "5px 14px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: snapHistView === "all" ? "#EEF1FA" : "transparent", color: "#556FB5", cursor: "pointer" }}>
+                    {snapHistView === "years" ? "Show All" : "Group by Year"}
+                  </button>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, fontSize: 9, fontWeight: 700, color: "#999", marginBottom: 6, minWidth: 850 }}>
+                    <span>Date</span><span>Label</span><span style={{ textAlign: "right" }}>Net Income</span><span style={{ textAlign: "right" }}>Expenses</span><span style={{ textAlign: "right" }}>Savings</span><span style={{ textAlign: "right" }}>Bonus</span><span style={{ textAlign: "right" }}>Sav. Rate</span><span style={{ textAlign: "right" }}>Remaining</span><span />
+                  </div>
+                  {(() => {
+                    const sorted = [...snapshots].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+                    // Group by year
+                    const years = {};
+                    sorted.forEach(s => { const yr = (s.date || "").slice(0, 4) || "Unknown"; if (!years[yr]) years[yr] = []; years[yr].push(s); });
+                    const yearKeys = Object.keys(years).sort((a, b) => b.localeCompare(a));
+                    // Auto-select first year if none selected
+                    const activeYear = snapHistYear || yearKeys[0];
+                    const renderRow = (s) => {
+                      const ri = snapshots.findIndex(x => x.id === s.id);
+                      const dateStr = s.date || "";
+                      const dateObj = dateStr ? new Date(dateStr + "T00:00:00") : null;
+                      const formattedDate = dateObj ? dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : dateStr;
+                      return (
+                        <div key={s.id} style={{ display: "grid", gridTemplateColumns: "100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, padding: "6px 0", alignItems: "center", borderTop: "1px solid var(--bdr,#f0f0f0)", fontSize: 11, minWidth: 850 }}>
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)" }}>{formattedDate}</span>
+                            <input type="date" value={s.date} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], date: e.target.value }; setSnapshots(n); }} style={{ fontSize: 9, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "1px 3px", color: "var(--tx3,#888)", background: "transparent", marginTop: 2 }} />
+                          </div>
+                          <input value={s.label} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], label: e.target.value }; setSnapshots(n); }} style={{ fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 4px", color: "var(--tx,#333)", background: "transparent" }} />
+                          <span style={{ textAlign: "right", color: "#4ECDC4" }}>{fmt((s.netW || 0) * 48)}</span>
+                          <span style={{ textAlign: "right", color: "#E8573A" }}>{fmt((s.expW || 0) * 48)}</span>
+                          <span style={{ textAlign: "right", color: "#2ECC71" }}>{fmt((s.savW || 0) * 48)}</span>
+                          <span style={{ textAlign: "right", color: "#9B59B6" }}>{fmt(s.eaipNet || 0)}</span>
+                          <span style={{ textAlign: "right", color: "#556FB5" }}>{(s.savRate || 0).toFixed(1)}%</span>
+                          <span style={{ textAlign: "right", color: (s.remW || 0) >= 0 ? "#2ECC71" : "#E74C3C" }}>{fmt((s.remW || 0) * 48)}</span>
+                          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                            <button onClick={() => { setViewingSnap(ri); setTab("budget"); }} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
+                            {(s.fullState || s.items) && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }} title={s.fullState ? "Full restore" : "Restores items only"}>↩</button>}
+                            <button onClick={() => setSnapshots(snapshots.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid #ddd", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
+                          </div>
+                        </div>
+                      );
+                    };
+                    if (snapHistView === "all") {
+                      return sorted.map(renderRow);
+                    }
+                    return yearKeys.map(yr => (
+                      <div key={yr}>
+                        <div onClick={() => setSnapHistYear(p => p === yr ? null : yr)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", cursor: "pointer", borderTop: "2px solid var(--bdr2, #d0cdc8)", userSelect: "none" }}>
+                          <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "var(--tx, #333)" }}>{yr}</span>
+                          <span style={{ fontSize: 11, color: "var(--tx3, #999)" }}>({years[yr].length} snapshot{years[yr].length !== 1 ? "s" : ""})</span>
+                          <span style={{ fontSize: 12, color: "var(--tx3, #999)", marginLeft: "auto" }}>{activeYear === yr ? "▾" : "▸"}</span>
+                        </div>
+                        {activeYear === yr && years[yr].map(renderRow)}
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </Card>
+            )}
 
             {restoreConfirm !== null && (
               <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setRestoreConfirm(null)}>
