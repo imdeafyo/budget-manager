@@ -1,6 +1,9 @@
 {
   "name": "budget-manager",
   "version": "1.0.0",
+  "private": true,
+  "description": "Personal budget manager app",
+  "license": "UNLICENSED",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js"

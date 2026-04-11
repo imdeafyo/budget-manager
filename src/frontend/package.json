@@ -1,6 +1,9 @@
 {
   "name": "budget-manager-frontend",
   "version": "1.0.0",
+  "private": true,
+  "description": "Budget manager React frontend",
+  "license": "UNLICENSED",
   "type": "module",
   "scripts": {
     "build": "vite build"
