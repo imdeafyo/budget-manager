@@ -12,7 +12,7 @@ export default function BudgetTab({
   preDed, postDed, c4pre, c4ro, k4pre, k4ro, cEaip, kEaip, fil, tax,
   collapsed, toggleSec, showPerPerson,
   showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkTargets, setBulkTargets,
-  snapshots, setSnapshots,
+  snapshots, setSnapshots, recalcSnap,
 }) {
   // Local state for add-item UI
   const [niN, setNiN] = useState(""); const [niC, setNiC] = useState(cats[0] || "");

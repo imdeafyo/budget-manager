@@ -814,7 +814,7 @@ export default function App() {
           collapsed={collapsed} toggleSec={toggleSec} showPerPerson={showPerPerson}
           showBulkAdd={showBulkAdd} setShowBulkAdd={setShowBulkAdd} bulkName={bulkName} setBulkName={setBulkName}
           bulkVal={bulkVal} setBulkVal={setBulkVal} bulkTargets={bulkTargets} setBulkTargets={setBulkTargets}
-          snapshots={snapshots} setSnapshots={setSnapshots}
+          snapshots={snapshots} setSnapshots={setSnapshots} recalcSnap={recalcSnap}
         />}
 
         {/* ═══ CHARTS ═══ */}
