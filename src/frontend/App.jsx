@@ -62,9 +62,6 @@ export default function App() {
   const [sortDir, setSortDir] = useState("desc");
   const [hlThresh, setHlThresh] = useState("200");
   const [hlPeriod, setHlPeriod] = useState("w"); // w, m, y
-  const [niN, setNiN] = useState(""); const [niC, setNiC] = useState(DEF_CATS[0]);
-  const [niT, setNiT] = useState("N"); const [niS, setNiS] = useState("exp"); const [niP, setNiP] = useState("m"); const [niV, setNiV] = useState("");
-  const [showAddItem, setShowAddItem] = useState(false);
   const [customIcon, setCustomIcon] = useState(null);
   const [bannerOpen, setBannerOpen] = useState(() => { try { const v = localStorage.getItem("budget-banner"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
   const [toolbarOpen, setToolbarOpen] = useState(() => { try { const v = localStorage.getItem("budget-toolbar"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
@@ -81,10 +78,6 @@ export default function App() {
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [bulkName, setBulkName] = useState("");
   const [bulkVal, setBulkVal] = useState("");
-  const [bulkPer, setBulkPer] = useState("m");
-  const [bulkType, setBulkType] = useState("N");
-  const [bulkSec, setBulkSec] = useState("exp");
-  const [bulkCat, setBulkCat] = useState("");
   const [bulkTargets, setBulkTargets] = useState({}); // { current: true, snapId1: true, ... }
   const [catChartMode, setCatChartMode] = useState("stacked"); // "stacked" (only mode now)
   const [catHistoryName, setCatHistoryName] = useState(""); // selected category for history chart
@@ -815,7 +808,7 @@ export default function App() {
           C={C} ewk={ewk} necI={necI} disI={disI} savSorted={savSorted}
           tNW={tNW} tDW={tDW} tExpW={tExpW} tSavW={tSavW} remW={remW} remY48={remY48} remY52={remY52} totalSavPlusRemW={totalSavPlusRemW}
           moC={moC} y4={y4} y5={y5}
-          updExp={updExp} updSav={updSav} rmExp={rmExp} rmSav={rmSav}
+          updExp={updExp} updSav={updSav} rmExp={rmExp} rmSav={rmSav} setExp={setExp} setSav={setSav}
           p1Name={p1Name} p2Name={p2Name} visCols={visCols} cats={cats} savCats={savCats} exp={exp} sav={sav}
           preDed={preDed} postDed={postDed} c4pre={c4pre} c4ro={c4ro} k4pre={k4pre} k4ro={k4ro} cEaip={cEaip} kEaip={kEaip} fil={fil} tax={tax}
           collapsed={collapsed} toggleSec={toggleSec} showPerPerson={showPerPerson}

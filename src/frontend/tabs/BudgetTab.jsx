@@ -7,13 +7,21 @@ export default function BudgetTab({
   C, ewk, necI, disI, savSorted,
   tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW,
   moC, y4, y5,
-  updExp, updSav, rmExp, rmSav,
+  updExp, updSav, rmExp, rmSav, setExp, setSav,
   p1Name, p2Name, visCols, cats, savCats, exp, sav,
   preDed, postDed, c4pre, c4ro, k4pre, k4ro, cEaip, kEaip, fil, tax,
   collapsed, toggleSec, showPerPerson,
   showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkTargets, setBulkTargets,
   snapshots, setSnapshots,
 }) {
+  // Local state for add-item UI
+  const [niN, setNiN] = useState(""); const [niC, setNiC] = useState(cats[0] || "");
+  const [niT, setNiT] = useState("N"); const [niS, setNiS] = useState("exp"); const [niP, setNiP] = useState("m"); const [niV, setNiV] = useState("");
+  const [showAddItem, setShowAddItem] = useState(false);
+  const [bulkPer, setBulkPer] = useState("m");
+  const [bulkType, setBulkType] = useState("N");
+  const [bulkSec, setBulkSec] = useState("exp");
+  const [bulkCat, setBulkCat] = useState("");
   return (
     <div>
 <div>
