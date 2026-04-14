@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Card, SH, NI, EditTxt, Row } from "../components/ui.jsx";
+import { Card, SH, NI, EditTxt, VisColsCtx, Row } from "../components/ui.jsx";
 import { evalF, calcFed, calcStateTax, fmt, fp, p2 } from "../utils/calc.js";
 import { TAX_DB, STATE_ABBR, STATE_PAYROLL } from "../data/taxDB.js";
 
