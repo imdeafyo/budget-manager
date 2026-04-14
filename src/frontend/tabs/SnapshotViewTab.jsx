@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Card, SH, NI, EditTxt, VisColsCtx, Row } from "../components/ui.jsx";
-import { evalF, calcFed, calcStateTax, fmt, fp, p2 } from "../utils/calc.js";
-import { TAX_DB, STATE_ABBR, STATE_PAYROLL } from "../data/taxDB.js";
+import { evalF, calcFed, calcStateTax, getMarg, fmt, fp, p2 } from "../utils/calc.js";
+import { TAX_DB, STATE_ABBR, STATE_PAYROLL, DEF_PRE, DEF_POST } from "../data/taxDB.js";
 
 export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snapshots, setSnapshots, recalcSnap, snapVisCols, setSnapVisCols, snapTab, setSnapTab, p1Name, p2Name, tax, allTaxDB, fil, cats, savCats }) {
   const snap = snapshots[viewingSnap];
