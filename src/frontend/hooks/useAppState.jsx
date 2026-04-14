@@ -6,7 +6,45 @@ import { useM } from "../components/ui.jsx";
 /* ══════════════════════════ useAppState ══════════════════════════ */
 export default function useAppState() {
   const mob = useM();
-  const [tab, setTab] = useState("budget");
+  const VALID_TABS = ["budget","taxes","settings","charts","cats"];
+  const parseHash = () => { const h = location.hash.replace("#","").split("/")[0]; return VALID_TABS.includes(h) ? h : "budget"; };
+  const [tab, setTabRaw] = useState(parseHash);
+  const skipPush = useRef(false);
+  const [viewingSnap, setViewingSnapRaw] = useState(null);
+  const setTab = useCallback((t) => {
+    setTabRaw(t);
+    if (!skipPush.current) {
+      history.pushState({ tab: t, snap: null }, "", "#" + t);
+    }
+    skipPush.current = false;
+  }, []);
+  const setViewingSnap = useCallback((v) => {
+    setViewingSnapRaw(v);
+    if (!skipPush.current) {
+      const t = v !== null ? "budget" : (parseHash() || "budget");
+      history.pushState({ tab: t, snap: v }, "", "#" + t + (v !== null ? "/snap/" + v : ""));
+    }
+    skipPush.current = false;
+  }, []);
+  useEffect(() => {
+    // set initial history entry so first back works
+    if (!location.hash) history.replaceState({ tab: "budget", snap: null }, "", "#budget");
+    else history.replaceState({ tab: parseHash(), snap: null }, "", location.hash);
+    const onPop = (e) => {
+      const s = e.state;
+      skipPush.current = true;
+      if (s && VALID_TABS.includes(s.tab)) {
+        setTabRaw(s.tab);
+        setViewingSnapRaw(s.snap !== null && s.snap !== undefined ? s.snap : null);
+      } else {
+        setTabRaw(parseHash());
+        setViewingSnapRaw(null);
+      }
+      skipPush.current = false;
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem("budget-theme") || "light"; } catch { return "light"; } });
   const [appTitle, setAppTitle] = useState("Budget Manager");
   const [editingTitle, setEditingTitle] = useState(false);
@@ -70,7 +108,6 @@ export default function useAppState() {
   const [editSnapIdx, setEditSnapIdx] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [itemHistoryName, setItemHistoryName] = useState("");
-  const [viewingSnap, setViewingSnap] = useState(null);
   const [snapTab, setSnapTab] = useState("budget");
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [bulkName, setBulkName] = useState("");
