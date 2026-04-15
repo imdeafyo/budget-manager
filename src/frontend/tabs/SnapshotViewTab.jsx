@@ -218,7 +218,19 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                 const updateSnapFS = (key, val) => {
                   const n = [...snapshots];
                   const s = { ...n[viewingSnap] };
-                  s.fullState = { ...(s.fullState || {}), [key]: val };
+                  const nfs = { ...(s.fullState || {}), [key]: val };
+                  // Auto-sync HSA annual → preDed HSA row (mirrors main app behavior)
+                  if (key === "cHsaAnn" || key === "kHsaAnn") {
+                    const cA = evalF(key === "cHsaAnn" ? val : (nfs.cHsaAnn || "0"));
+                    const kA = evalF(key === "kHsaAnn" ? val : (nfs.kHsaAnn || "0"));
+                    const pd = [...(nfs.preDed || DEF_PRE)];
+                    const hi = pd.findIndex(d => d.n.toLowerCase().includes("hsa"));
+                    if (hi >= 0) {
+                      pd[hi] = { ...pd[hi], c: String(Math.round(cA / 52 * 100) / 100), k: String(Math.round(kA / 52 * 100) / 100) };
+                      nfs.preDed = pd;
+                    }
+                  }
+                  s.fullState = nfs;
                   n[viewingSnap] = recalcSnap(s);
                   setSnapshots(n);
                 };
@@ -237,8 +249,9 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                 const kPreTotal = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
                 const cPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
                 const kPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
-                const cTotalDed = cPreTotal * 52 + c4preAnn + c4roAnn + cPostTotal * 52 + evalF(snapCHsa);
-                const kTotalDed = kPreTotal * 52 + k4preAnn + k4roAnn + kPostTotal * 52 + evalF(snapKHsa);
+                // HSA is already included in preDed totals — don't add separately
+                const cTotalDed = cPreTotal * 52 + c4preAnn + c4roAnn + cPostTotal * 52;
+                const kTotalDed = kPreTotal * 52 + k4preAnn + k4roAnn + kPostTotal * 52;
                 return <>
                   <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions</h3>
@@ -314,7 +327,6 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                       {[
                         ["401k Pre-Tax", c4preAnn, k4preAnn, "#1ABC9C"],
                         ["401k Roth", c4roAnn, k4roAnn, "#9B59B6"],
-                        ["HSA", evalF(snapCHsa), evalF(snapKHsa), "#1ABC9C"],
                         ["Pre-Tax Deductions", cPreTotal * 52, kPreTotal * 52, "#c0392b"],
                         ["Post-Tax Deductions", cPostTotal * 52, kPostTotal * 52, "#9B59B6"],
                       ].map(([label, v1, v2, color]) => [
