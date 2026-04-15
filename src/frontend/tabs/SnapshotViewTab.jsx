@@ -219,17 +219,6 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                   const n = [...snapshots];
                   const s = { ...n[viewingSnap] };
                   const nfs = { ...(s.fullState || {}), [key]: val };
-                  // Auto-sync HSA annual → preDed HSA row (mirrors main app behavior)
-                  if (key === "cHsaAnn" || key === "kHsaAnn") {
-                    const cA = evalF(key === "cHsaAnn" ? val : (nfs.cHsaAnn || "0"));
-                    const kA = evalF(key === "kHsaAnn" ? val : (nfs.kHsaAnn || "0"));
-                    const pd = [...(nfs.preDed || DEF_PRE)];
-                    const hi = pd.findIndex(d => d.n.toLowerCase().includes("hsa"));
-                    if (hi >= 0) {
-                      pd[hi] = { ...pd[hi], c: String(Math.round(cA / 52 * 100) / 100), k: String(Math.round(kA / 52 * 100) / 100) };
-                      nfs.preDed = pd;
-                    }
-                  }
                   s.fullState = nfs;
                   n[viewingSnap] = recalcSnap(s);
                   setSnapshots(n);
@@ -238,8 +227,6 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                 const snapC4ro = fs.c4ro !== undefined ? fs.c4ro : "0";
                 const snapK4pre = fs.k4pre !== undefined ? fs.k4pre : "0";
                 const snapK4ro = fs.k4ro !== undefined ? fs.k4ro : "0";
-                const snapCHsa = fs.cHsaAnn !== undefined ? fs.cHsaAnn : "0";
-                const snapKHsa = fs.kHsaAnn !== undefined ? fs.kHsaAnn : "0";
                 // Calculate dollar amounts from percentages
                 const c4preAnn = snapCS * evalF(snapC4pre) / 100;
                 const c4roAnn = snapCS * evalF(snapC4ro) / 100;
@@ -249,7 +236,6 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                 const kPreTotal = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
                 const cPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
                 const kPostTotal = snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
-                // HSA is already included in preDed totals — don't add separately
                 const cTotalDed = cPreTotal * 52 + c4preAnn + c4roAnn + cPostTotal * 52;
                 const kTotalDed = kPreTotal * 52 + k4preAnn + k4roAnn + kPostTotal * 52;
                 return <>
@@ -274,17 +260,6 @@ export default function SnapshotViewTab({ mob, viewingSnap, setViewingSnap, snap
                       <div style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>Total 401k/yr</div>
                       <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(c4preAnn + c4roAnn)}</div>
                       <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(k4preAnn + k4roAnn)}</div>
-                    </div>
-                  </Card>
-                  <Card style={{ marginBottom: 20 }}>
-                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>HSA Annual Contributions</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Annual HSA</label>
-                        <NI value={String(snapCHsa)} onChange={v => updateSnapFS("cHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
-                        <div style={{ fontSize: 10, color: "var(--tx3, #999)", marginTop: 2 }}>{fmt(evalF(snapCHsa) / 52)}/wk</div></div>
-                      <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Annual HSA</label>
-                        <NI value={String(snapKHsa)} onChange={v => updateSnapFS("kHsaAnn", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
-                        <div style={{ fontSize: 10, color: "var(--tx3, #999)", marginTop: 2 }}>{fmt(evalF(snapKHsa) / 52)}/wk</div></div>
                     </div>
                   </Card>
                   <Card style={{ marginBottom: 20 }}>

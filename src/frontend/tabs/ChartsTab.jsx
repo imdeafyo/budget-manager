@@ -2,7 +2,7 @@ import { PieChart, Pie, Cell, LineChart, Line, AreaChart, Area, XAxis, YAxis, To
 import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setSnapshots, snapDate, setSnapDate, snapLabel, setSnapLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cHsaAnn, kHsaAnn, exp, sav, cats, ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear, setViewingSnap, setTab, restoreConfirm, setRestoreConfirm, restoreFullState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setSnapshots, snapDate, setSnapDate, snapLabel, setSnapLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear, setViewingSnap, setTab, restoreConfirm, setRestoreConfirm, restoreFullState }) {
   return (
     <div>
             <Card style={{ marginBottom: 20, overflow: "hidden" }}>
@@ -28,7 +28,7 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
                     cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
                     items: itemSnaps,
-                    fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cHsaAnn, kHsaAnn, exp, sav, cats, tax },
+                    fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, tax },
                   }]);
                   setSnapLabel(""); setSnapDate("");
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>

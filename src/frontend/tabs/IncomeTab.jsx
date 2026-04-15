@@ -1,7 +1,7 @@
 import { Card, NI, PI, EditTxt } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 
-export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, tax, upTax, cHsaAnn, setCHsaAnn, kHsaAnn, setKHsaAnn, preDed, setPreDed, postDed, setPostDed, C }) {
+export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, tax, upTax, preDed, setPreDed, postDed, setPostDed, C }) {
 
   const DedEditor = ({ items, setItems, label }) => (
     <Card>
@@ -68,13 +68,6 @@ export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, c
               <div><span style={{ color: "#999" }}>{p2Name} employer:</span> <strong>{C.kMP.toFixed(2)}%</strong> ({fmt(C.ks * C.kMP / 100)}/yr)</div>
             </div>
           </div>
-        </Card>
-        <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>HSA (Annual)</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{ p1Name } Annual</label><NI value={cHsaAnn} onChange={setCHsaAnn} prefix="$" /></div>
-            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{ p2Name } Annual</label><NI value={kHsaAnn} onChange={setKHsaAnn} prefix="$" /></div>
-          </div>
-          <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>Limit: {fmt(tax.hsaLimit)}/yr. Employer match: {fmt(tax.hsaEmployerMatch)}/yr. This auto-populates the HSA row in pre-tax deductions ({fmt(evalF(cHsaAnn) / 52)}/wk + {fmt(evalF(kHsaAnn) / 52)}/wk).</div>
         </Card>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
