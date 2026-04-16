@@ -65,3 +65,116 @@ export const fmt = n => (Math.round((n || 0) * 100) / 100).toLocaleString("en-US
 export const fp = n => `${(n * 100).toFixed(2)}%`;
 export const p2 = n => `${(+n).toFixed(2)}%`;
 export const pctOf = (part, total) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "0%";
+
+/* ── Pure recalcSnap: recomputes aggregate fields on a snapshot ──
+   Mirrors the main C calculation exactly: pre-tax deductions and 401(k) pre-tax
+   contributions reduce taxable income AND net pay; post-tax deductions and Roth
+   contributions reduce net pay but not taxable income. Bonus is taxed at marginal
+   rates (fed, SS if under cap, Medicare, state incremental, payroll).
+   Inputs are passed explicitly so this function is pure and testable. */
+export function recalcSnapPure(snapObj, ctx) {
+  const { tax, allTaxDB, fil, TAX_DB_FALLBACK } = ctx;
+  const it = snapObj.items || {};
+  let nec = 0, dis = 0, sv = 0;
+  Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; });
+  const sCS = snapObj.cSalary !== undefined ? snapObj.cSalary : (snapObj.cGrossW || 0) * 52;
+  const sKS = snapObj.kSalary !== undefined ? snapObj.kSalary : (snapObj.kGrossW || 0) * 52;
+  const sYr = snapObj.date ? snapObj.date.slice(0, 4) : tax.year;
+  const sTD = allTaxDB[sYr] || allTaxDB[tax.year] || TAX_DB_FALLBACK;
+  const sF = snapObj.fil || fil;
+  const sP1 = snapObj.p1State || (tax.p1State || {});
+  const sP2 = snapObj.p2State || (tax.p2State || {});
+  const sw1 = sCS / 52, sw2 = sKS / 52;
+  const fs = snapObj.fullState || {};
+  const snapPreDed = fs.preDed || [];
+  const snapPostDed = fs.postDed || [];
+  const cPreW = snapPreDed.reduce((s, d) => s + evalF(d.c), 0);
+  const kPreW = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
+  const c4prePct = Math.min(evalF(fs.c4pre || 0) / 100, 1);
+  const c4roPct = Math.min(evalF(fs.c4ro || 0) / 100, 1);
+  const k4prePct = Math.min(evalF(fs.k4pre || 0) / 100, 1);
+  const k4roPct = Math.min(evalF(fs.k4ro || 0) / 100, 1);
+  const c4preW = sCS * c4prePct / 52, c4roW = sCS * c4roPct / 52;
+  const k4preW = sKS * k4prePct / 52, k4roW = sKS * k4roPct / 52;
+  const cTxW = sw1 - cPreW - c4preW, kTxW = sw2 - kPreW - k4preW;
+  const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
+  const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
+  const sCTA = (cTxW + kTxW) * 52;
+  const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, cTxW * 52 - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, kTxW * 52 - sTD.stdSingle), sTD.fedSingle);
+  const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
+  const sT = cTxW + kTxW, sC = sT > 0 ? cTxW / sT : 0.5;
+  const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
+  const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
+  const mc1 = sw1 * mR, mc2 = sw2 * mR;
+  const st1 = calcStateTax(cTxW * 52, sP1.abbr || "", sF) / 52;
+  const st2 = calcStateTax(kTxW * 52, sP2.abbr || "", sF) / 52;
+  const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
+  const n1 = sw1 - cPreW - c4preW - c4roW - f1 - ss1 - mc1 - st1 - fl1 - snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
+  const n2 = sw2 - kPreW - k4preW - k4roW - f2 - ss2 - mc2 - st2 - fl2 - snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
+  const nW = n1 + n2;
+  const gW = sw1 + sw2;
+  const eW = (nec + dis) / 48;
+  const sW = sv / 48;
+  const rW = nW - eW - sW;
+  const cBonusPct = snapObj.cEaipPct !== undefined ? snapObj.cEaipPct : (snapObj.fullState?.cEaip !== undefined ? evalF(snapObj.fullState.cEaip) : 0);
+  const kBonusPct = snapObj.kEaipPct !== undefined ? snapObj.kEaipPct : (snapObj.fullState?.kEaip !== undefined ? evalF(snapObj.fullState.kEaip) : 0);
+  const cBonusGross = sCS * cBonusPct / 100;
+  const kBonusGross = sKS * kBonusPct / 100;
+  const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
+  const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(cTxW * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(cTxW * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
+  const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(kTxW * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(kTxW * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
+  const cBonusNet = cBonusGross - cBonusTax;
+  const kBonusNet = kBonusGross - kBonusTax;
+  const totalSavPlusRem = sW + Math.max(0, rW);
+  return {
+    ...snapObj,
+    necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
+    netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
+    savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
+    savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
+    eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
+    cEaipNet: cBonusNet, kEaipNet: kBonusNet,
+    cEaipPct: cBonusPct, kEaipPct: kBonusPct,
+  };
+}
+
+/* ── Forecast math: compound growth with periodic contributions ──
+   Standard future-value formula for a growing annuity (monthly contribution +
+   monthly compounding). Returns array of { year, nominal, real, contributions }
+   for years 0..horizon inclusive. `annualContribution` is total saved per year,
+   `initialBalance` is starting principal, `returnPct` and `inflationPct` are
+   annual percentages (e.g. 7 for 7%). */
+export function forecastGrowth(initialBalance, annualContribution, returnPct, inflationPct, horizonYears) {
+  const r = returnPct / 100;
+  const i = inflationPct / 100;
+  const monthlyR = Math.pow(1 + r, 1 / 12) - 1;
+  const monthlyC = annualContribution / 12;
+  const out = [];
+  let bal = initialBalance;
+  let contribTotal = initialBalance;
+  out.push({ year: 0, nominal: bal, real: bal, contributions: contribTotal });
+  for (let y = 1; y <= horizonYears; y++) {
+    for (let m = 0; m < 12; m++) {
+      bal = bal * (1 + monthlyR) + monthlyC;
+    }
+    contribTotal += annualContribution;
+    const real = bal / Math.pow(1 + i, y);
+    out.push({ year: y, nominal: bal, real, contributions: contribTotal });
+  }
+  return out;
+}
+
+/* ── Time to reach target (in years). Returns null if target unreachable
+   with given return and contribution. Uses same monthly-compounding model. */
+export function yearsToTarget(initialBalance, annualContribution, returnPct, targetAmount, maxYears = 100) {
+  if (initialBalance >= targetAmount) return 0;
+  const r = returnPct / 100;
+  const monthlyR = Math.pow(1 + r, 1 / 12) - 1;
+  const monthlyC = annualContribution / 12;
+  let bal = initialBalance;
+  for (let m = 1; m <= maxYears * 12; m++) {
+    bal = bal * (1 + monthlyR) + monthlyC;
+    if (bal >= targetAmount) return m / 12;
+  }
+  return null;
+}

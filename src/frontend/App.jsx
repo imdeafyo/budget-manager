@@ -7,6 +7,7 @@ import TaxRatesTab from "./tabs/TaxRatesTab.jsx";
 import BudgetTab, { BudgetToolbar } from "./tabs/BudgetTab.jsx";
 import ChartsTab from "./tabs/ChartsTab.jsx";
 import SnapshotViewTab from "./tabs/SnapshotViewTab.jsx";
+import ForecastTab from "./tabs/ForecastTab.jsx";
 
 
 
@@ -65,6 +66,7 @@ export default function App() {
             <button style={S.ts(S.tab === "settings")} onClick={() => S.setTab("settings")}>Income</button>
             <button style={S.ts(S.tab === "budget")} onClick={() => S.setTab("budget")}>Budget</button>
             <button style={S.ts(S.tab === "charts")} onClick={() => S.setTab("charts")}>Charts</button>
+            <button style={S.ts(S.tab === "forecast")} onClick={() => S.setTab("forecast")}>Forecast</button>
             <button style={S.ts(S.tab === "cats")} onClick={() => S.setTab("cats")}>Categories</button>
           </div>
         </div>
@@ -90,6 +92,9 @@ export default function App() {
 
         {/* ═══ CHARTS ═══ */}
         {S.tab === "charts" && <ChartsTab mob={S.mob} C={S.C} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} snapshots={S.snapshots} setSnapshots={S.setSnapshots} snapDate={S.snapDate} setSnapDate={S.setSnapDate} snapLabel={S.snapLabel} setSnapLabel={S.setSnapLabel} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} exp={S.exp} sav={S.sav} cats={S.cats} ewk={S.ewk} savSorted={S.savSorted} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} savRateBase={S.savRateBase} setSavRateBase={S.setSavRateBase} includeEaip={S.includeEaip} setIncludeEaip={S.setIncludeEaip} chartWeeks={S.chartWeeks} setChartWeeks={S.setChartWeeks} catTot={S.catTot} typTot={S.typTot} PieTooltip={S.PieTooltip} dragWrapRender={S.dragWrapRender} chartOrder={S.chartOrder} necDisMode={S.necDisMode} setNecDisMode={S.setNecDisMode} catHistMode={S.catHistMode} setCatHistMode={S.setCatHistMode} itemHistMode={S.itemHistMode} setItemHistMode={S.setItemHistMode} catHistoryName={S.catHistoryName} setCatHistoryName={S.setCatHistoryName} itemHistoryName={S.itemHistoryName} setItemHistoryName={S.setItemHistoryName} snapHistView={S.snapHistView} setSnapHistView={S.setSnapHistView} snapHistYear={S.snapHistYear} setSnapHistYear={S.setSnapHistYear} setViewingSnap={S.setViewingSnap} setTab={S.setTab} restoreConfirm={S.restoreConfirm} setRestoreConfirm={S.setRestoreConfirm} restoreFullState={S.restoreFullState} st={S.st} restoreLiveState={S.restoreLiveState} />}
+
+        {/* ═══ FORECAST ═══ */}
+        {S.tab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} />}
       </div>
     </div>
     </VisColsCtx.Provider>

@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV } from "../data/taxDB.js";
-import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf } from "../utils/calc.js";
+import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcSnapPure } from "../utils/calc.js";
 import { useM } from "../components/ui.jsx";
 
 /* ══════════════════════════ useAppState ══════════════════════════ */
 export default function useAppState() {
   const mob = useM();
-  const VALID_TABS = ["budget","taxes","settings","charts","cats"];
+  const VALID_TABS = ["budget","taxes","settings","charts","cats","forecast"];
   const parseHash = () => { const h = location.hash.replace("#","").split("/")[0]; return VALID_TABS.includes(h) ? h : "budget"; };
   const [tab, setTabRaw] = useState(parseHash);
   const skipPush = useRef(false);
@@ -254,72 +254,9 @@ export default function useAppState() {
   const rmExp = useCallback(idx => { setExp(prev => prev.filter((_, j) => j !== idx)); }, []);
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
-  // recalcSnap
+  // recalcSnap — thin wrapper around pure recalcSnapPure in calc.js (so it's testable)
   const recalcSnap = useCallback((snapObj) => {
-    const it = snapObj.items || {};
-    let nec = 0, dis = 0, sv = 0;
-    Object.values(it).forEach(x => { if (x.t === "N") nec += x.v || 0; else if (x.t === "D") dis += x.v || 0; else sv += x.v || 0; });
-    const sCS = snapObj.cSalary !== undefined ? snapObj.cSalary : (snapObj.cGrossW || 0) * 52;
-    const sKS = snapObj.kSalary !== undefined ? snapObj.kSalary : (snapObj.kGrossW || 0) * 52;
-    const sYr = snapObj.date ? snapObj.date.slice(0, 4) : tax.year;
-    const sTD = allTaxDB[sYr] || allTaxDB[tax.year] || TAX_DB["2026"];
-    const sF = snapObj.fil || fil;
-    const sP1 = snapObj.p1State || (tax.p1State || {});
-    const sP2 = snapObj.p2State || (tax.p2State || {});
-    const sw1 = sCS / 52, sw2 = sKS / 52;
-    const fs = snapObj.fullState || {};
-    const snapPreDed = fs.preDed || [];
-    const snapPostDed = fs.postDed || [];
-    const cPreW = snapPreDed.reduce((s, d) => s + evalF(d.c), 0);
-    const kPreW = snapPreDed.reduce((s, d) => s + evalF(d.k), 0);
-    const c4prePct = Math.min(evalF(fs.c4pre || 0) / 100, 1);
-    const c4roPct = Math.min(evalF(fs.c4ro || 0) / 100, 1);
-    const k4prePct = Math.min(evalF(fs.k4pre || 0) / 100, 1);
-    const k4roPct = Math.min(evalF(fs.k4ro || 0) / 100, 1);
-    const c4preW = sCS * c4prePct / 52, c4roW = sCS * c4roPct / 52;
-    const k4preW = sKS * k4prePct / 52, k4roW = sKS * k4roPct / 52;
-    const cTxW = sw1 - cPreW - c4preW, kTxW = sw2 - kPreW - k4preW;
-    const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
-    const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
-    const sCTA = (cTxW + kTxW) * 52;
-    const sFT = sF === "mfj" ? calcFed(Math.max(0, sCTA - sSd), sBr) : calcFed(Math.max(0, cTxW * 52 - sTD.stdSingle), sTD.fedSingle) + calcFed(Math.max(0, kTxW * 52 - sTD.stdSingle), sTD.fedSingle);
-    const sR = sTD.ssRate / 100, mR = sTD.medRate / 100;
-    const sT = cTxW + kTxW, sC = sT > 0 ? cTxW / sT : 0.5;
-    const f1 = (sFT / 52) * sC, f2 = (sFT / 52) * (1 - sC);
-    const ss1 = Math.min(sw1, sTD.ssCap / 52) * sR, ss2 = Math.min(sw2, sTD.ssCap / 52) * sR;
-    const mc1 = sw1 * mR, mc2 = sw2 * mR;
-    const st1 = calcStateTax(cTxW * 52, sP1.abbr || "", sF) / 52;
-    const st2 = calcStateTax(kTxW * 52, sP2.abbr || "", sF) / 52;
-    const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
-    const cPostW = c4roW + snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
-    const kPostW = k4roW + snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
-    const n1 = sw1 - cPreW - c4preW - c4roW - f1 - ss1 - mc1 - st1 - fl1 - snapPostDed.reduce((s, d) => s + evalF(d.c), 0);
-    const n2 = sw2 - kPreW - k4preW - k4roW - f2 - ss2 - mc2 - st2 - fl2 - snapPostDed.reduce((s, d) => s + evalF(d.k), 0);
-    const nW = n1 + n2;
-    const gW = sw1 + sw2;
-    const eW = (nec + dis) / 48;
-    const sW = sv / 48;
-    const rW = nW - eW - sW;
-    const cBonusPct = snapObj.cEaipPct !== undefined ? snapObj.cEaipPct : (snapObj.fullState?.cEaip !== undefined ? evalF(snapObj.fullState.cEaip) : 0);
-    const kBonusPct = snapObj.kEaipPct !== undefined ? snapObj.kEaipPct : (snapObj.fullState?.kEaip !== undefined ? evalF(snapObj.fullState.kEaip) : 0);
-    const cBonusGross = sCS * cBonusPct / 100;
-    const kBonusGross = sKS * kBonusPct / 100;
-    const mr = getMarg(Math.max(0, sCTA - sSd), sBr);
-    const cBonusTax = cBonusGross * mr + Math.max(0, Math.min(cBonusGross, Math.max(0, sTD.ssCap - sCS))) * sR + cBonusGross * mR + (cBonusGross > 0 ? calcStateTax(cTxW * 52 + cBonusGross, sP1.abbr || "", sF) - calcStateTax(cTxW * 52, sP1.abbr || "", sF) : 0) + cBonusGross * (sP1.famli || 0) / 100;
-    const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(kTxW * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(kTxW * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
-    const cBonusNet = cBonusGross - cBonusTax;
-    const kBonusNet = kBonusGross - kBonusTax;
-    const totalSavPlusRem = sW + Math.max(0, rW);
-    return {
-      ...snapObj,
-      necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
-      netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
-      savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
-      savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
-      eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
-      cEaipNet: cBonusNet, kEaipNet: kBonusNet,
-      cEaipPct: cBonusPct, kEaipPct: kBonusPct,
-    };
+    return recalcSnapPure(snapObj, { tax, allTaxDB, fil, TAX_DB_FALLBACK: TAX_DB["2026"] });
   }, [tax, fil, allTaxDB]);
 
   // Recalculate all snapshot aggregate fields on load
