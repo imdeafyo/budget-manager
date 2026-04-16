@@ -354,7 +354,22 @@ export default function useAppState() {
     }
   }, [snapshots, cats]);
 
-  /* Custom tooltip for pie charts */
+  const restoreLiveState = useCallback((ls) => {
+    if (!ls || typeof ls !== "object") return;
+    if (ls.cSal !== undefined) setCS(ls.cSal); if (ls.kSal !== undefined) setKS(ls.kSal);
+    if (ls.fil) setFil(ls.fil); if (ls.cEaip !== undefined) setCE(ls.cEaip); if (ls.kEaip !== undefined) setKE(ls.kEaip);
+    if (ls.preDed) setPreDed(ls.preDed); if (ls.postDed) setPostDed(ls.postDed);
+    if (ls.c4pre !== undefined) setC4pre(ls.c4pre); if (ls.c4ro !== undefined) setC4ro(ls.c4ro);
+    if (ls.k4pre !== undefined) setK4pre(ls.k4pre); if (ls.k4ro !== undefined) setK4ro(ls.k4ro);
+    if (ls.exp) setExp(ls.exp); if (ls.sav) setSav(ls.sav);
+    if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats);
+    if (ls.tax) setTax(ls.tax);
+    if (ls.p1Name) setP1Name(ls.p1Name); if (ls.p2Name) setP2Name(ls.p2Name);
+    if (ls.appTitle) setAppTitle(ls.appTitle); if (ls.customIcon !== undefined) setCustomIcon(ls.customIcon);
+    if (ls.sortBy) setSortBy(ls.sortBy); if (ls.sortDir) setSortDir(ls.sortDir);
+    if (ls.hlThresh !== undefined) setHlThresh(ls.hlThresh); if (ls.hlPeriod) setHlPeriod(ls.hlPeriod);
+    if (ls.customTaxDB) setCustomTaxDB(ls.customTaxDB);
+  }, []);
   const PieTooltip = ({ active, payload }) => {
     if (!active || !payload?.[0]) return null;
     const d = payload[0];
@@ -488,7 +503,7 @@ export default function useAppState() {
     editSnapIdx, setEditSnapIdx, restoreConfirm, setRestoreConfirm,
     viewingSnap, setViewingSnap, snapTab, setSnapTab,
     snapVisCols, setSnapVisCols,
-    recalcSnap, restoreFullState,
+    recalcSnap, restoreFullState, restoreLiveState, st,
     // bulk add
     showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal,
     bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec,
