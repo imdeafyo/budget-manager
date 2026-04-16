@@ -67,7 +67,7 @@ hook = hook.replace(apiLoadRe, `useEffect(() => {
       }
       if (raw) {
         const d = JSON.parse(raw);
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cHsaAnn:setCHsaAnn,kHsaAnn:setKHsaAnn,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name };
+        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name };
         Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)});
       }
     } catch(e) { console.error("Load error:", e); }
@@ -77,11 +77,12 @@ hook = hook.replace(apiLoadRe, `useEffect(() => {
 // 1b. Replace API save with localStorage save
 const apiSaveRe = /useEffect\(\(\) => \{ const t = setTimeout\(async \(\) => \{ try \{ await fetch\("\/api\/state"[\s\S]*?\}, \[st\]\);/;
 hook = hook.replace(apiSaveRe, `useEffect(() => {
+    if (!loaded) return;
     const t = setTimeout(() => {
       try { localStorage.setItem("budget-data", JSON.stringify(st)); } catch(e) { console.error("Save error:", e); }
     }, 600);
     return () => clearTimeout(t);
-  }, [st]);`);
+  }, [st, loaded]);`);
 
 // 1c. Add stRef right after the st useMemo line
 hook = hook.replace(
@@ -100,7 +101,7 @@ if (!hook.includes("useRef")) {
 // 1e. Add stRef to the return object
 hook = hook.replace(
   "// calculations\n    C,",
-  "// generic persistence\n    st, stRef,\n    // calculations\n    C,"
+  "// generic persistence\n    stRef,\n    // calculations\n    C,"
 );
 
 write(hookFile, hook);

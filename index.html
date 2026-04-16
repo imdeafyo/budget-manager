@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Budget Manager — Free, Private, No Sign-Up</title>
+<meta name="description" content="A free budget manager for dual-income households. Runs entirely in your browser — your financial data never leaves your device.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,wght@0,400;0,700;0,800;1,400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --orange: #E8573A;
+    --amber: #F2A93B;
+    --dark: #1a1a2e;
+    --dark2: #16162a;
+    --card: rgba(255,255,255,0.06);
+    --card-border: rgba(255,255,255,0.08);
+    --text: #e8e6e1;
+    --text2: #a09d96;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--dark);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 80px 24px 60px;
+    min-height: 70vh;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -120px; left: 50%; transform: translateX(-50%);
+    width: 800px; height: 800px;
+    background: radial-gradient(circle, rgba(232,87,58,0.12) 0%, rgba(242,169,59,0.06) 40%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .icon {
+    width: 72px; height: 72px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, var(--orange), var(--amber));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 34px;
+    margin-bottom: 32px;
+    box-shadow: 0 8px 32px rgba(232,87,58,0.3);
+    animation: float 4s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+  }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 800;
+    font-size: clamp(2.4rem, 6vw, 3.8rem);
+    line-height: 1.1;
+    margin-bottom: 20px;
+    letter-spacing: -0.02em;
+  }
+  h1 span {
+    background: linear-gradient(135deg, var(--orange), var(--amber));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .subtitle {
+    font-size: clamp(1rem, 2.5vw, 1.2rem);
+    color: var(--text2);
+    max-width: 520px;
+    line-height: 1.6;
+    margin-bottom: 40px;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 36px;
+    background: linear-gradient(135deg, var(--orange), #d94e32);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.05rem;
+    border-radius: 12px;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 0 4px 20px rgba(232,87,58,0.35);
+  }
+  .cta:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(232,87,58,0.45);
+  }
+  .cta svg { width: 20px; height: 20px; }
+
+  /* ── Features ── */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+  .feat {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 28px 24px;
+  }
+  .feat-icon {
+    font-size: 28px;
+    margin-bottom: 14px;
+  }
+  .feat h3 {
+    font-family: 'Fraunces', serif;
+    font-weight: 700;
+    font-size: 1.1rem;
+    margin-bottom: 8px;
+  }
+  .feat p {
+    color: var(--text2);
+    font-size: 0.92rem;
+    line-height: 1.55;
+  }
+
+  /* ── Privacy banner ── */
+  .privacy {
+    text-align: center;
+    padding: 40px 24px 60px;
+    border-top: 1px solid var(--card-border);
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  .privacy p {
+    color: var(--text2);
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+  .privacy a {
+    color: var(--amber);
+    text-decoration: none;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(232,87,58,0.1);
+    border: 1px solid rgba(232,87,58,0.2);
+    color: var(--orange);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 100px;
+    margin-bottom: 24px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="icon">💰</div>
+  <div class="badge">🔒 100% Private — Your Data Never Leaves Your Device</div>
+  <h1>Budget Manager<br>for <span>Real Life</span></h1>
+  <p class="subtitle">
+    Built for dual-income households. Federal &amp; state taxes, 401(k) matching, 
+    bonus calculations, snapshots over time — all running in your browser with zero sign-up.
+  </p>
+  <a href="budget-manager-generic.html" class="cta">
+    Open Budget Manager
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
+  </a>
+</section>
+
+<section class="features">
+  <div class="feat">
+    <div class="feat-icon">📊</div>
+    <h3>Dual-Income Ready</h3>
+    <p>Track two salaries, two 401(k)s, two state tax jurisdictions. Customizable person names throughout.</p>
+  </div>
+  <div class="feat">
+    <div class="feat-icon">🏛️</div>
+    <h3>Real Tax Math</h3>
+    <p>Federal brackets from 1996–2026, all 50 states + DC, Social Security caps, Medicare, FAMLI, and payroll taxes.</p>
+  </div>
+  <div class="feat">
+    <div class="feat-icon">📸</div>
+    <h3>Budget Snapshots</h3>
+    <p>Save and compare your budget over time. Edit past snapshots, track trend lines, and see how your spending evolves.</p>
+  </div>
+  <div class="feat">
+    <div class="feat-icon">🎨</div>
+    <h3>Three Themes</h3>
+    <p>Light, dark, and a soft sage-green "WAF" mode. Saved per device so each screen gets its own look.</p>
+  </div>
+  <div class="feat">
+    <div class="feat-icon">💾</div>
+    <h3>Runs Anywhere</h3>
+    <p>One HTML file, no install, no account. Works offline. Save a copy to your desktop or bookmark this page.</p>
+  </div>
+  <div class="feat">
+    <div class="feat-icon">📤</div>
+    <h3>Export &amp; Import</h3>
+    <p>Export your data as JSON to back up or move between devices. Import it back anytime.</p>
+  </div>
+</section>
+
+<section class="privacy">
+  <p>
+    Your financial data is stored in your browser's local storage and is never transmitted to any server. 
+    This is a fully client-side application — there is no backend, no analytics, no tracking. 
+    <br><br>
+    Open source on <a href="https://github.com/imdeafyo/budget-manager" target="_blank" rel="noopener">GitHub</a>.
+  </p>
+</section>
+
+</body>
+</html>
