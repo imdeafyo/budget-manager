@@ -32,10 +32,10 @@ export default function TaxRatesTab({ mob, tax, upTax, upP1State, upP2State, set
         <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Payroll & State Rates</h3>
         <p style={{ fontSize: 12, color: "#999", margin: "0 0 16px" }}>Update when rates change each year.</p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Tax Year</label><input value={tax.year} onChange={e => upTax("year", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
+          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Tax Year</label><input value={tax.year} onChange={e => upTax("year", e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)", boxSizing: "border-box" }} /></div>
           <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>401(k) Base Limit</label><NI value={tax.k401Lim} onChange={v => upTax("k401Lim", +v || 0)} prefix="$" /></div>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} State</label><input list="state-names" value={(tax.p1State || {}).name || ""} onChange={e => upP1State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label><input list="state-names-2" value={(tax.p2State || {}).name || ""} onChange={e => upP2State("name", e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /><datalist id="state-names-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} State</label><input list="state-names" value={(tax.p1State || {}).name || ""} onChange={e => upP1State("name", e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)", boxSizing: "border-box" }} /><datalist id="state-names">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
+          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label><input list="state-names-2" value={(tax.p2State || {}).name || ""} onChange={e => upP2State("name", e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)", boxSizing: "border-box" }} /><datalist id="state-names-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
           <div style={{ gridColumn: "1/-1", padding: "10px 12px", background: "var(--input-bg, #f4f4f4)", borderRadius: 8, fontSize: 11, color: "var(--tx2, #555)" }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Calculated Rates ({tax.year})</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
@@ -53,31 +53,30 @@ export default function TaxRatesTab({ mob, tax, upTax, upP1State, upP2State, set
           </div>
         </div>
         <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>{p1Name} — Employer Match</h4>
-        <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.cMatchBase || 0} onChange={e => upTax("cMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.cMatchBase || 0} onChange={e => upTax("cMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>Up to EE %</span><span>Match rate</span><span /></div>
         {(tax.cMatchTiers || []).map((t, i) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, marginBottom: 2 }}>
-            <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
-            <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+            <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+            <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.cMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("cMatchTiers", n); }} style={{ border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
             <button onClick={() => upTax("cMatchTiers", (tax.cMatchTiers || []).filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
           </div>
         ))}
         <button onClick={() => upTax("cMatchTiers", [...(tax.cMatchTiers || []), { upTo: 10, rate: 0.5 }])} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Tier</button>
 
         <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>{p2Name} — Employer Match</h4>
-        <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.kMatchBase || 0} onChange={e => upTax("kMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Base: <input type="number" value={tax.kMatchBase || 0} onChange={e => upTax("kMatchBase", +e.target.value || 0)} style={{ width: 40, border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "center" }} />%</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, fontSize: 11, fontWeight: 700, color: "#999", marginBottom: 4 }}><span>Up to EE %</span><span>Match rate</span><span /></div>
         {(tax.kMatchTiers || []).map((t, i) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 24px", gap: 4, marginBottom: 2 }}>
-            <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
-            <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid #ddd", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+            <input type="number" value={t.upTo} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], upTo: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+            <input type="number" step="0.1" value={t.rate} onChange={e => { const n = [...(tax.kMatchTiers || [])]; n[i] = { ...n[i], rate: +e.target.value }; upTax("kMatchTiers", n); }} style={{ border: "1px solid var(--input-border, #ddd)", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
             <button onClick={() => upTax("kMatchTiers", (tax.kMatchTiers || []).filter((_, j) => j !== i))} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc" }}>×</button>
           </div>
         ))}
         <button onClick={() => upTax("kMatchTiers", [...(tax.kMatchTiers || []), { upTo: 10, rate: 0.5 }])} style={{ marginTop: 4, padding: "4px 12px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Tier</button>
-        <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>HSA</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Annual Limit</label><NI value={tax.hsaLimit} onChange={v => upTax("hsaLimit", +v || 0)} prefix="$" /></div>
+        <h4 style={{ margin: "16px 0 8px", fontSize: 14, fontWeight: 700 }}>HSA Employer Match</h4>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
           <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Employer Annual Match</label><NI value={tax.hsaEmployerMatch} onChange={v => upTax("hsaEmployerMatch", +v || 0)} prefix="$" /></div>
         </div>
         <div style={{ marginTop: 20, padding: 16, background: "var(--input-bg, #f8f8f8)", borderRadius: 10 }}>

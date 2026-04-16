@@ -207,23 +207,23 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Add Budget Item</h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Name</label>
-                <input value={niN} onChange={e => setNiN(e.target.value)} placeholder="Item name..." style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
+                <input value={niN} onChange={e => setNiN(e.target.value)} placeholder="Item name..." style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /></div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Section</label>
-                  <select value={niS} onChange={e => setNiS(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="exp">Expense</option><option value="sav">Savings</option></select></div>
+                  <select value={niS} onChange={e => setNiS(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="exp">Expense</option><option value="sav">Savings</option></select></div>
                 {niS === "exp" ? <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Type</label>
-                  <select value={niT} onChange={e => setNiT(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="N">Necessity</option><option value="D">Discretionary</option></select></div> : <div />}
+                  <select value={niT} onChange={e => setNiT(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="N">Necessity</option><option value="D">Discretionary</option></select></div> : <div />}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Category</label>
-                  <select value={niC} onChange={e => setNiC(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}>{(niS === "sav" ? savCats : cats).map(c => <option key={c}>{c}</option>)}</select></div>
+                  <select value={niC} onChange={e => setNiC(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}>{(niS === "sav" ? savCats : cats).map(c => <option key={c}>{c}</option>)}</select></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Period</label>
-                  <select value={niP} onChange={e => setNiP(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="w">Weekly</option><option value="m">Monthly</option><option value="y">Yearly</option></select></div>
+                  <select value={niP} onChange={e => setNiP(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="w">Weekly</option><option value="m">Monthly</option><option value="y">Yearly</option></select></div>
               </div>
               <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Amount</label>
                 <NI value={niV} onChange={setNiV} prefix="$" /></div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-                <button onClick={() => setShowAddItem(false)} style={{ padding: "9px 18px", border: "2px solid #ddd", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
+                <button onClick={() => setShowAddItem(false)} style={{ padding: "9px 18px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
                 <button onClick={() => { if (!niN.trim()) return; if (niS === "exp") setExp([...exp, { n: niN.trim(), c: niC || cats[0], t: niT, v: niV || "0", p: niP }]); else setSav([...sav, { n: niN.trim(), c: niC || savCats[0], v: niV || "0", p: niP }]); setNiN(""); setNiV(""); setShowAddItem(false); }}
                   style={{ padding: "9px 18px", background: "#E8573A", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Add</button>
               </div>
@@ -239,18 +239,18 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Add Item to Multiple Budgets</h3>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Name</label>
-                <input value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="Item name..." style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "#fafafa", boxSizing: "border-box" }} /></div>
+                <input value={bulkName} onChange={e => setBulkName(e.target.value)} placeholder="Item name..." style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /></div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Section</label>
-                  <select value={bulkSec} onChange={e => setBulkSec(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="exp">Expense</option><option value="sav">Savings</option></select></div>
+                  <select value={bulkSec} onChange={e => setBulkSec(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="exp">Expense</option><option value="sav">Savings</option></select></div>
                 {bulkSec === "exp" ? <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Type</label>
-                  <select value={bulkType} onChange={e => setBulkType(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="N">Necessity</option><option value="D">Discretionary</option></select></div> : <div />}
+                  <select value={bulkType} onChange={e => setBulkType(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="N">Necessity</option><option value="D">Discretionary</option></select></div> : <div />}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Category</label>
-                  <select value={bulkCat} onChange={e => setBulkCat(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}>{(bulkSec === "sav" ? savCats : cats).map(c => <option key={c}>{c}</option>)}</select></div>
+                  <select value={bulkCat} onChange={e => setBulkCat(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}>{(bulkSec === "sav" ? savCats : cats).map(c => <option key={c}>{c}</option>)}</select></div>
                 <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Period</label>
-                  <select value={bulkPer} onChange={e => setBulkPer(e.target.value)} style={{ width: "100%", border: "2px solid #e0e0e0", borderRadius: 8, padding: 8, fontSize: 13, background: "#fafafa" }}><option value="w">Weekly</option><option value="m">Monthly</option><option value="y">Yearly</option></select></div>
+                  <select value={bulkPer} onChange={e => setBulkPer(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)" }}><option value="w">Weekly</option><option value="m">Monthly</option><option value="y">Yearly</option></select></div>
               </div>
               <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Amount</label>
                 <NI value={bulkVal} onChange={setBulkVal} prefix="$" /></div>
@@ -275,7 +275,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
                 </div>
               </div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-                <button onClick={() => setShowBulkAdd(false)} style={{ padding: "9px 18px", border: "2px solid #ddd", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
+                <button onClick={() => setShowBulkAdd(false)} style={{ padding: "9px 18px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
                 <button onClick={() => {
                   if (!bulkName.trim()) return;
                   const name = bulkName.trim();

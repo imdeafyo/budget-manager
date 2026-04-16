@@ -16,7 +16,7 @@ export function NI({ value, onChange, prefix, style, onBlurResolve, formula, aut
   useEffect(() => { if (!focused) setLocal(String(value)); }, [value, focused]);
   useEffect(() => { if (af && ref.current) { ref.current.focus(); ref.current.select(); } }, []);
   return (
-    <div style={{ display: "flex", alignItems: "center", border: focused ? "2px solid #556FB5" : "2px solid #e0e0e0", borderRadius: 8, overflow: "hidden", background: "var(--input-bg, #fafafa)", position: "relative", ...style }}
+    <div style={{ display: "flex", alignItems: "center", border: focused ? "2px solid #556FB5" : "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, overflow: "hidden", background: "var(--input-bg, #fafafa)", position: "relative", ...style }}
       title={formula && formula !== String(value) ? `Formula: ${formula}` : undefined}>
       {prefix && <span style={{ padding: "0 0 0 8px", color: "#999", fontWeight: 600, fontSize: 13 }}>{prefix}</span>}
       <input ref={ref} value={local}
@@ -46,7 +46,7 @@ export function PI({ value, onChange }) {
   const ref = useRef(null);
   useEffect(() => { if (!focused) setLocal(String(value)); }, [value, focused]);
   return (
-    <div style={{ display: "flex", alignItems: "center", border: focused ? "2px solid #556FB5" : "2px solid #e0e0e0", borderRadius: 8, overflow: "hidden", background: "#fafafa" }}>
+    <div style={{ display: "flex", alignItems: "center", border: focused ? "2px solid #556FB5" : "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, overflow: "hidden", background: "var(--input-bg, #fafafa)" }}>
       <input ref={ref} type="number" step="0.01" value={local}
         onFocus={() => setFocused(true)}
         onChange={e => setLocal(e.target.value)}

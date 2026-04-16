@@ -81,7 +81,7 @@ export default function App() {
         {S.tab === "settings" && <IncomeTab mob={S.mob} p1Name={S.p1Name} setP1Name={S.setP1Name} p2Name={S.p2Name} setP2Name={S.setP2Name} cSal={S.cSal} setCS={S.setCS} kSal={S.kSal} setKS={S.setKS} cEaip={S.cEaip} setCE={S.setCE} kEaip={S.kEaip} setKE={S.setKE} fil={S.fil} setFil={S.setFil} c4pre={S.c4pre} setC4pre={S.setC4pre} c4ro={S.c4ro} setC4ro={S.setC4ro} k4pre={S.k4pre} setK4pre={S.setK4pre} k4ro={S.k4ro} setK4ro={S.setK4ro} tax={S.tax} upTax={S.upTax} preDed={S.preDed} setPreDed={S.setPreDed} postDed={S.postDed} setPostDed={S.setPostDed} C={S.C} />}
 
         {/* ═══ CATEGORIES ═══ */}
-        {S.tab === "cats" && <CategoriesTab mob={S.mob} cats={S.cats} setCats={S.setCats} newCat={S.newCat} setNewCat={S.setNewCat} savCats={S.savCats} setSavCats={S.setSavCats} />}
+        {S.tab === "cats" && <CategoriesTab mob={S.mob} cats={S.cats} setCats={S.setCats} newCat={S.newCat} setNewCat={S.setNewCat} savCats={S.savCats} setSavCats={S.setSavCats} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} />}
 
         {/* ═══ BUDGET SNAPSHOT VIEW ═══ */}
         {S.tab === "budget" && S.viewingSnap !== null && S.snapshots[S.viewingSnap] && <SnapshotViewTab mob={S.mob} viewingSnap={S.viewingSnap} setViewingSnap={S.setViewingSnap} snapshots={S.snapshots} setSnapshots={S.setSnapshots} recalcSnap={S.recalcSnap} snapVisCols={S.snapVisCols} setSnapVisCols={S.setSnapVisCols} snapTab={S.snapTab} setSnapTab={S.setSnapTab} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} allTaxDB={S.allTaxDB} fil={S.fil} cats={S.cats} savCats={S.savCats} />}
