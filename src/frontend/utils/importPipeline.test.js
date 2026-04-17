@@ -53,8 +53,24 @@ describe("parseDate", () => {
   it("rejects bad MMM abbreviations", () => {
     expect(parseDate("07-Xyz-26", "DD-MMM-YY")).toBe(null);
   });
+  it("parses MM/DD/YY (US 2-digit year, pivot: <50 → 2000s, ≥50 → 1900s)", () => {
+    expect(parseDate("01/15/26", "MM/DD/YY")).toBe("2026-01-15");
+    expect(parseDate("01/15/99", "MM/DD/YY")).toBe("1999-01-15");
+    expect(parseDate("01/15/49", "MM/DD/YY")).toBe("2049-01-15");
+    expect(parseDate("01/15/50", "MM/DD/YY")).toBe("1950-01-15");
+  });
+  it("parses single-digit M/D/YY", () => {
+    expect(parseDate("3/7/26", "M/D/YY")).toBe("2026-03-07");
+  });
+  it("parses DD/MM/YY", () => {
+    expect(parseDate("15/01/26", "DD/MM/YY")).toBe("2026-01-15");
+  });
+  it("parses MM-DD-YY with dashes", () => {
+    expect(parseDate("01-15-26", "MM-DD-YY")).toBe("2026-01-15");
+  });
   it("has all common formats documented", () => {
     expect(COMMON_DATE_FORMATS).toContain("MM/DD/YYYY");
+    expect(COMMON_DATE_FORMATS).toContain("MM/DD/YY");
     expect(COMMON_DATE_FORMATS).toContain("YYYY-MM-DD");
     expect(COMMON_DATE_FORMATS).toContain("DD-MMM-YY");
   });
@@ -325,6 +341,17 @@ describe("guessMapping", () => {
 describe("guessDateFormat", () => {
   it("picks MM/DD/YYYY when all samples match", () => {
     expect(guessDateFormat(["01/15/2026", "03/07/2026", "12/31/2025"])).toBe("MM/DD/YYYY");
+  });
+  it("picks MM/DD/YY when all samples have 2-digit years", () => {
+    expect(guessDateFormat(["01/15/26", "12/31/25", "03/07/26"])).toBe("MM/DD/YY");
+  });
+  it("prefers US-style MM/DD/YY over DD/MM/YY when samples are ambiguous", () => {
+    // 03/07/26 could be either, but MM/DD/YY comes first in the format list
+    expect(guessDateFormat(["03/07/26", "04/05/26"])).toBe("MM/DD/YY");
+  });
+  it("picks DD/MM/YY when samples force that interpretation (day > 12)", () => {
+    // 15 can't be a month, so MM/DD/YY fails
+    expect(guessDateFormat(["15/03/26", "28/06/26"])).toBe("DD/MM/YY");
   });
   it("picks YYYY-MM-DD when all samples match", () => {
     expect(guessDateFormat(["2026-01-15", "2026-03-07"])).toBe("YYYY-MM-DD");

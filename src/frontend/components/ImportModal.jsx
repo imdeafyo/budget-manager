@@ -86,19 +86,32 @@ export default function ImportModal(props) {
       const match = findProfileByHeaders(importProfiles, sig);
 
       if (match) {
-        setProfile({ ...match });
+        // Defensive: if the bank changed their export format, the saved
+        // dateFormat may no longer parse the samples. Try to auto-redetect.
+        let dateFormat = match.dateFormat;
+        const dateCol = match.mapping?.date;
+        if (dateCol) {
+          const samples = rows.slice(0, 20).map(r => r[dateCol]).filter(Boolean);
+          const parsesCleanly = samples.length > 0
+            && samples.every(s => parseDate(s, dateFormat) !== null);
+          if (!parsesCleanly) {
+            const g = guessDateFormat(samples);
+            if (g) dateFormat = g;
+          }
+        }
+        setProfile({ ...match, dateFormat });
         setMatchedProfileId(match.id);
         setProfileName(match.name);
       } else {
         // Build a best-guess starter profile
         const guess = guessMapping(headers);
-        // Try to guess date format from samples
+        // Try to guess date format from samples; leave null if unsure so the
+        // picker shows "select a format" rather than a silent wrong default.
         const dateCol = guess.mapping.date;
-        let dateFormat = "MM/DD/YYYY";
+        let dateFormat = null;
         if (dateCol) {
-          const samples = rows.slice(0, 20).map(r => r[dateCol]);
-          const g = guessDateFormat(samples);
-          if (g) dateFormat = g;
+          const samples = rows.slice(0, 20).map(r => r[dateCol]).filter(Boolean);
+          dateFormat = guessDateFormat(samples);
         }
         setProfile({
           ...blankProfile(),
@@ -345,6 +358,8 @@ function MappingStep({ headers, rows, profile, setProfile, transactionColumns, b
   }, [dateSamples, profile.dateFormat]);
 
   const canProceed = !!profile.mapping?.date
+    && !!profile.dateFormat
+    && (dateValidation ? dateValidation.ok === dateValidation.total : true)
     && (profile.amountConvention === "separate"
         ? (profile.mapping?.debit || profile.mapping?.credit)
         : profile.mapping?.amount);
@@ -377,11 +392,17 @@ function MappingStep({ headers, rows, profile, setProfile, transactionColumns, b
           </div>
           <div>
             <Label>Date format</Label>
-            <select value={profile.dateFormat || ""} onChange={(e) => up({ dateFormat: e.target.value })} style={{ ...inp(), width: "100%" }}>
+            <select value={profile.dateFormat || ""} onChange={(e) => up({ dateFormat: e.target.value || null })} style={{ ...inp(), width: "100%" }}>
+              <option value="">— pick a format —</option>
               {COMMON_DATE_FORMATS.map(f => <option key={f} value={f}>{f}</option>)}
             </select>
           </div>
         </div>
+        {!profile.dateFormat && dateCol && dateSamples.length > 0 && (
+          <div style={{ fontSize: 12, marginTop: 4, color: "#E8573A" }}>
+            Couldn't auto-detect the date format. Please pick one above. Example value: <code style={{ fontFamily: "monospace", background: "var(--input-bg, #f5f5f5)", padding: "1px 4px", borderRadius: 3 }}>{dateSamples[0]}</code>
+          </div>
+        )}
         {dateValidation && (
           <div style={{ fontSize: 12, marginTop: 4, color: dateValidation.ok === dateValidation.total ? "#2ECC71" : "#E8573A" }}>
             {dateValidation.ok}/{dateValidation.total} sample dates parse correctly.
