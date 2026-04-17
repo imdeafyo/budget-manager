@@ -8,6 +8,8 @@ import BudgetTab, { BudgetToolbar } from "./tabs/BudgetTab.jsx";
 import ChartsTab from "./tabs/ChartsTab.jsx";
 import SnapshotViewTab from "./tabs/SnapshotViewTab.jsx";
 import ForecastTab from "./tabs/ForecastTab.jsx";
+import TransactionsTab from "./tabs/TransactionsTab.jsx";
+import SettingsTab from "./tabs/SettingsTab.jsx";
 
 
 
@@ -65,9 +67,11 @@ export default function App() {
             <button style={S.ts(S.tab === "taxes")} onClick={() => S.setTab("taxes")}>Tax Rates</button>
             <button style={S.ts(S.tab === "settings")} onClick={() => S.setTab("settings")}>Income</button>
             <button style={S.ts(S.tab === "budget")} onClick={() => S.setTab("budget")}>Budget</button>
+            <button style={S.ts(S.tab === "transactions")} onClick={() => S.setTab("transactions")}>Transactions</button>
             <button style={S.ts(S.tab === "charts")} onClick={() => S.setTab("charts")}>Charts</button>
             <button style={S.ts(S.tab === "forecast")} onClick={() => S.setTab("forecast")}>Forecast</button>
             <button style={S.ts(S.tab === "cats")} onClick={() => S.setTab("cats")}>Categories</button>
+            <button style={S.ts(S.tab === "prefs")} onClick={() => S.setTab("prefs")}>Settings</button>
           </div>
         </div>
         {/* Banner + Toolbar - inside sticky header, only on budget tab */}
@@ -95,6 +99,38 @@ export default function App() {
 
         {/* ═══ FORECAST ═══ */}
         {S.tab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} />}
+
+        {/* ═══ TRANSACTIONS ═══ */}
+        {S.tab === "transactions" && <TransactionsTab
+          mob={S.mob}
+          transactions={S.transactions}
+          transactionColumns={S.transactionColumns}
+          hiddenColumns={S.hiddenColumns}
+          setHiddenColumns={S.setHiddenColumns}
+          rowCapWarn={S.rowCapWarn}
+          rowCapThreshold={S.rowCapThreshold}
+          cats={S.cats}
+          savCats={S.savCats}
+          addTransactions={S.addTransactions}
+          updateTransaction={S.updateTransaction}
+          deleteTransactions={S.deleteTransactions}
+          setTransactions={S.setTransactions}
+          txLoaded={S.txLoaded}
+        />}
+
+        {/* ═══ SETTINGS (prefs) ═══ */}
+        {S.tab === "prefs" && <SettingsTab
+          mob={S.mob}
+          transactionColumns={S.transactionColumns}
+          setTransactionColumns={S.setTransactionColumns}
+          hiddenColumns={S.hiddenColumns}
+          setHiddenColumns={S.setHiddenColumns}
+          rowCapWarn={S.rowCapWarn}
+          setRowCapWarn={S.setRowCapWarn}
+          rowCapThreshold={S.rowCapThreshold}
+          setRowCapThreshold={S.setRowCapThreshold}
+          transactions={S.transactions}
+        />}
       </div>
     </div>
     </VisColsCtx.Provider>

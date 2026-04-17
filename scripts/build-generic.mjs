@@ -67,11 +67,12 @@ hook = hook.replace(apiLoadRe, `useEffect(() => {
       }
       if (raw) {
         const d = JSON.parse(raw);
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name };
+        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns };
         Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)});
       }
     } catch(e) { console.error("Load error:", e); }
     setLoaded(true);
+    setTxLoaded(true);
   }, []);`);
 
 // 1b. Replace API save with localStorage save
@@ -88,6 +89,22 @@ hook = hook.replace(apiSaveRe, `useEffect(() => {
 hook = hook.replace(
   /const st = useMemo\(\(\) => \(\{.*?\]\);/s,
   (match) => match + `\n  const stRef = useRef(st);\n  useEffect(() => { stRef.current = st; }, [st]);`
+);
+
+// 1c2. Swap MODE = "deploy" → "generic" so the CRUD helpers skip fetch() calls
+hook = hook.replace(/const MODE = "deploy";/, 'const MODE = "generic";');
+
+// 1c3. Include transactions in the st useMemo so it round-trips through
+// localStorage + textarea. We append it to both the object literal and the
+// dependency array of the first st useMemo we find.
+hook = hook.replace(
+  /const st = useMemo\(\(\) => \(\{([^}]+)\}\), \[([^\]]+)\]\);/,
+  (match, objBody, deps) => {
+    if (objBody.includes("transactions")) return match; // idempotent
+    const newObj = objBody.trim().replace(/,?\s*$/, "") + ",transactions";
+    const newDeps = deps.trim().replace(/,?\s*$/, "") + ",transactions";
+    return `const st = useMemo(() => ({${newObj}}), [${newDeps}]);`;
+  }
 );
 
 // 1d. Make sure useRef is imported

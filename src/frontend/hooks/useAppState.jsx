@@ -1,12 +1,18 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcSnapPure } from "../utils/calc.js";
+import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { useM } from "../components/ui.jsx";
+
+/* ── Runtime mode. "deploy" uses /api/transactions; "generic" bundles
+   transactions into localStorage via the main st blob. The build-generic
+   script rewrites this constant to "generic" when assembling the single-file HTML. */
+const MODE = "deploy";
 
 /* ══════════════════════════ useAppState ══════════════════════════ */
 export default function useAppState() {
   const mob = useM();
-  const VALID_TABS = ["budget","taxes","settings","charts","cats","forecast"];
+  const VALID_TABS = ["budget","taxes","settings","charts","cats","forecast","transactions","prefs"];
   const parseHash = () => { const h = location.hash.replace("#","").split("/")[0]; return VALID_TABS.includes(h) ? h : "budget"; };
   const [tab, setTabRaw] = useState(parseHash);
   const skipPush = useRef(false);
@@ -139,11 +145,96 @@ export default function useAppState() {
   const toggleAll = () => { if (allExpanded) collapseAll(); else expandAll(); };
   const [includeEaip, setIncludeEaip] = useState(false);
 
+  /* ── Transactions state ──
+     transactions: the row array
+     transactionColumns: user-defined custom columns (builtins live in BUILTIN_COLUMNS)
+     importProfiles: saved CSV mapping profiles (keyed by a user-chosen name)
+     categoryAliases: global alias map (per-profile aliases live inside each profile)
+     rowCapWarn / rowCapThreshold: user-configurable warning when tx count gets large
+     hiddenColumns: ids of built-in or custom columns hidden from the table (toggle-able) */
+  const [transactions, setTransactions] = useState([]);
+  const [transactionColumns, setTransactionColumns] = useState([]);
+  const [importProfiles, setImportProfiles] = useState([]);
+  const [categoryAliases, setCategoryAliases] = useState({});
+  const [rowCapWarn, setRowCapWarn] = useState(true);
+  const [rowCapThreshold, setRowCapThreshold] = useState(10000);
+  const [hiddenColumns, setHiddenColumns] = useState([]);
+  const [txLoaded, setTxLoaded] = useState(false);
+
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name]);
+  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,rowCapWarn,rowCapThreshold,hiddenColumns}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,rowCapWarn,rowCapThreshold,hiddenColumns]);
   useEffect(() => { const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st]);
+
+  /* ── Transactions: load from /api/transactions on mount (deploy).
+       Generic mode patches this block to read transactions from st during
+       the main load, so this effect is replaced there. */
+  useEffect(() => {
+    if (MODE !== "deploy") { setTxLoaded(true); return; }
+    (async () => {
+      try {
+        const r = await fetch("/api/transactions").then(r => r.json());
+        if (r?.transactions) setTransactions(r.transactions);
+      } catch(e) { /* offline or no backend — fall back to empty */ }
+      setTxLoaded(true);
+    })();
+  }, []);
+
+  /* ── Transactions CRUD (deploy: push to /api/transactions; generic: state-only).
+       We expose helper functions so tabs don't need to know about the mode. */
+  const addTransactions = useCallback(async (newRows) => {
+    const rows = newRows.map(r => newTransaction(r));
+    setTransactions(prev => [...rows, ...prev]);
+    if (MODE === "deploy") {
+      try {
+        await fetch("/api/transactions", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transactions: rows }),
+        });
+      } catch(e) { /* keep local state even if backend save failed */ }
+    }
+    return rows;
+  }, []);
+
+  const updateTransaction = useCallback(async (tx) => {
+    const updated = { ...tx, updated_at: new Date().toISOString() };
+    setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t));
+    if (MODE === "deploy") {
+      try {
+        await fetch(`/api/transactions/${tx.id}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transaction: updated }),
+        });
+      } catch(e) {}
+    }
+  }, []);
+
+  const deleteTransactions = useCallback(async (idSet) => {
+    const ids = Array.from(idSet);
+    setTransactions(prev => prev.filter(t => !idSet.has(t.id)));
+    if (MODE === "deploy" && ids.length) {
+      try {
+        await fetch("/api/transactions", {
+          method: "DELETE", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        });
+      } catch(e) {}
+    }
+  }, []);
+
+  const deleteImportBatch = useCallback(async (batchId) => {
+    setTransactions(prev => prev.filter(t => t.import_batch_id !== batchId));
+    if (MODE === "deploy") {
+      try {
+        await fetch("/api/transactions", {
+          method: "DELETE", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ batch_id: batchId }),
+        });
+      } catch(e) {}
+    }
+  }, []);
+
 
   /* ── Tax calculations ── */
   const C = useMemo(() => {
@@ -462,5 +553,16 @@ export default function useAppState() {
     catTot, typTot,
     // CRUD
     updExp, updSav, rmExp, rmSav,
+    // transactions
+    transactions, setTransactions,
+    transactionColumns, setTransactionColumns,
+    importProfiles, setImportProfiles,
+    categoryAliases, setCategoryAliases,
+    rowCapWarn, setRowCapWarn,
+    rowCapThreshold, setRowCapThreshold,
+    hiddenColumns, setHiddenColumns,
+    txLoaded,
+    addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,
+    MODE,
   };
 }
