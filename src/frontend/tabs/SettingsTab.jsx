@@ -1,6 +1,33 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, SH } from "../components/ui.jsx";
 import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils/transactions.js";
+
+/* ── CollapsibleCard ──
+   Card with a clickable header that toggles the body open/closed. Persists
+   open state to localStorage under `budget-settings-open:{id}`. Defaults to
+   collapsed so the Settings tab isn't a wall on first visit. */
+function CollapsibleCard({ id, title, summary, children, style }) {
+  const storageKey = `budget-settings-open:${id}`;
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(storageKey) === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, open ? "1" : "0"); } catch {}
+  }, [open, storageKey]);
+  return (
+    <Card style={style}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}>
+        <span style={{ fontSize: 14, color: "var(--tx2, #555)", width: 16, display: "inline-block", textAlign: "center", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 1.5 }}>{title}</div>
+          {!open && summary && <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 2 }}>{summary}</div>}
+        </div>
+      </div>
+      {open && <div style={{ marginTop: 14 }}>{children}</div>}
+    </Card>
+  );
+}
 
 export default function SettingsTab(props) {
   const {
@@ -94,8 +121,11 @@ export default function SettingsTab(props) {
         <div style={{ fontSize: 12, color: "var(--tx3, #999)" }}>Preferences for transaction handling and display.</div>
       </Card>
 
-      <Card style={{ marginTop: 16 }}>
-        <SH>Transaction row cap</SH>
+      <CollapsibleCard
+        id="rowcap"
+        title="Transaction row cap"
+        summary={`${transactions.length.toLocaleString()} stored · warn at ${rowCapThreshold.toLocaleString()} ${rowCapWarn ? "(enabled)" : "(disabled)"}`}
+        style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Large transaction counts can slow down browser-based persistence (the single-file generic HTML stores
           everything in localStorage as one JSON blob). Set a threshold above which you want a warning banner
@@ -120,10 +150,13 @@ export default function SettingsTab(props) {
           Currently storing <strong style={{ color: "var(--tx, #333)" }}>{transactions.length.toLocaleString()}</strong> transactions.
           {rowCapWarn && transactions.length > rowCapThreshold && <span style={{ color: "#F2A93B", marginLeft: 8 }}>⚠️ Over threshold.</span>}
         </div>
-      </Card>
+      </CollapsibleCard>
 
-      <Card style={{ marginTop: 16 }}>
-        <SH>Transaction columns</SH>
+      <CollapsibleCard
+        id="columns"
+        title="Transaction columns"
+        summary={`${BUILTIN_COLUMNS.length} built-in · ${transactionColumns.length} custom · ${hiddenColumns.length} hidden`}
+        style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Built-in columns always exist but can be hidden from the table. Custom columns let you store
           extra fields per transaction — for example, a "Merchant ID" string or a "Tax deductible" boolean.
@@ -168,10 +201,13 @@ export default function SettingsTab(props) {
             <button onClick={commitAdd} disabled={!newColName.trim()} style={btn("#2ECC71", "#fff")}>+ Add column</button>
           </div>
         </div>
-      </Card>
+      </CollapsibleCard>
 
-      <Card style={{ marginTop: 16 }}>
-        <SH>Saved import profiles</SH>
+      <CollapsibleCard
+        id="profiles"
+        title="Saved import profiles"
+        summary={importProfiles.length === 0 ? "None yet" : `${importProfiles.length} saved`}
+        style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Profiles remember how to map a bank's CSV. They auto-match by header signature on future imports.
           Full editing happens in the Import modal — here you can rename, delete, and review what's saved.
@@ -187,10 +223,13 @@ export default function SettingsTab(props) {
             ))}
           </div>
         )}
-      </Card>
+      </CollapsibleCard>
 
-      <Card style={{ marginTop: 16 }}>
-        <SH>Recent imports</SH>
+      <CollapsibleCard
+        id="recent"
+        title="Recent imports"
+        summary={recentBatches.length === 0 ? "None yet" : `${recentBatches.length} batch${recentBatches.length === 1 ? "" : "es"}`}
+        style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Every import is tagged with a batch ID so you can roll it back entirely if something went wrong.
           Manual additions aren't listed here — this is only for CSV imports.
@@ -230,7 +269,7 @@ export default function SettingsTab(props) {
             </table>
           </div>
         )}
-      </Card>
+      </CollapsibleCard>
     </>
   );
 }
