@@ -6,6 +6,7 @@ import {
   bulkSetField, bulkDelete,
 } from "../utils/transactions.js";
 import { fmt } from "../utils/calc.js";
+import ImportModal from "../components/ImportModal.jsx";
 
 const PRESETS = [
   { id: "",            label: "All time" },
@@ -26,6 +27,7 @@ export default function TransactionsTab(props) {
     rowCapWarn, rowCapThreshold,
     cats, savCats,
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
+    importProfiles, setImportProfiles,
     txLoaded,
   } = props;
 
@@ -41,6 +43,8 @@ export default function TransactionsTab(props) {
   const [sortDir, setSortDir] = useState("desc");
   const [selected, setSelected] = useState(new Set());
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [showBulk, setShowBulk] = useState(false);
   const [bulkCat, setBulkCat] = useState("");
   const [bulkAcct, setBulkAcct] = useState("");
@@ -191,7 +195,7 @@ export default function TransactionsTab(props) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <span onClick={() => setShowFilters(v => !v)} style={{ fontSize: 10, fontWeight: 700, color: showFilters ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${showFilters ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: showFilters ? "#EEF1FA" : "transparent", userSelect: "none" }}>Filters {showFilters ? "▴" : "▾"}</span>
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
-            <button disabled title="CSV import lands in Phase 4b" style={{ ...btn("var(--input-bg, #f5f5f5)", "var(--tx3, #aaa)"), cursor: "not-allowed" }}>📥 Import</button>
+            <button onClick={() => setShowImport(true)} style={btn("#556FB5", "#fff")}>📥 Import</button>
           </div>
         </div>
 
@@ -333,6 +337,30 @@ export default function TransactionsTab(props) {
           onSubmit={async (tx) => { await addTransactions([tx]); setShowAdd(false); }}
           onClose={() => setShowAdd(false)}
         />
+      )}
+
+      {showImport && (
+        <ImportModal
+          existingTransactions={transactions}
+          addTransactions={addTransactions}
+          importProfiles={importProfiles || []}
+          setImportProfiles={setImportProfiles}
+          transactionColumns={transactionColumns || []}
+          budgetCategories={allCategoryOptions}
+          onClose={(result) => {
+            setShowImport(false);
+            if (result && result.added > 0) {
+              setImportResult(result);
+              setTimeout(() => setImportResult(null), 5000);
+            }
+          }}
+        />
+      )}
+
+      {importResult && (
+        <div style={{ position: "fixed", bottom: 20, right: 20, padding: "12px 18px", background: "#2ECC71", color: "#fff", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.15)", fontSize: 14, fontWeight: 600, zIndex: 300 }}>
+          ✓ Imported {importResult.added} transaction{importResult.added === 1 ? "" : "s"}
+        </div>
       )}
     </>
   );

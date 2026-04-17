@@ -115,6 +115,8 @@ export default function App() {
           updateTransaction={S.updateTransaction}
           deleteTransactions={S.deleteTransactions}
           setTransactions={S.setTransactions}
+          importProfiles={S.importProfiles}
+          setImportProfiles={S.setImportProfiles}
           txLoaded={S.txLoaded}
         />}
 
@@ -130,6 +132,9 @@ export default function App() {
           rowCapThreshold={S.rowCapThreshold}
           setRowCapThreshold={S.setRowCapThreshold}
           transactions={S.transactions}
+          importProfiles={S.importProfiles}
+          setImportProfiles={S.setImportProfiles}
+          deleteImportBatch={S.deleteImportBatch}
         />}
       </div>
     </div>
