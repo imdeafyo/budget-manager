@@ -44,13 +44,18 @@ export default function TransactionsTab(props) {
   const [showBulk, setShowBulk] = useState(false);
   const [bulkCat, setBulkCat] = useState("");
   const [bulkAcct, setBulkAcct] = useState("");
-  const [showFilters, setShowFilters] = useState(!mob);
+  const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 200;
 
-  // Apply preset to date fields
+  // Apply preset to date fields. "All time" (empty preset) clears dateFrom/dateTo.
+  // Non-empty preset values resolve to a concrete date range.
   useEffect(() => {
-    if (!preset) return;
+    if (!preset) {
+      setDateFrom("");
+      setDateTo("");
+      return;
+    }
     const r = presetRange(preset);
     setDateFrom(r.dateFrom);
     setDateTo(r.dateTo);
@@ -177,13 +182,14 @@ export default function TransactionsTab(props) {
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
           <div>
             <h2 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: mob ? 20 : 26, color: "var(--tx, #333)" }}>Transactions</h2>
-            <div style={{ fontSize: 12, color: "var(--tx3, #999)", marginTop: 4 }}>
-              {visibleRows.length.toLocaleString()} of {transactions.length.toLocaleString()} rows
-              {uncategorizedCount > 0 && <span style={{ marginLeft: 8, padding: "2px 8px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 10, fontWeight: 600 }}>{uncategorizedCount} uncategorized</span>}
-            </div>
+            {uncategorizedCount > 0 && (
+              <div style={{ fontSize: 12, color: "var(--tx3, #999)", marginTop: 4 }}>
+                <span style={{ padding: "2px 8px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 10, fontWeight: 600 }}>{uncategorizedCount} uncategorized</span>
+              </div>
+            )}
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={() => setShowFilters(v => !v)} style={btn(showFilters ? "#556FB5" : "var(--input-bg, #f5f5f5)", showFilters ? "#fff" : "var(--tx, #333)")}>{showFilters ? "Hide" : "Show"} filters</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <span onClick={() => setShowFilters(v => !v)} style={{ fontSize: 10, fontWeight: 700, color: showFilters ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${showFilters ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: showFilters ? "#EEF1FA" : "transparent", userSelect: "none" }}>Filters {showFilters ? "▴" : "▾"}</span>
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
             <button disabled title="CSV import lands in Phase 4b" style={{ ...btn("var(--input-bg, #f5f5f5)", "var(--tx3, #aaa)"), cursor: "not-allowed" }}>📥 Import</button>
           </div>
@@ -235,10 +241,13 @@ export default function TransactionsTab(props) {
         )}
 
         {/* Summary */}
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--tx2, #555)", marginBottom: 8 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--tx2, #555)", marginBottom: 4 }}>
           <span><strong style={{ color: "var(--tx, #333)" }}>Money in:</strong> {fmt(filteredIn)}</span>
           <span><strong style={{ color: "var(--tx, #333)" }}>Money out:</strong> {fmt(filteredOut)}</span>
           <span><strong style={{ color: "var(--tx, #333)" }}>Net:</strong> {fmt(filteredTotal)}</span>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginBottom: 8 }}>
+          {visibleRows.length.toLocaleString()} of {transactions.length.toLocaleString()} rows
         </div>
 
         {selected.size > 0 && (
