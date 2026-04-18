@@ -3,7 +3,7 @@ import {
   BUILTIN_COLUMNS, newId, newTransaction, dupHash, findDuplicate,
   applyFilters, presetRange, sortTransactions,
   slugify, addColumn, removeColumn, renameColumn,
-  bulkSetField, bulkSetCustomField, bulkDelete,
+  bulkSetField, bulkSetCustomField, bulkDelete, countSplitRowsInSet,
 } from "./transactions.js";
 
 describe("newId", () => {
@@ -317,5 +317,78 @@ describe("bulk ops", () => {
     const r = bulkDelete(rows, new Set(["a", "c"]));
     expect(r).toHaveLength(1);
     expect(r[0].id).toBe("b");
+  });
+});
+
+/* ── Split-aware filtering and bulk behavior (Phase 5b) ── */
+describe("applyFilters — split awareness", () => {
+  const mkTx = (p) => ({ id: p.id, date: "2026-01-15", amount: p.amount, description: p.description || "x", account: "Visa", category: p.category || null, splits: p.splits });
+  it("unsplit row: filter by parent category works as before", () => {
+    const rows = [
+      mkTx({ id: "a", amount: -50, category: "Groceries" }),
+      mkTx({ id: "b", amount: -30, category: "Dining" }),
+    ];
+    const r = applyFilters(rows, { categories: ["Groceries"] });
+    expect(r.map(t => t.id)).toEqual(["a"]);
+  });
+  it("split row: matches filter by any split category", () => {
+    const rows = [
+      mkTx({ id: "a", amount: -200, category: "Target", splits: [
+        { id: "s1", category: "Groceries", amount: -120 },
+        { id: "s2", category: "Household", amount: -80 },
+      ] }),
+      mkTx({ id: "b", amount: -30, category: "Dining" }),
+    ];
+    const r = applyFilters(rows, { categories: ["Groceries"] });
+    expect(r.map(t => t.id)).toEqual(["a"]);
+    const r2 = applyFilters(rows, { categories: ["Household"] });
+    expect(r2.map(t => t.id)).toEqual(["a"]);
+    const r3 = applyFilters(rows, { categories: ["Target"] });
+    // Parent category is IGNORED when splits exist, so this should not match
+    expect(r3.map(t => t.id)).toEqual([]);
+  });
+  it("empty category string filter matches uncategorized unsplit rows", () => {
+    const rows = [
+      mkTx({ id: "a", amount: -50, category: null }),
+      mkTx({ id: "b", amount: -30, category: "Dining" }),
+    ];
+    const r = applyFilters(rows, { categories: [""] });
+    expect(r.map(t => t.id)).toEqual(["a"]);
+  });
+});
+
+describe("bulkSetField — split awareness", () => {
+  const rows = [
+    { id: "a", amount: -100, category: "Dining", splits: null, updated_at: "2026-01-01T00:00:00Z" },
+    { id: "b", amount: -200, category: "Target", splits: [
+      { id: "s1", category: "Groceries", amount: -120 },
+      { id: "s2", category: "Household", amount: -80 },
+    ], updated_at: "2026-01-01T00:00:00Z" },
+    { id: "c", amount: -30, category: "Fees", splits: null, updated_at: "2026-01-01T00:00:00Z" },
+  ];
+  it("category updates skip split rows", () => {
+    const r = bulkSetField(rows, new Set(["a", "b", "c"]), "category", "X");
+    expect(r[0].category).toBe("X");
+    expect(r[1].category).toBe("Target"); // unchanged — has splits
+    expect(r[2].category).toBe("X");
+  });
+  it("non-category updates do NOT skip split rows", () => {
+    const r = bulkSetField(rows, new Set(["a", "b"]), "account", "NewAcct");
+    expect(r[0].account).toBe("NewAcct");
+    expect(r[1].account).toBe("NewAcct");
+  });
+});
+
+describe("countSplitRowsInSet", () => {
+  const rows = [
+    { id: "a", splits: null },
+    { id: "b", splits: [{ id: "s1", category: "G", amount: -1 }] },
+    { id: "c", splits: [] },
+    { id: "d", splits: [{ id: "s1", category: "G", amount: -1 }] },
+  ];
+  it("counts only rows with non-empty splits arrays", () => {
+    expect(countSplitRowsInSet(rows, new Set(["a", "b", "c", "d"]))).toBe(2);
+    expect(countSplitRowsInSet(rows, new Set(["a", "c"]))).toBe(0);
+    expect(countSplitRowsInSet(rows, new Set(["b"]))).toBe(1);
   });
 });

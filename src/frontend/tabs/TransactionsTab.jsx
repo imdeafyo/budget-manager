@@ -3,11 +3,15 @@ import { Card, SH, NI } from "../components/ui.jsx";
 import {
   BUILTIN_COLUMNS, newTransaction,
   applyFilters, presetRange, sortTransactions,
-  bulkSetField, bulkDelete,
+  bulkSetField, bulkDelete, countSplitRowsInSet,
 } from "../utils/transactions.js";
 import {
   buildRuleFromExample, evaluateRule, applyRulesToTransaction,
 } from "../utils/rules.js";
+import {
+  newSplit, seedSplits, validateSplits, autoBalance, splitRemainder,
+  sumSplits, sanitizeSplits, hasSplits, scaleSplits,
+} from "../utils/splits.js";
 import { fmt } from "../utils/calc.js";
 import ImportModal from "../components/ImportModal.jsx";
 
@@ -60,6 +64,11 @@ export default function TransactionsTab(props) {
   // on a row whose description doesn't already match an existing rule.
   // pendingCategorize = { tx, newCategory } while the modal is open.
   const [pendingCategorize, setPendingCategorize] = useState(null);
+
+  // Split editor — holds the transaction currently being edited (null when closed).
+  const [splitEditorTx, setSplitEditorTx] = useState(null);
+  // Global "expand all splits in the filtered view" toggle.
+  const [expandAllSplits, setExpandAllSplits] = useState(false);
 
   // Apply preset to date fields. "All time" (empty preset) clears dateFrom/dateTo.
   // Non-empty preset values resolve to a concrete date range.
@@ -160,17 +169,49 @@ export default function TransactionsTab(props) {
   const bulkApplyCategory = async () => {
     if (!bulkCat) return;
     const ids = new Set(selected);
+    const skipped = countSplitRowsInSet(transactions, ids);
+    if (skipped === ids.size) {
+      alert("All selected rows have splits — their category is controlled by the splits, not a bulk-set value. Use the split editor (📑) to change those allocations.");
+      return;
+    }
+    if (skipped > 0) {
+      const affected = ids.size - skipped;
+      const msg = `${skipped} selected row${skipped === 1 ? "" : "s"} have splits and will be skipped (their split allocations are kept as-is).\n\n` +
+                  `Apply "${bulkCat}" to the other ${affected} row${affected === 1 ? "" : "s"}?`;
+      if (!confirm(msg)) return;
+    }
     setTransactions(prev => bulkSetField(prev, ids, "category", bulkCat));
     // persist by sending one PUT per row (deploy); generic is no-op since setTransactions already updated
     for (const id of ids) {
       const tx = visibleRows.find(r => r.id === id);
-      if (tx) updateTransaction({ ...tx, category: bulkCat });
+      if (tx && !hasSplits(tx)) updateTransaction({ ...tx, category: bulkCat });
     }
-    // Offer to remember this for future imports — use the first selected row as
-    // the example (they all got the same category, so any one works).
-    const firstTx = Array.from(ids).map(id => transactions.find(t => t.id === id)).find(Boolean);
+    // Offer to remember this for future imports — use the first non-split selected row.
+    const firstTx = Array.from(ids).map(id => transactions.find(t => t.id === id)).filter(Boolean).find(t => !hasSplits(t));
     if (firstTx) maybeOfferRule(firstTx, bulkCat);
     setShowBulk(false); setBulkCat(""); setSelected(new Set());
+  };
+
+  /* Wrap updateTransaction so edits that touch `amount` on a split row trigger
+     the proportional-scale-vs-clear prompt. All other edits pass through. */
+  const handleUpdateTransaction = (nextTx) => {
+    const prev = transactions.find(t => t.id === nextTx.id);
+    if (prev && hasSplits(prev) && Number(prev.amount) !== Number(nextTx.amount)) {
+      // Amount changed on a row that has splits — ask how to handle.
+      const prevAmt = Number(prev.amount) || 0;
+      const nextAmt = Number(nextTx.amount) || 0;
+      const msg = `This row has ${prev.splits.length} split${prev.splits.length === 1 ? "" : "s"} totaling ${prevAmt.toFixed(2)}.\n\n` +
+                  `OK — scale splits proportionally to match the new total (${nextAmt.toFixed(2)}).\n` +
+                  `Cancel — clear all splits.`;
+      if (confirm(msg)) {
+        const scaled = scaleSplits(prev.splits, prevAmt, nextAmt);
+        updateTransaction({ ...nextTx, splits: scaled });
+      } else {
+        updateTransaction({ ...nextTx, splits: null });
+      }
+      return;
+    }
+    updateTransaction(nextTx);
   };
 
   /* ── Manual-categorize interception ──
@@ -214,6 +255,7 @@ export default function TransactionsTab(props) {
   };
 
   const overCap = rowCapWarn && transactions.length > rowCapThreshold;
+  const anyHasSplits = useMemo(() => transactions.some(t => hasSplits(t)), [transactions]);
 
   if (!txLoaded) {
     return <Card><div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)" }}>Loading transactions…</div></Card>;
@@ -233,6 +275,13 @@ export default function TransactionsTab(props) {
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <span onClick={() => setShowFilters(v => !v)} style={{ fontSize: 10, fontWeight: 700, color: showFilters ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${showFilters ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: showFilters ? "#EEF1FA" : "transparent", userSelect: "none" }}>Filters {showFilters ? "▴" : "▾"}</span>
+            {anyHasSplits && (
+              <span onClick={() => setExpandAllSplits(v => !v)}
+                title={expandAllSplits ? "Collapse all split details" : "Show all split details inline"}
+                style={{ fontSize: 10, fontWeight: 700, color: expandAllSplits ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${expandAllSplits ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: expandAllSplits ? "#EEF1FA" : "transparent", userSelect: "none" }}>
+                📑 Splits {expandAllSplits ? "▴" : "▾"}
+              </span>
+            )}
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
             <button onClick={() => setShowImport(true)} style={btn("#556FB5", "#fff")}>📥 Import</button>
           </div>
@@ -354,9 +403,11 @@ export default function TransactionsTab(props) {
                   toggleSelect={() => toggleSelect(tx.id)}
                   allCategoryOptions={allCategoryOptions}
                   transferCatSet={transferCatSet}
-                  updateTransaction={updateTransaction}
+                  updateTransaction={handleUpdateTransaction}
                   deleteTransactions={deleteTransactions}
                   onManualCategorize={handleManualCategorize}
+                  onOpenSplitEditor={(t) => setSplitEditorTx(t)}
+                  forceExpandSplits={expandAllSplits}
                 />
               ))}
             </tbody>
@@ -422,6 +473,25 @@ export default function TransactionsTab(props) {
         />
       )}
 
+      {splitEditorTx && (
+        <SplitEditor
+          tx={splitEditorTx}
+          allCategoryOptions={allCategoryOptions}
+          onClose={() => setSplitEditorTx(null)}
+          onSave={(nextSplits) => {
+            const clean = sanitizeSplits(nextSplits);
+            // If we sanitize to nothing, strip the field entirely
+            updateTransaction({ ...splitEditorTx, splits: clean });
+            setSplitEditorTx(null);
+          }}
+          onClearAll={() => {
+            if (!confirm("Remove all splits from this transaction?")) return;
+            updateTransaction({ ...splitEditorTx, splits: null });
+            setSplitEditorTx(null);
+          }}
+        />
+      )}
+
       {importResult && (
         <div style={{ position: "fixed", bottom: 20, right: 20, padding: "12px 18px", background: "#2ECC71", color: "#fff", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.15)", fontSize: 14, fontWeight: 600, zIndex: 300 }}>
           ✓ Imported {importResult.added} transaction{importResult.added === 1 ? "" : "s"}
@@ -432,14 +502,19 @@ export default function TransactionsTab(props) {
 }
 
 /* ── Individual row ── */
-function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize }) {
+function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, forceExpandSplits }) {
   const [editing, setEditing] = useState(null); // field name currently being edited
   const [draft, setDraft] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const txHasSplits = Array.isArray(tx.splits) && tx.splits.length > 0;
+  const showChildren = txHasSplits && (expanded || forceExpandSplits);
 
   const isTransferHint = TRANSFER_HINT_RX.test(tx.description || "");
   const isTransferCat  = transferCatSet && tx.category && transferCatSet.has(tx.category);
   const isTransfer     = isTransferHint || isTransferCat;
-  const isUncat = !tx.category;
+  // A row with splits isn't uncategorized even if tx.category is null — the
+  // splits carry the allocations. Treat it as categorized.
+  const isUncat = !tx.category && !txHasSplits;
 
   const rowBg = isUncat ? "rgba(242, 169, 59, 0.06)"
               : isTransfer ? "rgba(120, 120, 120, 0.06)"
@@ -463,23 +538,94 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
   };
 
   return (
-    <tr style={{ borderBottom: "1px solid var(--bdr2, #eee)", background: rowBg, fontStyle: isTransfer ? "italic" : "normal" }}>
-      <td style={td()}><input type="checkbox" checked={selected} onChange={toggleSelect} /></td>
-      {visibleColumns.map(col => (
-        <td key={col.id} style={{ ...td(), textAlign: col.type === "number" ? "right" : "left" }} onDoubleClick={() => startEdit(col.id)}>
-          {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize)}
+    <>
+      <tr style={{ borderBottom: showChildren ? "1px solid transparent" : "1px solid var(--bdr2, #eee)", background: rowBg, fontStyle: isTransfer ? "italic" : "normal" }}>
+        <td style={td()}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            {txHasSplits ? (
+              <button onClick={() => setExpanded(v => !v)}
+                title={expanded ? "Collapse splits" : "Show splits"}
+                style={{ border: "none", background: "none", cursor: "pointer", padding: 0, fontSize: 10, color: "var(--tx3, #999)", width: 14, textAlign: "center" }}>
+                {expanded || forceExpandSplits ? "▾" : "▸"}
+              </button>
+            ) : <span style={{ width: 14 }} />}
+            <input type="checkbox" checked={selected} onChange={toggleSelect} />
+          </div>
         </td>
+        {visibleColumns.map(col => (
+          <td key={col.id} style={{ ...td(), textAlign: col.type === "number" ? "right" : "left" }} onDoubleClick={() => startEdit(col.id)}>
+            {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize)}
+          </td>
+        ))}
+        <td style={td()}>
+          <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+            {onOpenSplitEditor && (
+              <button title={txHasSplits ? "Edit splits" : "Split this transaction"}
+                onClick={() => onOpenSplitEditor(tx)}
+                style={{ border: "none", background: "none", color: txHasSplits ? "#556FB5" : "var(--tx3, #999)", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>📑</button>
+            )}
+            <button title="Delete" onClick={() => { if (confirm("Delete this transaction?")) deleteTransactions(new Set([tx.id])); }}
+              style={{ border: "none", background: "none", color: "var(--tx3, #999)", cursor: "pointer", fontSize: 14 }}>×</button>
+          </div>
+        </td>
+      </tr>
+      {showChildren && tx.splits.map((sp, i) => (
+        <tr key={sp.id || i} style={{
+          background: "var(--input-bg, #fafafa)",
+          fontSize: 12,
+          color: "var(--tx2, #555)",
+          borderBottom: i === tx.splits.length - 1 ? "1px solid var(--bdr2, #eee)" : undefined,
+        }}>
+          <td style={td()} />
+          {visibleColumns.map(col => {
+            const style = { ...td(), padding: "4px 10px", textAlign: col.type === "number" ? "right" : "left" };
+            if (col.id === "date") return <td key={col.id} style={style} />;
+            if (col.id === "description") return (
+              <td key={col.id} style={style}>
+                <span style={{ paddingLeft: 18, color: "var(--tx3, #888)" }}>
+                  ↳ {sp.notes || <em style={{ color: "var(--tx3, #bbb)" }}>split {i + 1}</em>}
+                </span>
+              </td>
+            );
+            if (col.id === "amount") return (
+              <td key={col.id} style={{ ...style, fontVariantNumeric: "tabular-nums" }}>
+                {fmt(Number(sp.amount) || 0)}
+              </td>
+            );
+            if (col.id === "category") return (
+              <td key={col.id} style={style}>
+                <span style={{ color: "var(--tx, #333)", fontWeight: 600 }}>
+                  {sp.category || <em style={{ color: "var(--tx3, #aaa)" }}>—</em>}
+                </span>
+              </td>
+            );
+            return <td key={col.id} style={style} />;
+          })}
+          <td style={td()} />
+        </tr>
       ))}
-      <td style={td()}>
-        <button title="Delete" onClick={() => { if (confirm("Delete this transaction?")) deleteTransactions(new Set([tx.id])); }}
-          style={{ border: "none", background: "none", color: "var(--tx3, #999)", cursor: "pointer", fontSize: 14 }}>×</button>
-      </td>
-    </tr>
+    </>
   );
 }
 
 function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize) {
   if (col.id === "category") {
+    const hasSplits = Array.isArray(tx.splits) && tx.splits.length > 0;
+    if (hasSplits) {
+      // Splits are authoritative — show a read-only summary. Click the 📑
+      // button in the actions column to edit. Still show the parent's own
+      // category label (if any) as context, like "Target · 2 splits".
+      const n = tx.splits.length;
+      const title = `${n} split${n === 1 ? "" : "s"}: ${tx.splits.map(s => s.category || "—").join(", ")}`;
+      return (
+        <span title={title} style={{ fontSize: 12, color: "var(--tx2, #555)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {tx.category && <span style={{ color: "var(--tx3, #888)" }}>{tx.category}</span>}
+          <span style={{ padding: "1px 6px", background: "rgba(85, 111, 181, 0.12)", color: "#556FB5", borderRadius: 4, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            {n} split{n === 1 ? "" : "s"}
+          </span>
+        </span>
+      );
+    }
     // Inline dropdown, always editable — no double-click needed for category since it's the most common edit
     const handleCategoryChange = (newValue) => {
       const next = newValue || null;
@@ -738,6 +884,144 @@ function RememberChoiceModal({ tx, category, allCategoryOptions, existingRules, 
             <button onClick={() => setCustomize(true)} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Customize rule…</button>
           )}
           <button onClick={save} style={btn("#556FB5", "#fff")}>Create rule</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Split editor modal ──
+   Locked header shows the parent transaction's description + total. The body
+   is a list of split rows (category dropdown + amount + optional notes + delete).
+   Footer shows live sum/remainder and action buttons.
+
+   Save is blocked until validateSplits() reports valid. On save, the caller
+   gets the draft splits array (still may include empty rows); it's responsible
+   for sanitization. */
+function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
+  const parentAmt = Number(tx.amount) || 0;
+  const startsWithSplits = hasSplits(tx);
+  const [splits, setSplits] = useState(() => {
+    if (startsWithSplits) return tx.splits.map(sp => ({ ...sp }));
+    return seedSplits(tx);
+  });
+
+  const validation = validateSplits(splits, parentAmt);
+  const remainder = splitRemainder(parentAmt, splits);
+  const sum = sumSplits(splits);
+  const isBalanced = Math.abs(remainder) < 0.005;
+
+  const updateRow = (i, patch) => {
+    setSplits(prev => {
+      const n = [...prev];
+      n[i] = { ...n[i], ...patch };
+      return n;
+    });
+  };
+  const removeRow = (i) => {
+    setSplits(prev => prev.filter((_, j) => j !== i));
+  };
+  const addRow = () => {
+    setSplits(prev => [...prev, newSplit({ amount: 0 })]);
+  };
+  const balance = () => {
+    if (!splits.length) return;
+    setSplits(prev => autoBalance(prev, parentAmt));
+  };
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 620, width: "100%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>
+          Split transaction
+        </h3>
+        <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 14, lineHeight: 1.5 }}>
+          <strong>{tx.description || "(no description)"}</strong>
+          <span style={{ color: "var(--tx3, #888)" }}> · {tx.date}</span>
+          <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 2 }}>
+            Total: <strong style={{ color: "var(--tx, #333)", fontFamily: "monospace" }}>{fmt(parentAmt)}</strong>
+          </div>
+        </div>
+
+        {/* Header row */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr 30px", gap: 8, marginBottom: 6, padding: "0 2px" }}>
+          <div style={lbl()}>Category</div>
+          <div style={{ ...lbl(), textAlign: "right" }}>Amount</div>
+          <div style={lbl()}>Notes (optional)</div>
+          <div />
+        </div>
+
+        {splits.map((sp, i) => (
+          <div key={sp.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr 30px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+            <select value={sp.category || ""} onChange={e => updateRow(i, { category: e.target.value })} style={inp()}>
+              <option value="">— pick —</option>
+              {allCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input type="number" step="0.01" value={sp.amount === "" ? "" : sp.amount}
+              onChange={e => updateRow(i, { amount: e.target.value === "" ? "" : Number(e.target.value) })}
+              style={{ ...inp(), textAlign: "right", fontVariantNumeric: "tabular-nums" }} />
+            <input value={sp.notes || ""} onChange={e => updateRow(i, { notes: e.target.value })}
+              placeholder="" style={inp()} />
+            <button onClick={() => removeRow(i)} title="Remove split"
+              style={{ border: "none", background: "none", color: "#E8573A", cursor: "pointer", fontSize: 16, padding: 0 }}
+              disabled={splits.length <= 1}>×</button>
+          </div>
+        ))}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          <button onClick={addRow} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>+ Add split</button>
+          <button onClick={balance} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}
+            title="Set the last row's amount so the total matches">
+            Auto-balance last row
+          </button>
+        </div>
+
+        {/* Live sum / remainder readout */}
+        <div style={{
+          marginTop: 16, padding: 12,
+          background: isBalanced ? "rgba(46, 204, 113, 0.08)" : "rgba(232, 87, 58, 0.08)",
+          borderLeft: `3px solid ${isBalanced ? "#2ECC71" : "#E8573A"}`,
+          borderRadius: 6, fontSize: 13, color: "var(--tx, #333)",
+          fontFamily: "monospace",
+          display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
+        }}>
+          <span>Splits sum: <strong>{fmt(sum)}</strong> / {fmt(parentAmt)}</span>
+          <span>
+            {isBalanced
+              ? <span style={{ color: "#2ECC71", fontWeight: 700 }}>✓ balanced</span>
+              : <span style={{ color: "#E8573A", fontWeight: 700 }}>remaining: {fmt(remainder)}</span>}
+          </span>
+        </div>
+
+        {/* Show non-balance validation errors (e.g. missing category, mixed signs).
+            Balance mismatch is already surfaced in the readout above. */}
+        {(() => {
+          const nonBalance = validation.errors.filter(e => !/^splits sum to/i.test(e));
+          if (!nonBalance.length) return null;
+          return (
+            <div style={{ marginTop: 10, padding: 10, background: "rgba(232, 87, 58, 0.08)", borderLeft: "3px solid #E8573A", borderRadius: 4, fontSize: 12, color: "var(--tx, #333)" }}>
+              {nonBalance.map((e, i) => <div key={i}>⚠ {e}</div>)}
+            </div>
+          );
+        })()}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 18, justifyContent: "space-between", flexWrap: "wrap" }}>
+          <div>
+            {startsWithSplits && (
+              <button onClick={onClearAll} style={btn("transparent", "#E8573A")}
+                title="Remove all splits and revert to a single-category row">
+                Remove all splits
+              </button>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onClose} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Cancel</button>
+            <button onClick={() => onSave(splits)} disabled={!validation.valid}
+              style={{ ...btn("#556FB5", "#fff"), opacity: validation.valid ? 1 : 0.5, cursor: validation.valid ? "pointer" : "not-allowed" }}>
+              Save splits
+            </button>
+          </div>
         </div>
       </div>
     </div>

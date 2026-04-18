@@ -100,7 +100,9 @@ export function findDuplicate(candidate, existing) {
 /* ── Filtering ──
    Filter spec: { dateFrom, dateTo, categories[], accounts[], amountMin, amountMax, search }
    All optional. Empty/undefined fields = no constraint.
-   search is a case-insensitive substring match on description + notes. */
+   search is a case-insensitive substring match on description + notes.
+   Category filter is split-aware — a row with splits matches if ANY of its
+   split categories is in the filter list. Unsplit rows fall back to tx.category. */
 export function applyFilters(transactions, filters = {}) {
   const { dateFrom, dateTo, categories, accounts, amountMin, amountMax, search } = filters;
   const hasCats = Array.isArray(categories) && categories.length > 0;
@@ -108,11 +110,25 @@ export function applyFilters(transactions, filters = {}) {
   const searchLC = search ? String(search).toLowerCase() : null;
   const minA = amountMin !== undefined && amountMin !== "" ? Number(amountMin) : null;
   const maxA = amountMax !== undefined && amountMax !== "" ? Number(amountMax) : null;
+  const catSet = hasCats ? new Set(categories) : null;
 
   return transactions.filter(tx => {
     if (dateFrom && tx.date < dateFrom) return false;
     if (dateTo && tx.date > dateTo) return false;
-    if (hasCats && !categories.includes(tx.category || "")) return false;
+    if (hasCats) {
+      // Split-aware: match if the parent category OR any split category is in the filter.
+      // Empty-string "" represents uncategorized and matches tx.category == null on unsplit rows.
+      const splits = Array.isArray(tx.splits) ? tx.splits : null;
+      let hit = false;
+      if (splits && splits.length) {
+        for (const sp of splits) {
+          if (catSet.has(sp.category || "")) { hit = true; break; }
+        }
+      } else {
+        hit = catSet.has(tx.category || "");
+      }
+      if (!hit) return false;
+    }
     if (hasAccts && !accounts.includes(tx.account || "")) return false;
     if (minA !== null && !isNaN(minA) && Number(tx.amount) < minA) return false;
     if (maxA !== null && !isNaN(maxA) && Number(tx.amount) > maxA) return false;
@@ -225,14 +241,29 @@ function ensureUniqueId(base, columns) {
 
 /* ── Bulk ops ──
    setField: apply a field=value update to all rows whose id is in idSet.
-   setCustomField: same but for custom_fields.<columnId>. */
+   setCustomField: same but for custom_fields.<columnId>.
+   When field === "category" and a target row has splits, the update is SKIPPED
+   (splits are the authoritative source of category allocation). */
 export function bulkSetField(transactions, idSet, field, value) {
   const now = new Date().toISOString();
-  return transactions.map(tx =>
-    idSet.has(tx.id)
-      ? { ...tx, [field]: value, updated_at: now }
-      : tx
-  );
+  return transactions.map(tx => {
+    if (!idSet.has(tx.id)) return tx;
+    if (field === "category" && Array.isArray(tx.splits) && tx.splits.length > 0) {
+      // Don't overwrite the authoritative allocation on a split row
+      return tx;
+    }
+    return { ...tx, [field]: value, updated_at: now };
+  });
+}
+
+/* Count how many rows in idSet have splits — callers (UI) use this to explain
+   why a bulk category apply will skip some rows. */
+export function countSplitRowsInSet(transactions, idSet) {
+  let n = 0;
+  for (const tx of transactions) {
+    if (idSet.has(tx.id) && Array.isArray(tx.splits) && tx.splits.length > 0) n++;
+  }
+  return n;
 }
 
 export function bulkSetCustomField(transactions, idSet, columnId, value) {
