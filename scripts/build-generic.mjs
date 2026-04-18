@@ -55,25 +55,43 @@ console.log("→ Patching useAppState.jsx...");
 const hookFile = path.join(TMP, "hooks", "useAppState.jsx");
 let hook = read(hookFile);
 
-// 1a. Replace API load with localStorage + textarea load
-const apiLoadRe = /useEffect\(\(\) => \{ \(async \(\) => \{ try \{ const r = await fetch\("\/api\/state"\)[\s\S]*?\}, \[\]\);/;
-hook = hook.replace(apiLoadRe, `useEffect(() => {
-    try {
-      let raw = null;
-      try { raw = localStorage.getItem("budget-data"); } catch {}
-      if (!raw) {
-        const ta = document.getElementById("budget-data");
-        if (ta && ta.textContent) raw = ta.textContent.trim();
-      }
-      if (raw) {
-        const d = JSON.parse(raw);
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns };
-        Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)});
-      }
-    } catch(e) { console.error("Load error:", e); }
-    setLoaded(true);
-    setTxLoaded(true);
-  }, []);`);
+// 1a. Swap the /api/state fetch for a localStorage reader that returns the same
+// {state: ...} shape the real endpoint produces. The surrounding useEffect --
+// crucially, the full setter map -- stays exactly as-is in source, so any new
+// state field added to useAppState.jsx automatically works in generic mode
+// without touching this script. This replaces the older approach of
+// block-replacing the whole effect with a hardcoded map, which silently drifted
+// out of sync as new fields were added (transferCats, transactionRules, and the
+// transfer-tolerance/refund settings all stopped loading for that reason).
+hook = hook.replace(
+  'await fetch("/api/state").then(r => r.json())',
+  `await (async () => {
+    let raw = null;
+    try { raw = localStorage.getItem("budget-data"); } catch {}
+    if (!raw) {
+      const ta = document.getElementById("budget-data");
+      if (ta && ta.textContent) raw = ta.textContent.trim();
+    }
+    if (!raw) return null;
+    try { return { state: JSON.parse(raw) }; } catch(e) { console.error("Load error:", e); return null; }
+  })()`
+);
+
+// 1a-bis. Generic mode has no separate /api/transactions effect (MODE=generic
+// neutralizes it), so we also set txLoaded from the state-load effect.
+hook = hook.replace(
+  'setLoaded(true); })(); }, []);',
+  'setLoaded(true); setTxLoaded(true); })(); }, []);'
+);
+
+// 1a-ter. The deploy-mode loader map doesn't include `transactions` (deploy
+// loads them separately from /api/transactions). Generic mode bundles them
+// into the same localStorage blob, so we inject the setter here. This is the
+// ONE field that legitimately differs between modes.
+hook = hook.replace(
+  'p2Name:setP2Name,transactionColumns:setTransactionColumns',
+  'p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns'
+);
 
 // 1b. Replace API save with localStorage save
 const apiSaveRe = /useEffect\(\(\) => \{ const t = setTimeout\(async \(\) => \{ try \{ await fetch\("\/api\/state"[\s\S]*?\}, \[st\]\);/;
