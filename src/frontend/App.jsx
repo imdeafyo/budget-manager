@@ -120,6 +120,8 @@ export default function App() {
           setImportProfiles={S.setImportProfiles}
           transactionRules={S.transactionRules}
           setTransactionRules={S.setTransactionRules}
+          transferToleranceAmount={S.transferToleranceAmount}
+          transferToleranceDays={S.transferToleranceDays}
           txLoaded={S.txLoaded}
         />}
 
@@ -144,6 +146,12 @@ export default function App() {
           cats={S.cats}
           savCats={S.savCats}
           transferCats={S.transferCats}
+          transferToleranceAmount={S.transferToleranceAmount}
+          setTransferToleranceAmount={S.setTransferToleranceAmount}
+          transferToleranceDays={S.transferToleranceDays}
+          setTransferToleranceDays={S.setTransferToleranceDays}
+          treatRefundsAsNetting={S.treatRefundsAsNetting}
+          setTreatRefundsAsNetting={S.setTreatRefundsAsNetting}
           deleteImportBatch={S.deleteImportBatch}
         />}
       </div>

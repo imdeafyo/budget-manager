@@ -161,12 +161,16 @@ export default function useAppState() {
   const [rowCapWarn, setRowCapWarn] = useState(true);
   const [rowCapThreshold, setRowCapThreshold] = useState(10000);
   const [hiddenColumns, setHiddenColumns] = useState([]);
+  // Phase 5c — transfer detection + refund handling settings.
+  const [transferToleranceAmount, setTransferToleranceAmount] = useState(0.01);
+  const [transferToleranceDays, setTransferToleranceDays] = useState(2);
+  const [treatRefundsAsNetting, setTreatRefundsAsNetting] = useState(true);
   const [txLoaded, setTxLoaded] = useState(false);
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns]);
+  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
   useEffect(() => { const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -564,6 +568,9 @@ export default function useAppState() {
     rowCapWarn, setRowCapWarn,
     rowCapThreshold, setRowCapThreshold,
     hiddenColumns, setHiddenColumns,
+    transferToleranceAmount, setTransferToleranceAmount,
+    transferToleranceDays, setTransferToleranceDays,
+    treatRefundsAsNetting, setTreatRefundsAsNetting,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,
     MODE,

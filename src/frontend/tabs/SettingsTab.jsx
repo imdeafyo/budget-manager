@@ -42,6 +42,12 @@ export default function SettingsTab(props) {
     importProfiles = [], setImportProfiles,
     transactionRules = [], setTransactionRules,
     cats = [], savCats = [], transferCats = [],
+    transferToleranceAmount = 0.01,
+    setTransferToleranceAmount,
+    transferToleranceDays = 2,
+    setTransferToleranceDays,
+    treatRefundsAsNetting = true,
+    setTreatRefundsAsNetting,
     deleteImportBatch,
   } = props;
 
@@ -250,6 +256,74 @@ export default function SettingsTab(props) {
           transactions={transactions}
           setTransactions={setTransactions}
         />
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="transfers"
+        title="Transfer detection"
+        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"}`}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          Transfers are matching pairs of transactions across different accounts — money you moved between
+          your own accounts, not spending or income. The detector scans for opposing amounts on dates close
+          together and lets you confirm each pair before committing. Tune the tolerances here if your bank
+          posts the two sides of a transfer a few days apart or with small fee differences.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
+          <div>
+            <label style={lbl()}>Amount tolerance</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±$</span>
+              <input type="number" min="0" step="0.01" value={transferToleranceAmount}
+                onChange={e => setTransferToleranceAmount(parseFloat(e.target.value) || 0)}
+                style={inp(100)} />
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              How far apart the two amounts can be before they're no longer a match.
+            </div>
+          </div>
+          <div>
+            <label style={lbl()}>Date tolerance</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±</span>
+              <input type="number" min="0" step="1" value={transferToleranceDays}
+                onChange={e => setTransferToleranceDays(parseInt(e.target.value, 10) || 0)}
+                style={inp(70)} />
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>days</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              How many days apart the two sides of a transfer can post.
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          Run detection from the Transactions tab — click <strong>🔀 Detect transfers</strong> in the toolbar.
+          Rows you confirm are flagged (and excluded from spending totals). Rows you dismiss are remembered
+          so they won't resurface as candidates on future runs.
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="refunds"
+        title="Refund handling"
+        summary={treatRefundsAsNetting ? "Refunds reduce category spend" : "Refunds treated as income"}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          A refund is a positive-amount transaction sitting in an expense category — for example, a $40 credit
+          from Amazon in your "Shopping" category. With netting on (the default), that $40 buys back $40 of
+          your Shopping budget. With it off, the refund is treated as household income instead. Netting
+          matches how most people mentally account for returns.
+        </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--tx, #333)" }}>
+          <input type="checkbox" checked={treatRefundsAsNetting}
+            onChange={e => setTreatRefundsAsNetting(e.target.checked)} />
+          Treat positive amounts in expense categories as refunds (reduce the category's spend)
+        </label>
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          This affects how the budget-vs-actual comparison (Phase 6) calculates per-category spending.
+          It doesn't change the raw transaction rows — they're still stored with their original amounts and
+          categories. Rows marked as transfers are always excluded from refund calculations.
+        </div>
       </CollapsibleCard>
 
       <CollapsibleCard

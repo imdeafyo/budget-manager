@@ -12,6 +12,10 @@ import {
   newSplit, seedSplits, validateSplits, autoBalance, splitRemainder,
   sumSplits, sanitizeSplits, hasSplits, scaleSplits,
 } from "../utils/splits.js";
+import {
+  findTransferCandidates, applyPairs, applyDismissals, unpair as unpairTx,
+  isMarkedTransfer, pairReason,
+} from "../utils/transfers.js";
 import { fmt } from "../utils/calc.js";
 import ImportModal from "../components/ImportModal.jsx";
 
@@ -36,6 +40,8 @@ export default function TransactionsTab(props) {
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
     transactionRules = [], setTransactionRules,
+    transferToleranceAmount = 0.01,
+    transferToleranceDays = 2,
     txLoaded,
   } = props;
 
@@ -69,6 +75,10 @@ export default function TransactionsTab(props) {
   const [splitEditorTx, setSplitEditorTx] = useState(null);
   // Global "expand all splits in the filtered view" toggle.
   const [expandAllSplits, setExpandAllSplits] = useState(false);
+
+  // Transfer detection modal — { pairs, selected: Set<pairKey> } while open, null otherwise.
+  // pairKey = `${aId}|${bId}` — stable per candidate, survives re-sorts.
+  const [transferModal, setTransferModal] = useState(null);
 
   // Apply preset to date fields. "All time" (empty preset) clears dateFrom/dateTo.
   // Non-empty preset values resolve to a concrete date range.
@@ -257,6 +267,56 @@ export default function TransactionsTab(props) {
   const overCap = rowCapWarn && transactions.length > rowCapThreshold;
   const anyHasSplits = useMemo(() => transactions.some(t => hasSplits(t)), [transactions]);
 
+  // How many rows are currently marked as transfers — used to show a small
+  // count next to the "Detect transfers" button so the user can see at a
+  // glance that the feature is doing something.
+  const markedTransferCount = useMemo(
+    () => transactions.reduce((n, t) => n + (isMarkedTransfer(t) ? 1 : 0), 0),
+    [transactions]
+  );
+
+  const openTransferDetection = () => {
+    const pairs = findTransferCandidates(transactions, {
+      amountTolerance: Number(transferToleranceAmount) || 0.01,
+      dayTolerance:    Number(transferToleranceDays)  || 2,
+      requireDifferentAccounts: true,
+    });
+    // Pre-check every candidate — user unchecks ones they don't want to pair.
+    const selected = new Set(pairs.map(p => `${p.a.id}|${p.b.id}`));
+    setTransferModal({ pairs, selected });
+  };
+
+  const commitTransferPairs = () => {
+    if (!transferModal) return;
+    const { pairs, selected } = transferModal;
+    const keep = pairs.filter(p => selected.has(`${p.a.id}|${p.b.id}`));
+    if (!keep.length) { setTransferModal(null); return; }
+    const pairIds = keep.map(p => ({ aId: p.a.id, bId: p.b.id }));
+    setTransactions(prev => applyPairs(prev, pairIds));
+    setTransferModal(null);
+  };
+
+  const dismissSelectedPairs = () => {
+    if (!transferModal) return;
+    const { pairs, selected } = transferModal;
+    const keep = pairs.filter(p => selected.has(`${p.a.id}|${p.b.id}`));
+    if (!keep.length) { setTransferModal(null); return; }
+    const pairIds = keep.map(p => ({ aId: p.a.id, bId: p.b.id }));
+    setTransactions(prev => applyDismissals(prev, pairIds));
+    setTransferModal(null);
+  };
+
+  const handleUnpair = (tx) => {
+    if (!tx) return;
+    const partnerId = tx.custom_fields?._transfer_pair_id;
+    // Unpair both halves — symmetric flags are the invariant.
+    updateTransaction(unpairTx(tx));
+    if (partnerId) {
+      const partner = transactions.find(t => t.id === partnerId);
+      if (partner) updateTransaction(unpairTx(partner));
+    }
+  };
+
   if (!txLoaded) {
     return <Card><div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)" }}>Loading transactions…</div></Card>;
   }
@@ -280,6 +340,13 @@ export default function TransactionsTab(props) {
                 title={expandAllSplits ? "Collapse all split details" : "Show all split details inline"}
                 style={{ fontSize: 10, fontWeight: 700, color: expandAllSplits ? "#556FB5" : "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: `2px solid ${expandAllSplits ? "#556FB5" : "var(--bdr, #ccc)"}`, borderRadius: 6, background: expandAllSplits ? "#EEF1FA" : "transparent", userSelect: "none" }}>
                 📑 Splits {expandAllSplits ? "▴" : "▾"}
+              </span>
+            )}
+            {transactions.length > 1 && (
+              <span onClick={openTransferDetection}
+                title="Scan for paired transfers between accounts"
+                style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: "2px solid var(--bdr, #ccc)", borderRadius: 6, background: "transparent", userSelect: "none" }}>
+                🔀 Detect transfers{markedTransferCount > 0 ? ` · ${markedTransferCount}` : ""}
               </span>
             )}
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
@@ -407,6 +474,7 @@ export default function TransactionsTab(props) {
                   deleteTransactions={deleteTransactions}
                   onManualCategorize={handleManualCategorize}
                   onOpenSplitEditor={(t) => setSplitEditorTx(t)}
+                  onUnpair={handleUnpair}
                   forceExpandSplits={expandAllSplits}
                 />
               ))}
@@ -492,6 +560,23 @@ export default function TransactionsTab(props) {
         />
       )}
 
+      {transferModal && (
+        <TransferPairsModal
+          pairs={transferModal.pairs}
+          selected={transferModal.selected}
+          onToggle={(key) => setTransferModal(m => {
+            const next = new Set(m.selected);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return { ...m, selected: next };
+          })}
+          onSelectAll={() => setTransferModal(m => ({ ...m, selected: new Set(m.pairs.map(p => `${p.a.id}|${p.b.id}`)) }))}
+          onSelectNone={() => setTransferModal(m => ({ ...m, selected: new Set() }))}
+          onClose={() => setTransferModal(null)}
+          onConfirm={commitTransferPairs}
+          onDismissSelected={dismissSelectedPairs}
+        />
+      )}
+
       {importResult && (
         <div style={{ position: "fixed", bottom: 20, right: 20, padding: "12px 18px", background: "#2ECC71", color: "#fff", borderRadius: 8, boxShadow: "0 6px 20px rgba(0,0,0,0.15)", fontSize: 14, fontWeight: 600, zIndex: 300 }}>
           ✓ Imported {importResult.added} transaction{importResult.added === 1 ? "" : "s"}
@@ -502,16 +587,18 @@ export default function TransactionsTab(props) {
 }
 
 /* ── Individual row ── */
-function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, forceExpandSplits }) {
+function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, onUnpair, forceExpandSplits }) {
   const [editing, setEditing] = useState(null); // field name currently being edited
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState(false);
   const txHasSplits = Array.isArray(tx.splits) && tx.splits.length > 0;
   const showChildren = txHasSplits && (expanded || forceExpandSplits);
 
-  const isTransferHint = TRANSFER_HINT_RX.test(tx.description || "");
-  const isTransferCat  = transferCatSet && tx.category && transferCatSet.has(tx.category);
-  const isTransfer     = isTransferHint || isTransferCat;
+  const isTransferHint   = TRANSFER_HINT_RX.test(tx.description || "");
+  const isTransferCat    = transferCatSet && tx.category && transferCatSet.has(tx.category);
+  const isTransferFlag   = !!tx.custom_fields?._is_transfer;
+  const isPaired         = !!tx.custom_fields?._transfer_pair_id;
+  const isTransfer       = isTransferHint || isTransferCat || isTransferFlag;
   // A row with splits isn't uncategorized even if tx.category is null — the
   // splits carry the allocations. Treat it as categorized.
   const isUncat = !tx.category && !txHasSplits;
@@ -559,6 +646,11 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
         ))}
         <td style={td()}>
           <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+            {isPaired && onUnpair && (
+              <button title="Unpair transfer (will be excluded from future auto-detection)"
+                onClick={() => onUnpair(tx)}
+                style={{ border: "none", background: "none", color: "#556FB5", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>↩</button>
+            )}
             {onOpenSplitEditor && (
               <button title={txHasSplits ? "Edit splits" : "Split this transaction"}
                 onClick={() => onOpenSplitEditor(tx)}
@@ -1027,6 +1119,94 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
     </div>
   );
 }
+
+/* ── Transfer pairs modal ──
+   Shows the candidate pairs from findTransferCandidates. Each pair has a
+   checkbox; Confirm marks the checked pairs as transfers. Dismiss flags the
+   checked pairs as "not a transfer, stop suggesting." The modal is purely
+   presentational — the parent owns the state and commit logic. */
+function TransferPairsModal({ pairs, selected, onToggle, onSelectAll, onSelectNone, onClose, onConfirm, onDismissSelected }) {
+  const checkedCount = selected.size;
+  const totalCount = pairs.length;
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 780, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>
+          Detected {totalCount} transfer candidate{totalCount === 1 ? "" : "s"}
+        </h3>
+        <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 14, lineHeight: 1.5 }}>
+          Each pair below has opposing amounts in different accounts within a few days.
+          Confirm the ones that are real transfers; dismiss coincidental matches so they don't resurface.
+        </div>
+
+        {totalCount === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13 }}>
+            No candidate pairs found. Adjust the tolerance knobs on the Settings tab if you expected a match.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12, color: "var(--tx3, #888)" }}>
+              <span><strong style={{ color: "var(--tx, #333)" }}>{checkedCount}</strong> of {totalCount} selected</span>
+              <button onClick={onSelectAll} style={pillBtn()}>Select all</button>
+              <button onClick={onSelectNone} style={pillBtn()}>Select none</button>
+            </div>
+            <div style={{ flex: 1, minHeight: 200, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 8 }}>
+              {pairs.map(pair => {
+                const key = `${pair.a.id}|${pair.b.id}`;
+                const isChecked = selected.has(key);
+                return (
+                  <div key={key} style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--bdr2, #eee)", alignItems: "center", background: isChecked ? "rgba(85, 111, 181, 0.05)" : "transparent" }}>
+                    <input type="checkbox" checked={isChecked} onChange={() => onToggle(key)}
+                      style={{ width: 16, height: 16, cursor: "pointer" }} />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <PairRow tx={pair.a} />
+                      <PairRow tx={pair.b} />
+                      <div style={{ fontSize: 11, color: "var(--tx3, #999)", fontStyle: "italic" }}>
+                        {pair.reason} · confidence {(pair.confidence * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button onClick={onClose} style={btn("var(--card-bg, #fff)", "var(--tx2, #555)")}>Cancel</button>
+          {totalCount > 0 && (
+            <>
+              <button onClick={onDismissSelected} disabled={checkedCount === 0}
+                title="Mark the checked pairs as 'not a transfer' so they won't be suggested again"
+                style={{ ...btn("var(--card-bg, #fff)", "#E8573A"), border: "1px solid #E8573A", opacity: checkedCount === 0 ? 0.5 : 1, cursor: checkedCount === 0 ? "not-allowed" : "pointer" }}>
+                Dismiss selected
+              </button>
+              <button onClick={onConfirm} disabled={checkedCount === 0}
+                style={{ ...btn("#556FB5", "#fff"), opacity: checkedCount === 0 ? 0.5 : 1, cursor: checkedCount === 0 ? "not-allowed" : "pointer" }}>
+                Pair selected ({checkedCount})
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PairRow({ tx }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "90px 1fr 100px 120px", gap: 8, fontSize: 13, alignItems: "center" }}>
+      <span style={{ color: "var(--tx3, #888)", fontFamily: "monospace", fontSize: 12 }}>{tx.date}</span>
+      <span style={{ color: "var(--tx, #333)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tx.description}>{tx.description || <em style={{ color: "var(--tx3, #bbb)" }}>(no description)</em>}</span>
+      <span style={{ fontFamily: "monospace", fontVariantNumeric: "tabular-nums", textAlign: "right", color: Number(tx.amount) < 0 ? "#E8573A" : "#2ECC71", fontWeight: 600 }}>{fmt(Number(tx.amount) || 0)}</span>
+      <span style={{ color: "var(--tx2, #555)", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tx.account}>{tx.account || <em style={{ color: "var(--tx3, #bbb)" }}>—</em>}</span>
+    </div>
+  );
+}
+
+const pillBtn = () => ({ padding: "3px 10px", fontSize: 11, fontWeight: 600, borderRadius: 10, border: "1px solid var(--bdr, #ccc)", background: "var(--card-bg, #fff)", color: "var(--tx2, #555)", cursor: "pointer" });
 
 /* ── tiny style helpers, kept local so we don't bloat ui.jsx ── */
 const inp = () => ({ padding: 6, fontSize: 13, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", width: "100%", boxSizing: "border-box" });
