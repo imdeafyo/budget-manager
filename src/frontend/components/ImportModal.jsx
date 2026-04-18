@@ -6,6 +6,7 @@ import {
   findProfileByHeaders, guessMapping, guessDateFormat,
 } from "../utils/importPipeline.js";
 import { newId } from "../utils/transactions.js";
+import { applyRulesToTransaction } from "../utils/rules.js";
 import { fmt } from "../utils/calc.js";
 
 /* ══════════════════════════ IMPORT MODAL ══════════════════════════
@@ -40,6 +41,7 @@ export default function ImportModal(props) {
     setImportProfiles,
     transactionColumns = [],
     budgetCategories = [],
+    transactionRules = [],
     onClose,
   } = props;
 
@@ -151,12 +153,24 @@ export default function ImportModal(props) {
     setStep(STEP_COMMITTING);
     const batchId = newId();
     const rowsToAdd = [];
+    const rulesOverride = profile.rulesOverrideCsv !== false; // default true
     preview.forEach((p, i) => {
       if (skipSet.has(i)) return;
       if (p.status === "error") return;
       // Strip internal-only fields before adding
       const { _errors, _warnings, ...clean } = p.candidate;
-      rowsToAdd.push({ ...clean, import_batch_id: batchId });
+      let row = { ...clean, import_batch_id: batchId };
+      // Apply any enabled rules. If rulesOverrideCsv is on, rules can overwrite
+      // the CSV-derived category; otherwise they only fill rows where category
+      // is still empty. applyRulesToTransaction also handles custom_fields /
+      // mark_transfer actions uniformly.
+      if (transactionRules && transactionRules.length) {
+        const { tx: updated } = applyRulesToTransaction(row, transactionRules, {
+          overrideExisting: rulesOverride,
+        });
+        row = updated;
+      }
+      rowsToAdd.push(row);
     });
 
     if (rowsToAdd.length) {
@@ -480,15 +494,24 @@ function MappingStep({ headers, rows, profile, setProfile, transactionColumns, b
       {profile.mapping?.category && (
         <div>
           <SH>Category handling</SH>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--tx, #333)", marginBottom: 8 }}>
-            <input type="checkbox" checked={!!profile.trustCategories}
-              onChange={(e) => up({ trustCategories: e.target.checked })} />
-            Trust source categories — use the imported category value directly
-          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--tx, #333)" }}>
+              <input type="checkbox" checked={!!profile.trustCategories}
+                onChange={(e) => up({ trustCategories: e.target.checked })} />
+              Use imported categories
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--tx, #333)" }}>
+              <input type="checkbox" checked={profile.rulesOverrideCsv !== false}
+                onChange={(e) => up({ rulesOverrideCsv: e.target.checked })} />
+              Rules can override
+            </label>
+          </div>
           <div style={{ fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5, marginBottom: 8 }}>
             {profile.trustCategories
-              ? "Imported categories are used as-is, applied only through the alias map below if matched."
-              : "Imported category column is ignored unless an alias below translates it to one of your budget categories. All other rows will be uncategorized."}
+              ? (profile.rulesOverrideCsv !== false
+                  ? "Imported categories apply by default; any matching rule overrides them."
+                  : "Imported categories apply verbatim. Rules only fill rows the CSV left uncategorized.")
+              : "The imported category column is ignored. Rules and the alias map below are the only way categories get set."}
           </div>
 
           <CategoryAliasEditor
@@ -789,7 +812,8 @@ function blankProfile() {
     typeColumn: null,
     debitValues: ["debit", "dr", "withdrawal"],
     defaultAccount: "",
-    trustCategories: false,
+    trustCategories: true,    // default flipped in Phase 5a — most people want the CSV's category
+    rulesOverrideCsv: true,   // if a rule matches, it wins over whatever the CSV said
     categoryAliases: {},
     customMapping: {},
   };

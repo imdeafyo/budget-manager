@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { Card, SH } from "../components/ui.jsx";
 import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils/transactions.js";
+import { newRule, compileRule, moveRule, applyRulesToAll } from "../utils/rules.js";
 
 /* ── CollapsibleCard ──
    Card with a clickable header that toggles the body open/closed. Persists
@@ -36,8 +37,11 @@ export default function SettingsTab(props) {
     hiddenColumns, setHiddenColumns,
     rowCapWarn, setRowCapWarn,
     rowCapThreshold, setRowCapThreshold,
-    transactions,
+    transactions, setTransactions,
+    updateTransaction,
     importProfiles = [], setImportProfiles,
+    transactionRules = [], setTransactionRules,
+    cats = [], savCats = [], transferCats = [],
     deleteImportBatch,
   } = props;
 
@@ -226,6 +230,29 @@ export default function SettingsTab(props) {
       </CollapsibleCard>
 
       <CollapsibleCard
+        id="rules"
+        title="Categorization rules"
+        summary={`${transactionRules.length} rule${transactionRules.length === 1 ? "" : "s"}${transactionRules.length ? ` · ${transactionRules.filter(r => r.enabled).length} enabled` : ""}`}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          Rules run top-down on imports and when you ask for a re-sweep. First match wins per field — a rule
+          that sets category doesn't stop a later rule from setting a custom field, but two rules that both
+          set category will only apply the first matching one.
+        </p>
+
+        <RulesPanel
+          rules={transactionRules}
+          setRules={setTransactionRules}
+          cats={cats}
+          savCats={savCats}
+          transferCats={transferCats}
+          transactionColumns={transactionColumns || []}
+          transactions={transactions}
+          setTransactions={setTransactions}
+        />
+      </CollapsibleCard>
+
+      <CollapsibleCard
         id="recent"
         title="Recent imports"
         summary={recentBatches.length === 0 ? "None yet" : `${recentBatches.length} batch${recentBatches.length === 1 ? "" : "es"}`}
@@ -314,7 +341,10 @@ function ProfileRow({ profile, onRename, onDelete }) {
   const summary = [];
   if (profile.amountConvention) summary.push(amountLabel(profile.amountConvention));
   if (profile.dateFormat) summary.push(profile.dateFormat);
-  if (profile.trustCategories) summary.push("trusts source categories");
+  // With the Phase 5a defaults (trust=true, rulesOverride=true) everyone's a rule-first,
+  // CSV-as-fallback setup. Only surface the deviations from the norm.
+  if (profile.trustCategories === false) summary.push("ignores CSV categories");
+  if (profile.rulesOverrideCsv === false) summary.push("CSV wins over rules");
   const aliasCount = Object.keys(profile.categoryAliases || {}).length;
   if (aliasCount) summary.push(`${aliasCount} alias${aliasCount === 1 ? "" : "es"}`);
 
@@ -340,6 +370,349 @@ function ProfileRow({ profile, onRename, onDelete }) {
   );
 }
 
+/* ══════════════════════════ RulesPanel ══════════════════════════
+   Manages the list of transactionRules. One component so the collapsible card
+   stays tidy. Rules are stored in array order = priority. */
+function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionColumns, transactions, setTransactions }) {
+  const [expanded, setExpanded] = useState(() => new Set()); // rule ids with editor open
+  const [sweepResult, setSweepResult] = useState(null);
+
+  const allCatOptions = useMemo(() => {
+    const s = new Set([...(cats || []), ...(savCats || []), ...(transferCats || [])]);
+    (transactions || []).forEach(t => { if (t.category) s.add(t.category); });
+    return [...s].sort();
+  }, [cats, savCats, transferCats, transactions]);
+
+  const addRule = () => {
+    const newR = newRule({
+      name: "New rule",
+      conditions: [{ field: "description", operator: "contains", value: "", caseSensitive: false }],
+      action: { type: "set_category", value: "" },
+    });
+    setRules(prev => [...prev, newR]);
+    // open editor for the new rule so the user can immediately edit
+    setExpanded(prev => {
+      const n = new Set(prev);
+      n.add(newR.id);
+      return n;
+    });
+  };
+
+  const updateRule = (id, patch) => {
+    setRules(prev => prev.map(r => r.id === id ? { ...r, ...patch, updatedAt: new Date().toISOString() } : r));
+  };
+
+  const deleteRule = (id) => {
+    const r = rules.find(x => x.id === id);
+    if (!r) return;
+    if (!confirm(`Delete rule "${r.name}"?`)) return;
+    setRules(prev => prev.filter(x => x.id !== id));
+    setExpanded(prev => { const n = new Set(prev); n.delete(id); return n; });
+  };
+
+  const move = (idx, delta) => {
+    setRules(prev => moveRule(prev, idx, idx + delta));
+  };
+
+  const toggleExpand = (id) => {
+    setExpanded(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  const reRunAll = () => {
+    if (!rules.length || !setTransactions) return;
+    const enabled = rules.filter(r => r.enabled);
+    if (!enabled.length) { alert("No enabled rules to run."); return; }
+    const msg = `Apply ${enabled.length} enabled rule${enabled.length === 1 ? "" : "s"} across ${transactions.length.toLocaleString()} transactions? Manually-categorized rows won't be overwritten.`;
+    if (!confirm(msg)) return;
+    const { transactions: updated, stats } = applyRulesToAll(transactions, enabled);
+    setTransactions(updated);
+    setSweepResult({ matched: stats.matched, total: transactions.length });
+    setTimeout(() => setSweepResult(null), 6000);
+  };
+
+  return (
+    <>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        <button onClick={addRule} style={btn("#556FB5", "#fff")}>+ Add rule</button>
+        <button onClick={reRunAll} disabled={!rules.length}
+          style={{ ...btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)"), opacity: rules.length ? 1 : 0.5, cursor: rules.length ? "pointer" : "not-allowed" }}>
+          Re-run rules on all transactions
+        </button>
+        {sweepResult && (
+          <span style={{ fontSize: 12, color: "#2ECC71", fontWeight: 600 }}>
+            ✓ {sweepResult.matched.toLocaleString()} of {sweepResult.total.toLocaleString()} rows matched
+          </span>
+        )}
+      </div>
+
+      {rules.length === 0 ? (
+        <div style={{ fontSize: 13, color: "var(--tx3, #aaa)", fontStyle: "italic", padding: 12 }}>
+          No rules yet. Rules are created automatically when you manually categorize a transaction and choose "Create rule," or you can add one here.
+        </div>
+      ) : (
+        <div style={{ border: "1px solid var(--bdr2, #eee)", borderRadius: 8, overflow: "hidden" }}>
+          {rules.map((r, idx) => (
+            <RuleRow
+              key={r.id}
+              rule={r}
+              index={idx}
+              total={rules.length}
+              expanded={expanded.has(r.id)}
+              onToggleExpand={() => toggleExpand(r.id)}
+              onUpdate={(patch) => updateRule(r.id, patch)}
+              onDelete={() => deleteRule(r.id)}
+              onMoveUp={() => move(idx, -1)}
+              onMoveDown={() => move(idx, 1)}
+              allCatOptions={allCatOptions}
+              transactionColumns={transactionColumns}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ══════════════════════════ RuleRow ══════════════════════════
+   One rule in the list. Header row shows priority, enable toggle, name, move
+   buttons, and delete. Body is an editor revealed on expand.
+
+   The condition editor supports one primary condition; more advanced
+   multi-condition rules can be added via direct state manipulation — the
+   engine supports them, the UI keeps it simple for v1. */
+function RuleRow({ rule, index, total, expanded, onToggleExpand, onUpdate, onDelete, onMoveUp, onMoveDown, allCatOptions, transactionColumns }) {
+  const { valid, errors } = compileRule(rule);
+  const primary = rule.conditions?.[0] || { field: "description", operator: "contains", value: "" };
+
+  const setPrimary = (patch) => {
+    const next = { ...primary, ...patch };
+    const rest = (rule.conditions || []).slice(1);
+    onUpdate({ conditions: [next, ...rest] });
+  };
+
+  const setAction = (patch) => {
+    onUpdate({ action: { ...(rule.action || {}), ...patch } });
+  };
+
+  // Support for additional conditions (AND beyond the primary one). Kept compact.
+  const addCondition = () => {
+    onUpdate({
+      conditions: [
+        ...(rule.conditions || []),
+        { field: "description", operator: "contains", value: "", caseSensitive: false },
+      ],
+    });
+  };
+  const updateExtraCond = (i, patch) => {
+    const conds = [...(rule.conditions || [])];
+    conds[i] = { ...conds[i], ...patch };
+    onUpdate({ conditions: conds });
+  };
+  const removeCond = (i) => {
+    const conds = [...(rule.conditions || [])];
+    conds.splice(i, 1);
+    onUpdate({ conditions: conds });
+  };
+
+  const customColOptions = (transactionColumns || []).map(c => ({ id: `custom.${c.id}`, name: c.name }));
+
+  return (
+    <div style={{ borderBottom: index < total - 1 ? "1px solid var(--bdr2, #eee)" : "none" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 10, background: rule.enabled ? "transparent" : "var(--input-bg, #fafafa)" }}>
+        <span style={{ fontSize: 11, color: "var(--tx3, #999)", fontFamily: "monospace", width: 20, textAlign: "center" }} title="Priority — lower runs first">
+          {index + 1}
+        </span>
+        <input type="checkbox" checked={rule.enabled} onChange={e => onUpdate({ enabled: e.target.checked })}
+          title={rule.enabled ? "Rule is active" : "Rule is disabled"} />
+        <span onClick={onToggleExpand}
+          style={{ flex: 1, cursor: "pointer", fontSize: 13, fontWeight: 600, color: rule.enabled ? "var(--tx, #333)" : "var(--tx3, #999)", display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 10, transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s", display: "inline-block" }}>▶</span>
+          {rule.name || <em style={{ color: "var(--tx3, #aaa)" }}>unnamed</em>}
+          {!valid && (
+            <span title={errors.join("\n")} style={{ fontSize: 10, padding: "2px 6px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 4, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              ⚠ error
+            </span>
+          )}
+        </span>
+        <button onClick={onMoveUp} disabled={index === 0}
+          title="Move up (higher priority)"
+          style={{ border: "none", background: "none", color: index === 0 ? "#ccc" : "var(--tx3, #888)", cursor: index === 0 ? "default" : "pointer", fontSize: 14, padding: "0 4px" }}>
+          ▲
+        </button>
+        <button onClick={onMoveDown} disabled={index >= total - 1}
+          title="Move down (lower priority)"
+          style={{ border: "none", background: "none", color: index >= total - 1 ? "#ccc" : "var(--tx3, #888)", cursor: index >= total - 1 ? "default" : "pointer", fontSize: 14, padding: "0 4px" }}>
+          ▼
+        </button>
+        <button onClick={onDelete} title="Delete rule"
+          style={{ border: "none", background: "none", color: "#E8573A", cursor: "pointer", fontSize: 16, padding: "0 4px" }}>×</button>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: 14, background: "var(--input-bg, #fafafa)", borderTop: "1px solid var(--bdr2, #eee)" }}>
+          {/* Name + match mode */}
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div>
+              <label style={lbl()}>Rule name</label>
+              <input value={rule.name || ""} onChange={e => onUpdate({ name: e.target.value })} style={inp()} />
+            </div>
+            <div>
+              <label style={lbl()}>Match</label>
+              <select value={rule.match || "all"} onChange={e => onUpdate({ match: e.target.value })} style={inp()}>
+                <option value="all">all conditions (AND)</option>
+                <option value="any">any condition (OR)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Conditions */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={lbl()}>Conditions</label>
+            <ConditionEditor
+              cond={primary}
+              onChange={setPrimary}
+              customColOptions={customColOptions}
+              canRemove={false}
+            />
+            {(rule.conditions || []).slice(1).map((c, i) => (
+              <ConditionEditor
+                key={i}
+                cond={c}
+                onChange={(patch) => updateExtraCond(i + 1, patch)}
+                customColOptions={customColOptions}
+                canRemove
+                onRemove={() => removeCond(i + 1)}
+              />
+            ))}
+            <button onClick={addCondition}
+              style={{ ...btn("transparent", "var(--tx2, #555)"), border: "1px dashed var(--bdr, #ccc)", marginTop: 6, fontSize: 11 }}>
+              + Add condition
+            </button>
+          </div>
+
+          {/* Action */}
+          <div>
+            <label style={lbl()}>Action</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <select value={rule.action?.type || "set_category"} onChange={e => {
+                const type = e.target.value;
+                // Reset value appropriately when switching action types
+                if (type === "set_category")       setAction({ type, value: "" });
+                else if (type === "mark_transfer") setAction({ type, value: "" });
+                else if (type === "set_custom")    setAction({ type, columnId: "", customValue: "" });
+              }} style={inp()}>
+                <option value="set_category">Set category</option>
+                <option value="mark_transfer">Mark as transfer</option>
+                <option value="set_custom">Set custom field</option>
+              </select>
+
+              {rule.action?.type === "set_category" && (
+                <select value={rule.action.value || ""} onChange={e => setAction({ value: e.target.value })} style={inp()}>
+                  <option value="">— pick a category —</option>
+                  {allCatOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
+              {rule.action?.type === "mark_transfer" && (
+                <div style={{ fontSize: 12, color: "var(--tx3, #888)", alignSelf: "center", paddingLeft: 4 }}>
+                  Flags the row as a transfer (excluded from spending totals).
+                </div>
+              )}
+              {rule.action?.type === "set_custom" && (
+                <>
+                  <select value={rule.action.columnId || ""} onChange={e => setAction({ columnId: e.target.value })} style={inp()}>
+                    <option value="">— pick a column —</option>
+                    {(transactionColumns || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <input value={rule.action.customValue ?? ""} onChange={e => setAction({ customValue: e.target.value })}
+                    placeholder="value" style={{ ...inp(), gridColumn: "1 / -1" }} />
+                </>
+              )}
+            </div>
+          </div>
+
+          {!valid && (
+            <div style={{ marginTop: 10, padding: 8, background: "rgba(232, 87, 58, 0.08)", borderLeft: "3px solid #E8573A", borderRadius: 4, fontSize: 12, color: "var(--tx, #333)" }}>
+              {errors.map((e, i) => <div key={i}>⚠ {e}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* A single condition row — field, operator, value (+ value2 for 'between'). */
+function ConditionEditor({ cond, onChange, customColOptions = [], canRemove, onRemove }) {
+  const op = cond?.operator || "contains";
+  const isNumeric = ["gt", "gte", "lt", "lte", "between"].includes(op);
+  const isEmptyCheck = ["is_empty", "is_not_empty"].includes(op);
+  const isRegex = op === "regex";
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isNumeric && op === "between" ? "1fr 1fr 1fr 1fr auto" : "1fr 1fr 2fr auto", gap: 6, alignItems: "center", marginBottom: 6 }}>
+      <select value={cond?.field || "description"} onChange={e => onChange({ field: e.target.value })} style={inp()}>
+        <option value="description">Description</option>
+        <option value="amount">Amount</option>
+        <option value="account">Account</option>
+        <option value="category">Category</option>
+        <option value="notes">Notes</option>
+        {customColOptions.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+
+      <select value={op} onChange={e => onChange({ operator: e.target.value })} style={inp()}>
+        <optgroup label="Text">
+          <option value="contains">contains</option>
+          <option value="not_contains">doesn't contain</option>
+          <option value="equals">equals</option>
+          <option value="not_equals">doesn't equal</option>
+          <option value="starts_with">starts with</option>
+          <option value="ends_with">ends with</option>
+          <option value="regex">matches regex</option>
+        </optgroup>
+        <optgroup label="Number">
+          <option value="gt">greater than</option>
+          <option value="gte">≥</option>
+          <option value="lt">less than</option>
+          <option value="lte">≤</option>
+          <option value="between">between</option>
+        </optgroup>
+        <optgroup label="Empty">
+          <option value="is_empty">is empty</option>
+          <option value="is_not_empty">is not empty</option>
+        </optgroup>
+      </select>
+
+      {isEmptyCheck ? (
+        <span style={{ fontSize: 12, color: "var(--tx3, #888)", padding: "0 6px" }}>—</span>
+      ) : op === "between" ? (
+        <>
+          <input type="number" value={cond?.value ?? ""} onChange={e => onChange({ value: e.target.value === "" ? "" : Number(e.target.value) })} placeholder="min" style={inp()} />
+          <input type="number" value={cond?.value2 ?? ""} onChange={e => onChange({ value2: e.target.value === "" ? "" : Number(e.target.value) })} placeholder="max" style={inp()} />
+        </>
+      ) : (
+        <input
+          type={isNumeric ? "number" : "text"}
+          value={cond?.value ?? ""}
+          onChange={e => onChange({ value: isNumeric ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value })}
+          placeholder={isRegex ? "regex pattern" : "value"}
+          style={inp()}
+        />
+      )}
+
+      {canRemove ? (
+        <button onClick={onRemove} title="Remove condition"
+          style={{ border: "none", background: "none", color: "#E8573A", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>×</button>
+      ) : (
+        <span style={{ width: 16 }} />
+      )}
+    </div>
+  );
+}
+
 function amountLabel(conv) {
   return {
     "signed": "signed amount",
@@ -358,6 +731,7 @@ function formatTimestamp(iso) {
 }
 
 const inp = (width) => ({ padding: 6, fontSize: 13, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", width: width ? `${width}px` : "auto", boxSizing: "border-box" });
+const lbl = () => ({ display: "block", fontSize: 11, color: "var(--tx3, #888)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 });
 const btn = (bg, color) => ({ padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, border: "none", background: bg, color, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" });
 const th = { padding: "8px 10px", textAlign: "left", fontSize: 11, color: "var(--tx3, #888)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 };
 const td = { padding: "8px 10px", verticalAlign: "middle", color: "var(--tx, #333)" };

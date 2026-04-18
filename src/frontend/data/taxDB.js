@@ -136,4 +136,5 @@ export const DEF_EXP = [
   {n:"Castle Rock Water",c:"Utilities",t:"N",v:"0",p:"m"},
 ];
 export const DEF_SAV_CATS = ["Emergency","Short-Term","Long-Term","Retirement","Travel","Home","Education","Other"];
+export const DEF_TRANSFER_CATS = ["Transfer","Credit Card Payment","Internal Transfer"];
 export const DEF_SAV = [{n:"House Fund",v:"0",p:"m",c:"Home"},{n:"Emergency Fund",v:"0",p:"m",c:"Emergency"},{n:"Washing Machine",v:"0",p:"m",c:"Home"},{n:"Destination Unknown",v:"0",p:"m",c:"Travel"},{n:"Temporary",v:"0",p:"m",c:"Other"}];

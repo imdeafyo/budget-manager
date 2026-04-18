@@ -19,7 +19,10 @@
      typeColumn:      string?    (source column for type-column convention)
      debitValues:     string[]   (values in typeColumn that mean "debit"; default ["debit","DR","withdrawal"])
      defaultAccount:  string     (applied when account isn't mapped; falls back to profile name)
-     trustCategories: boolean    (if true, imported category is used verbatim post-alias)
+     trustCategories: boolean    (DEFAULT true — if true, imported category is used verbatim
+                                    post-alias; if false, CSV category is dropped entirely)
+     rulesOverrideCsv: boolean   (DEFAULT true — if true, matching rules override the
+                                    imported category; if false, rules only fill when category is empty)
      categoryAliases: object     { <importedCategoryRaw>: <localCategory> }
      customMapping:   object     { <customColumnId>: <sourceHeader> }
      createdAt:       string

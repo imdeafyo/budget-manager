@@ -60,32 +60,37 @@ export default function CategoriesTab({
   mob,
   cats, setCats, newCat, setNewCat,
   savCats, setSavCats,
+  transferCats = [], setTransferCats,
   exp, setExp,
   sav, setSav,
   transactions = [], setTransactions,
 }) {
   const [newSavCat, setNewSavCat] = useState("");
+  const [newTransferCat, setNewTransferCat] = useState("");
   const sortA = arr => [...arr].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
 
   /* ── Rename with cascade prompt ──
      Renaming affects three scopes:
-       1. The category list itself (cats or savCats) — always.
+       1. The category list itself (cats, savCats, or transferCats) — always.
        2. Budget line items (exp/sav) referencing the old name — cascaded
           silently since the line item category is a hard reference.
+          Transfer cats never touch budget lines (they don't have one).
        3. Transactions referencing the old name — prompted, because the user
           might have meant only to rename the budget category. */
-  const renameCategory = (oldName, newName, kind /* "exp" | "sav" */) => {
+  const renameCategory = (oldName, newName, kind /* "exp" | "sav" | "transfer" */) => {
     // (1) Category list
     if (kind === "exp") {
       setCats(prev => prev.map(c => c === oldName ? newName : c));
-    } else {
+    } else if (kind === "sav") {
       setSavCats(prev => prev.map(c => c === oldName ? newName : c));
+    } else {
+      setTransferCats(prev => prev.map(c => c === oldName ? newName : c));
     }
 
-    // (2) Budget line items — silent cascade
+    // (2) Budget line items — silent cascade (only for exp/sav)
     if (kind === "exp") {
       setExp(prev => prev.map(it => it.c === oldName ? { ...it, c: newName } : it));
-    } else {
+    } else if (kind === "sav") {
       setSav(prev => prev.map(it => it.c === oldName ? { ...it, c: newName } : it));
     }
 
@@ -107,13 +112,17 @@ export default function CategoriesTab({
   };
 
   const deleteCategory = (name, kind) => {
-    const list = kind === "exp" ? cats : savCats;
-    const setList = kind === "exp" ? setCats : setSavCats;
-    if (list.length <= 1) { alert("Can't delete the last category."); return; }
+    const list = kind === "exp" ? cats : kind === "sav" ? savCats : transferCats;
+    const setList = kind === "exp" ? setCats : kind === "sav" ? setSavCats : setTransferCats;
+    // Only block last-delete for exp/sav (they're required for budget items).
+    // Transfer cats can go to zero — no budget dependency.
+    if ((kind === "exp" || kind === "sav") && list.length <= 1) { alert("Can't delete the last category."); return; }
     const txMatches = (transactions || []).filter(t => t.category === name);
     const lineMatches = kind === "exp"
       ? exp.filter(it => it.c === name).length
-      : sav.filter(it => it.c === name).length;
+      : kind === "sav"
+      ? sav.filter(it => it.c === name).length
+      : 0;
     let msg = `Remove category "${name}"?`;
     if (lineMatches > 0 || txMatches.length > 0) {
       const bits = [];
@@ -126,10 +135,10 @@ export default function CategoriesTab({
   };
 
   /* ── Orphan detection ──
-     Any non-empty category value on a transaction that isn't in either of
-     the canonical category lists. */
+     Any non-empty category value on a transaction that isn't in any of
+     the canonical category lists (exp, sav, or transfer). */
   const orphans = useMemo(() => {
-    const known = new Set([...cats, ...savCats]);
+    const known = new Set([...cats, ...savCats, ...transferCats]);
     const tally = new Map();
     for (const t of transactions || []) {
       const c = t.category;
@@ -140,11 +149,12 @@ export default function CategoriesTab({
     return [...tally.entries()]
       .map(([c, count]) => ({ category: c, count }))
       .sort((a, b) => b.count - a.count);
-  }, [cats, savCats, transactions]);
+  }, [cats, savCats, transferCats, transactions]);
 
   const addOrphan = (name, kind) => {
-    if (kind === "exp") setCats(prev => sortA([...prev, name]));
-    else                setSavCats(prev => sortA([...prev, name]));
+    if (kind === "exp")          setCats(prev => sortA([...prev, name]));
+    else if (kind === "sav")     setSavCats(prev => sortA([...prev, name]));
+    else                         setTransferCats(prev => sortA([...prev, name]));
   };
 
   const ignoreOrphan = (name) => {
@@ -157,8 +167,9 @@ export default function CategoriesTab({
     ));
   };
 
-  const expAccent = { inputBorder: "#f5d5ce", inputBg: "#fef5f2" };
-  const savAccent = { inputBorder: "#d5f5e3", inputBg: "#f0faf5" };
+  const expAccent      = { inputBorder: "#f5d5ce", inputBg: "#fef5f2" };
+  const savAccent      = { inputBorder: "#d5f5e3", inputBg: "#f0faf5" };
+  const transferAccent = { inputBorder: "#d5d5d5", inputBg: "#f4f4f4" };
 
   return (
     <>
@@ -185,6 +196,11 @@ export default function CategoriesTab({
                 <button onClick={() => addOrphan(o.category, "sav")}
                   style={{ padding: "4px 10px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                   + Savings
+                </button>
+                <button onClick={() => addOrphan(o.category, "transfer")}
+                  style={{ padding: "4px 10px", background: "#8a8a8a", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                  title="Transfer categories don't count as expenses or savings">
+                  + Transfer
                 </button>
                 <button onClick={() => ignoreOrphan(o.category)}
                   style={{ padding: "4px 10px", background: "transparent", color: "var(--tx3, #888)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, fontSize: 12, cursor: "pointer" }}
@@ -230,6 +246,27 @@ export default function CategoriesTab({
           </div>
         </Card>
       </div>
+
+      <Card style={{ marginTop: 20 }}>
+        <h3 style={{ margin: "0 0 6px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800, color: "#666" }}>Transfer Categories</h3>
+        <p style={{ margin: "0 0 14px", fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          Transactions in these categories are excluded from spending and savings totals. Use this for money moving between your own accounts — credit card payments, transfers to savings, etc. — so they don't double-count as both an expense and a deposit.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: "0 20px" }}>
+          {sortA(transferCats).map(c => (
+            <CategoryRow key={c} name={c} accent={transferAccent}
+              onRename={(oldN, newN) => renameCategory(oldN, newN, "transfer")}
+              onDelete={(n) => deleteCategory(n, "transfer")} />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <input value={newTransferCat} onChange={e => setNewTransferCat(e.target.value)} placeholder="New transfer category..."
+            onKeyDown={e => { if (e.key === "Enter" && newTransferCat.trim()) { setTransferCats(sortA([...transferCats, newTransferCat.trim()])); setNewTransferCat(""); } }}
+            style={{ flex: 1, border: "2px solid var(--input-border, #d5d5d5)", borderRadius: 8, padding: "8px 12px", fontSize: 14, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #f4f4f4)" }} />
+          <button onClick={() => { if (newTransferCat.trim()) { setTransferCats(sortA([...transferCats, newTransferCat.trim()])); setNewTransferCat(""); } }}
+            style={{ padding: "8px 18px", background: "#8a8a8a", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>+ Add</button>
+        </div>
+      </Card>
     </>
   );
 }

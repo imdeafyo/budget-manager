@@ -5,6 +5,9 @@ import {
   applyFilters, presetRange, sortTransactions,
   bulkSetField, bulkDelete,
 } from "../utils/transactions.js";
+import {
+  buildRuleFromExample, evaluateRule, applyRulesToTransaction,
+} from "../utils/rules.js";
 import { fmt } from "../utils/calc.js";
 import ImportModal from "../components/ImportModal.jsx";
 
@@ -25,9 +28,10 @@ export default function TransactionsTab(props) {
     mob,
     transactions, transactionColumns, hiddenColumns, setHiddenColumns,
     rowCapWarn, rowCapThreshold,
-    cats, savCats,
+    cats, savCats, transferCats = [],
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
+    transactionRules = [], setTransactionRules,
     txLoaded,
   } = props;
 
@@ -51,6 +55,11 @@ export default function TransactionsTab(props) {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 200;
+
+  // Remember-my-choice modal — fires when the user manually sets a category
+  // on a row whose description doesn't already match an existing rule.
+  // pendingCategorize = { tx, newCategory } while the modal is open.
+  const [pendingCategorize, setPendingCategorize] = useState(null);
 
   // Apply preset to date fields. "All time" (empty preset) clears dateFrom/dateTo.
   // Non-empty preset values resolve to a concrete date range.
@@ -101,10 +110,14 @@ export default function TransactionsTab(props) {
 
   // All categories combined for the inline dropdown
   const allCategoryOptions = useMemo(() => {
-    const s = new Set([...(cats || []), ...(savCats || [])]);
+    const s = new Set([...(cats || []), ...(savCats || []), ...(transferCats || [])]);
     transactions.forEach(t => { if (t.category) s.add(t.category); });
     return [...s].sort();
-  }, [cats, savCats, transactions]);
+  }, [cats, savCats, transferCats, transactions]);
+
+  // A Set of transfer category names so we can style/exclude transfer rows.
+  // Kept as state-derived so changes in Categories tab reflect immediately.
+  const transferCatSet = useMemo(() => new Set(transferCats || []), [transferCats]);
 
   // Summary stats for the filtered view
   const filteredTotal = useMemo(() => visibleRows.reduce((s, t) => s + Number(t.amount), 0), [visibleRows]);
@@ -153,7 +166,33 @@ export default function TransactionsTab(props) {
       const tx = visibleRows.find(r => r.id === id);
       if (tx) updateTransaction({ ...tx, category: bulkCat });
     }
+    // Offer to remember this for future imports — use the first selected row as
+    // the example (they all got the same category, so any one works).
+    const firstTx = Array.from(ids).map(id => transactions.find(t => t.id === id)).find(Boolean);
+    if (firstTx) maybeOfferRule(firstTx, bulkCat);
     setShowBulk(false); setBulkCat(""); setSelected(new Set());
+  };
+
+  /* ── Manual-categorize interception ──
+     Called by the inline category dropdown when the user picks a new value.
+     We always apply the change immediately (no waiting on a modal), then
+     decide whether to prompt for rule creation as a follow-up. */
+  const handleManualCategorize = (tx, newCategory) => {
+    updateTransaction({ ...tx, category: newCategory });
+    if (!newCategory) return; // don't prompt when clearing a category
+    maybeOfferRule(tx, newCategory);
+  };
+
+  /* Decide whether the remember-my-choice modal should appear.
+     Skip if:
+       - any enabled rule already matches this description (they already have one)
+       - there's no setTransactionRules prop (rules feature not wired) */
+  const maybeOfferRule = (tx, newCategory) => {
+    if (!setTransactionRules) return;
+    if (!tx?.description) return;
+    const alreadyMatched = transactionRules.some(r => r.enabled && evaluateRule(tx, r));
+    if (alreadyMatched) return;
+    setPendingCategorize({ tx, newCategory });
   };
 
   const bulkApplyAccount = async () => {
@@ -314,8 +353,10 @@ export default function TransactionsTab(props) {
                   selected={selected.has(tx.id)}
                   toggleSelect={() => toggleSelect(tx.id)}
                   allCategoryOptions={allCategoryOptions}
+                  transferCatSet={transferCatSet}
                   updateTransaction={updateTransaction}
                   deleteTransactions={deleteTransactions}
+                  onManualCategorize={handleManualCategorize}
                 />
               ))}
             </tbody>
@@ -347,12 +388,36 @@ export default function TransactionsTab(props) {
           setImportProfiles={setImportProfiles}
           transactionColumns={transactionColumns || []}
           budgetCategories={allCategoryOptions}
+          transactionRules={transactionRules}
+          setTransactionRules={setTransactionRules}
           onClose={(result) => {
             setShowImport(false);
             if (result && result.added > 0) {
               setImportResult(result);
               setTimeout(() => setImportResult(null), 5000);
             }
+          }}
+        />
+      )}
+
+      {pendingCategorize && setTransactionRules && (
+        <RememberChoiceModal
+          tx={pendingCategorize.tx}
+          category={pendingCategorize.newCategory}
+          allCategoryOptions={allCategoryOptions}
+          existingRules={transactionRules}
+          onDismiss={() => setPendingCategorize(null)}
+          onSaveRule={(rule, applyToExisting) => {
+            setTransactionRules(prev => [...prev, rule]);
+            if (applyToExisting) {
+              // Sweep all transactions and apply the new rule only (don't clobber existing).
+              setTransactions(prev => prev.map(t => {
+                if (t.id === pendingCategorize.tx.id) return t; // already categorized manually above
+                const { tx: updated, matchedRuleIds } = applyRulesToTransaction(t, [rule]);
+                return matchedRuleIds.length ? updated : t;
+              }));
+            }
+            setPendingCategorize(null);
           }}
         />
       )}
@@ -367,15 +432,17 @@ export default function TransactionsTab(props) {
 }
 
 /* ── Individual row ── */
-function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, updateTransaction, deleteTransactions }) {
+function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize }) {
   const [editing, setEditing] = useState(null); // field name currently being edited
   const [draft, setDraft] = useState("");
 
   const isTransferHint = TRANSFER_HINT_RX.test(tx.description || "");
+  const isTransferCat  = transferCatSet && tx.category && transferCatSet.has(tx.category);
+  const isTransfer     = isTransferHint || isTransferCat;
   const isUncat = !tx.category;
 
   const rowBg = isUncat ? "rgba(242, 169, 59, 0.06)"
-              : isTransferHint ? "rgba(120, 120, 120, 0.06)"
+              : isTransfer ? "rgba(120, 120, 120, 0.06)"
               : undefined;
 
   const startEdit = (field) => {
@@ -396,11 +463,11 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
   };
 
   return (
-    <tr style={{ borderBottom: "1px solid var(--bdr2, #eee)", background: rowBg, fontStyle: isTransferHint ? "italic" : "normal" }}>
+    <tr style={{ borderBottom: "1px solid var(--bdr2, #eee)", background: rowBg, fontStyle: isTransfer ? "italic" : "normal" }}>
       <td style={td()}><input type="checkbox" checked={selected} onChange={toggleSelect} /></td>
       {visibleColumns.map(col => (
         <td key={col.id} style={{ ...td(), textAlign: col.type === "number" ? "right" : "left" }} onDoubleClick={() => startEdit(col.id)}>
-          {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction)}
+          {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize)}
         </td>
       ))}
       <td style={td()}>
@@ -411,12 +478,20 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
   );
 }
 
-function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction) {
+function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize) {
   if (col.id === "category") {
     // Inline dropdown, always editable — no double-click needed for category since it's the most common edit
+    const handleCategoryChange = (newValue) => {
+      const next = newValue || null;
+      if (next === (tx.category || null)) return;
+      // Route through parent if a handler is provided (triggers remember-my-choice modal).
+      // Otherwise fall back to a direct update — keeps the component usable without the modal wiring.
+      if (onManualCategorize) onManualCategorize(tx, next);
+      else updateTransaction({ ...tx, category: next });
+    };
     return (
       <select value={tx.category || ""} className="cat-dd"
-        onChange={e => updateTransaction({ ...tx, category: e.target.value || null })}
+        onChange={e => handleCategoryChange(e.target.value)}
         style={{ color: tx.category ? "var(--tx, #333)" : "#F2A93B" }}>
         <option value="">— uncategorized —</option>
         {allCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
@@ -548,6 +623,121 @@ function AddTransactionModal({ allCategoryOptions, onSubmit, onClose }) {
         <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
           <button onClick={onClose} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Cancel</button>
           <button onClick={submit} style={btn("#2ECC71", "#fff")}>Add</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Remember-my-choice modal ──
+   Fires after the user manually recategorizes a row. Offers to save a rule that
+   will auto-categorize similar transactions going forward. Three paths:
+     [Just this one]    — do nothing, dismiss.
+     [Create rule]      — add the starter rule (contains <signature> → category).
+     [Customize rule…]  — let the user tweak match text/operator before saving.
+   An "Also apply to existing transactions" checkbox sweeps past rows. */
+function RememberChoiceModal({ tx, category, allCategoryOptions, existingRules, onDismiss, onSaveRule }) {
+  const initialRule = useMemo(() => buildRuleFromExample(tx, category), [tx, category]);
+  const [customize, setCustomize] = useState(false);
+  const [draftRule, setDraftRule] = useState(initialRule);
+  const [applyToExisting, setApplyToExisting] = useState(true);
+
+  const primaryCond = draftRule.conditions[0] || { field: "description", operator: "contains", value: "" };
+  const setPrimary = (patch) => {
+    const next = { ...primaryCond, ...patch };
+    setDraftRule({ ...draftRule, conditions: [next] });
+  };
+
+  // Heuristic: does this starter rule look similar to an existing one?
+  // If yes, we suggest the user not create a duplicate.
+  const looksLikeExisting = existingRules.some(r => {
+    const c = r.conditions?.[0];
+    return c && c.field === primaryCond.field && c.operator === primaryCond.operator
+      && String(c.value || "").toLowerCase() === String(primaryCond.value || "").toLowerCase();
+  });
+
+  const save = () => {
+    // Give the rule a sensible auto-generated name if the user hasn't customized one
+    const name = draftRule.name && draftRule.name.trim() !== "New rule"
+      ? draftRule.name
+      : `${primaryCond.value || "Match"} → ${category}`;
+    onSaveRule({ ...draftRule, name, updatedAt: new Date().toISOString() }, applyToExisting);
+  };
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onDismiss(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 520, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <h3 style={{ margin: "0 0 6px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Remember this?</h3>
+        <p style={{ margin: "0 0 16px", fontSize: 13, color: "var(--tx2, #555)", lineHeight: 1.5 }}>
+          You categorized <strong>{tx.description}</strong> as <strong>{category}</strong>. Want to do this automatically for future transactions?
+        </p>
+
+        {looksLikeExisting && (
+          <div style={{ padding: 10, marginBottom: 12, background: "rgba(242, 169, 59, 0.12)", borderLeft: "3px solid #F2A93B", borderRadius: 6, fontSize: 12, color: "var(--tx, #333)" }}>
+            A rule that looks similar already exists — you may not need to create another one.
+          </div>
+        )}
+
+        {!customize ? (
+          <div style={{ padding: 12, background: "var(--input-bg, #fafafa)", borderRadius: 8, marginBottom: 16, fontSize: 13, fontFamily: "'DM Sans',sans-serif", border: "1px solid var(--bdr2, #eee)" }}>
+            <div style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Suggested rule</div>
+            <div style={{ color: "var(--tx, #333)" }}>
+              When <strong>description</strong> contains <strong>"{primaryCond.value}"</strong>, set category to <strong>{category}</strong>.
+            </div>
+          </div>
+        ) : (
+          <div style={{ padding: 12, background: "var(--input-bg, #fafafa)", borderRadius: 8, marginBottom: 16, fontSize: 13, border: "1px solid var(--bdr2, #eee)" }}>
+            <div style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Customize</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+              <div>
+                <label style={lbl()}>Field</label>
+                <select value={primaryCond.field} onChange={e => setPrimary({ field: e.target.value })} style={inp()}>
+                  <option value="description">Description</option>
+                  <option value="account">Account</option>
+                  <option value="amount">Amount</option>
+                  <option value="notes">Notes</option>
+                </select>
+              </div>
+              <div>
+                <label style={lbl()}>Operator</label>
+                <select value={primaryCond.operator} onChange={e => setPrimary({ operator: e.target.value })} style={inp()}>
+                  <option value="contains">contains</option>
+                  <option value="equals">equals</option>
+                  <option value="starts_with">starts with</option>
+                  <option value="ends_with">ends with</option>
+                  <option value="regex">matches regex</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={lbl()}>Value</label>
+              <input value={primaryCond.value || ""} onChange={e => setPrimary({ value: e.target.value })} style={inp()} />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={lbl()}>Category to set</label>
+              <select value={draftRule.action.value} onChange={e => setDraftRule({ ...draftRule, action: { ...draftRule.action, value: e.target.value } })} style={inp()}>
+                {allCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl()}>Rule name</label>
+              <input value={draftRule.name} onChange={e => setDraftRule({ ...draftRule, name: e.target.value })} style={inp()} />
+            </div>
+          </div>
+        )}
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--tx2, #555)", marginBottom: 16, cursor: "pointer" }}>
+          <input type="checkbox" checked={applyToExisting} onChange={e => setApplyToExisting(e.target.checked)} />
+          Also apply to existing transactions that match
+        </label>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          <button onClick={onDismiss} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Just this one</button>
+          {!customize && (
+            <button onClick={() => setCustomize(true)} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Customize rule…</button>
+          )}
+          <button onClick={save} style={btn("#556FB5", "#fff")}>Create rule</button>
         </div>
       </div>
     </div>
