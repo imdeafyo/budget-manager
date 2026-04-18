@@ -67,7 +67,18 @@ export default function TransactionsTab(props) {
   const [bulkAcct, setBulkAcct] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(0);
-  const PAGE_SIZE = 200;
+  // Page size: persisted, defaults to 200. "All" uses Infinity, which bypasses pagination entirely.
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const v = localStorage.getItem("tx_page_size");
+      if (v === "all") return Infinity;
+      const n = Number(v);
+      return [50, 100, 200, 500].includes(n) ? n : 200;
+    } catch { return 200; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("tx_page_size", pageSize === Infinity ? "all" : String(pageSize)); } catch {}
+  }, [pageSize]);
 
   // ── Budget comparison (Phase 6a) ──
   // basis: 48 matches the user's mental model ("I budget $600/mo = $150/wk × 48/12").
@@ -128,11 +139,17 @@ export default function TransactionsTab(props) {
   useEffect(() => { setPage(0); }, [dateFrom, dateTo, search, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
 
   const pageRows = useMemo(() => {
-    const start = page * PAGE_SIZE;
-    return visibleRows.slice(start, start + PAGE_SIZE);
-  }, [visibleRows, page]);
+    if (pageSize === Infinity) return visibleRows;
+    const start = page * pageSize;
+    return visibleRows.slice(start, start + pageSize);
+  }, [visibleRows, page, pageSize]);
 
-  const totalPages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+  const totalPages = pageSize === Infinity
+    ? 1
+    : Math.max(1, Math.ceil(visibleRows.length / pageSize));
+
+  // Reset to first page when page size changes so the visible window stays sensible
+  useEffect(() => { setPage(0); }, [pageSize]);
 
   // All distinct values for filter dropdowns
   const allCats = useMemo(() => {
@@ -164,25 +181,46 @@ export default function TransactionsTab(props) {
   const uncategorizedCount = useMemo(() => transactions.filter(t => !t.category).length, [transactions]);
 
   // ── Budget comparison aggregation ──
-  // Only runs when we have a bounded date range. Comparing "all time" against
-  // a 48-paycheck weekly budget is nonsensical (days would be huge and budgets
-  // would inflate to match), so we require both dateFrom and dateTo.
-  // The chart card shows a helpful prompt when no range is set.
+  // When the user sets an explicit range (dateFrom + dateTo, via preset or
+  // custom inputs), we use it. When they haven't — "All time" or an 
+  // incomplete custom range — we infer bounds from the actual transactions:
+  //   effectiveFrom = min(tx.date across all transactions)
+  //   effectiveTo   = today
+  // That way "All time" shows a real comparison (all your spending against
+  // the equivalent slice of budget) instead of a hint card, and the user
+  // still gets the feedback they expect. The card shows a subtitle
+  // indicating the range was inferred.
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const compareReady = !!(dateFrom && dateTo);
+  const inferredBounds = useMemo(() => {
+    if (!transactions.length) return null;
+    let min = null;
+    for (const t of transactions) {
+      const d = t?.date;
+      if (!d) continue;
+      if (min === null || d < min) min = d;
+    }
+    return min ? { from: min, to: today } : null;
+  }, [transactions, today]);
+
+  const explicitRange = !!(dateFrom && dateTo);
+  const effectiveFrom = explicitRange ? dateFrom : inferredBounds?.from || "";
+  const effectiveTo   = explicitRange ? dateTo   : inferredBounds?.to   || "";
+  const compareReady  = !!(effectiveFrom && effectiveTo);
+  const rangeInferred = compareReady && !explicitRange;
+
   const compare = useMemo(() => {
     if (!compareReady) return null;
     return compareBudgetToActual({
       transactions,
       exp, sav,
       cats, savCats, transferCats,
-      fromIso: dateFrom,
-      toIso: dateTo,
+      fromIso: effectiveFrom,
+      toIso: effectiveTo,
       todayIso: today,
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, dateFrom, dateTo, today, basis]);
+  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -505,12 +543,13 @@ export default function TransactionsTab(props) {
         mob={mob}
         compare={compare}
         compareReady={compareReady}
+        rangeInferred={rangeInferred}
         showCompare={showCompare}
         setShowCompare={setShowCompare}
         basis={basis}
         setBasis={setBasis}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
+        dateFrom={effectiveFrom}
+        dateTo={effectiveTo}
       />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
@@ -562,11 +601,30 @@ export default function TransactionsTab(props) {
         )}
       </Card>
 
-      {totalPages > 1 && (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, marginTop: 12, fontSize: 13, color: "var(--tx2, #555)" }}>
-          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>← Prev</button>
-          <span>Page {page + 1} of {totalPages} ({(page * PAGE_SIZE + 1).toLocaleString()}–{Math.min((page + 1) * PAGE_SIZE, visibleRows.length).toLocaleString()})</span>
-          <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>Next →</button>
+      {visibleRows.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12, marginTop: 12, fontSize: 13, color: "var(--tx2, #555)", flexWrap: "wrap" }}>
+          {totalPages > 1 && (
+            <>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>← Prev</button>
+              <span>
+                Page {page + 1} of {totalPages}
+                {" "}({(page * pageSize + 1).toLocaleString()}–{Math.min((page + 1) * pageSize, visibleRows.length).toLocaleString()})
+              </span>
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>Next →</button>
+            </>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--tx3, #888)" }}>
+            Per page:
+            <select value={pageSize === Infinity ? "all" : String(pageSize)}
+              onChange={e => setPageSize(e.target.value === "all" ? Infinity : Number(e.target.value))}
+              style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", cursor: "pointer" }}>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+              <option value="all">All ({visibleRows.length.toLocaleString()})</option>
+            </select>
+          </label>
         </div>
       )}
 
@@ -1324,7 +1382,7 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo }) {
   // Build the chart dataset once. Expense rows come first (what users care about
   // most on this tab), then uncategorized as its own bar. Savings rows are
   // deferred to a future enhancement — keeps this chart focused on "did I
@@ -1353,14 +1411,16 @@ function BudgetCompareCard({ mob, compare, compareReady, showCompare, setShowCom
     return rows;
   }, [compare]);
 
-  // Helpful empty state: users land here before picking a range
+  // Empty state — only reached when there are literally no transactions to work
+  // with. (When transactions exist but no range is picked, the parent infers
+  // effective bounds from the data and rangeInferred is true.)
   if (!compareReady) {
     return (
       <Card style={{ marginTop: 16, padding: 14, background: "var(--input-bg, #fafafa)", border: "1px dashed var(--bdr2, #ddd)" }}>
         <div style={{ fontSize: 13, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 18 }}>📊</span>
           <strong style={{ color: "var(--tx, #333)" }}>Budget comparison:</strong>
-          <span>select a date range above (preset or custom) to see actual spending vs. budgeted amounts.</span>
+          <span>add or import transactions to see actual spending vs. budgeted amounts.</span>
         </div>
       </Card>
     );
@@ -1393,6 +1453,12 @@ function BudgetCompareCard({ mob, compare, compareReady, showCompare, setShowCom
           </h3>
           <span style={{ fontSize: 12, color: "var(--tx3, #999)" }}>
             {dateFrom} → {dateTo} · {p.days} day{p.days === 1 ? "" : "s"}
+            {rangeInferred && (
+              <em style={{ marginLeft: 8, color: "var(--tx3, #aaa)", fontStyle: "italic", fontSize: 11 }}
+                title="No explicit date range selected — showing all transactions from your earliest recorded date to today. Pick a preset or custom range above to narrow the comparison.">
+                (all transactions — pick a range above to narrow)
+              </em>
+            )}
           </span>
         </div>
         {showCompare && (
