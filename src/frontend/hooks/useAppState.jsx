@@ -132,8 +132,14 @@ export default function useAppState() {
   const [snapHistYear, setSnapHistYear] = useState(null);
   const [savRateBase, setSavRateBase] = useState("net");
   const [chartWeeks, setChartWeeks] = useState(48);
+  // Chart time window: "all" | "ytd" | "1y" | "5y" | "10y"
+  // Used by chart date-range filtering. Persisted per-device (layout choice).
+  const [chartTimeWindow, setChartTimeWindow] = useState(() => {
+    try { return localStorage.getItem("budget-chart-window") || "all"; } catch { return "all"; }
+  });
+  useEffect(() => { try { localStorage.setItem("budget-chart-window", chartTimeWindow); } catch {} }, [chartTimeWindow]);
   const [snapVisCols, setSnapVisCols] = useState(() => { try { const v = localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
-  const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "budgetHistory"];
+  const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
   const [dragChart, setDragChart] = useState(null);
   const [collapsed, setCollapsed] = useState({});
@@ -544,6 +550,7 @@ export default function useAppState() {
     bulkCat, setBulkCat, bulkTargets, setBulkTargets,
     // charts
     chartOrder, setChartOrder, chartWeeks, setChartWeeks,
+    chartTimeWindow, setChartTimeWindow,
     savRateBase, setSavRateBase, includeEaip, setIncludeEaip,
     catChartMode, setCatChartMode, catHistoryName, setCatHistoryName,
     catHistMode, setCatHistMode, itemHistMode, setItemHistMode,

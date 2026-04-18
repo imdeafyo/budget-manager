@@ -1,8 +1,13 @@
 import { PieChart, Pie, Cell, LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { useMemo, useState } from "react";
 import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
+import { buildMonthlyIncomeSeries, incomeCategories, windowRange } from "../utils/income.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setSnapshots, snapDate, setSnapDate, snapLabel, setSnapLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear, setViewingSnap, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setSnapshots, snapDate, setSnapDate, snapLabel, setSnapLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear, setViewingSnap, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
+  // Local UI state for the income history chart's category-type toggle.
+  // "all" = Total line only; any other value = just that single category line.
+  const [incomeTypeSel, setIncomeTypeSel] = useState("all");
   return (
     <div>
             <Card style={{ marginBottom: 20, overflow: "hidden" }}>
