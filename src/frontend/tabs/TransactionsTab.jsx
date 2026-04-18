@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
 import { Card, SH, NI } from "../components/ui.jsx";
 import {
   BUILTIN_COLUMNS, newTransaction,
@@ -17,6 +18,7 @@ import {
   isMarkedTransfer, pairReason,
 } from "../utils/transfers.js";
 import { fmt } from "../utils/calc.js";
+import { compareBudgetToActual, UNCATEGORIZED } from "../utils/budgetCompare.js";
 import ImportModal from "../components/ImportModal.jsx";
 
 const PRESETS = [
@@ -37,6 +39,7 @@ export default function TransactionsTab(props) {
     transactions, transactionColumns, hiddenColumns, setHiddenColumns,
     rowCapWarn, rowCapThreshold,
     cats, savCats, transferCats = [],
+    exp = [], sav = [],
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
     transactionRules = [], setTransactionRules,
@@ -65,6 +68,22 @@ export default function TransactionsTab(props) {
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 200;
+
+  // ── Budget comparison (Phase 6a) ──
+  // basis: 48 matches the user's mental model ("I budget $600/mo = $150/wk × 48/12").
+  //        52 spreads the 48-paycheck budget across all calendar weeks.
+  // showCompare: lets the user hide the chart section entirely if they don't want it.
+  // Both persist to localStorage so the user's preference survives reloads.
+  const [basis, setBasis] = useState(() => {
+    try { return Number(localStorage.getItem("tx_compare_basis")) === 52 ? 52 : 48; }
+    catch { return 48; }
+  });
+  const [showCompare, setShowCompare] = useState(() => {
+    try { return localStorage.getItem("tx_compare_show") !== "0"; }
+    catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem("tx_compare_basis", String(basis)); } catch {} }, [basis]);
+  useEffect(() => { try { localStorage.setItem("tx_compare_show", showCompare ? "1" : "0"); } catch {} }, [showCompare]);
 
   // Remember-my-choice modal — fires when the user manually sets a category
   // on a row whose description doesn't already match an existing rule.
@@ -143,6 +162,27 @@ export default function TransactionsTab(props) {
   const filteredIn = useMemo(() => visibleRows.reduce((s, t) => s + (Number(t.amount) > 0 ? Number(t.amount) : 0), 0), [visibleRows]);
   const filteredOut = useMemo(() => visibleRows.reduce((s, t) => s + (Number(t.amount) < 0 ? Number(t.amount) : 0), 0), [visibleRows]);
   const uncategorizedCount = useMemo(() => transactions.filter(t => !t.category).length, [transactions]);
+
+  // ── Budget comparison aggregation ──
+  // Only runs when we have a bounded date range. Comparing "all time" against
+  // a 48-paycheck weekly budget is nonsensical (days would be huge and budgets
+  // would inflate to match), so we require both dateFrom and dateTo.
+  // The chart card shows a helpful prompt when no range is set.
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const compareReady = !!(dateFrom && dateTo);
+  const compare = useMemo(() => {
+    if (!compareReady) return null;
+    return compareBudgetToActual({
+      transactions,
+      exp, sav,
+      cats, savCats, transferCats,
+      fromIso: dateFrom,
+      toIso: dateTo,
+      todayIso: today,
+      basis,
+      treatRefundsAsNetting: true,
+    });
+  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, dateFrom, dateTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -349,8 +389,14 @@ export default function TransactionsTab(props) {
           <div>
             <h2 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: mob ? 20 : 26, color: "var(--tx, #333)" }}>Transactions</h2>
             {uncategorizedCount > 0 && (
-              <div style={{ fontSize: 12, color: "var(--tx3, #999)", marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: "var(--tx3, #999)", marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <span style={{ padding: "2px 8px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 10, fontWeight: 600 }}>{uncategorizedCount} uncategorized</span>
+                {compare?.uncategorized && (
+                  <span title="Uncategorized transactions falling inside the selected period"
+                    style={{ padding: "2px 8px", background: "rgba(242, 169, 59, 0.15)", color: "#B4791F", borderRadius: 10, fontWeight: 600 }}>
+                    {compare.uncategorized.count} in period · {fmt(compare.uncategorized.actual)}
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -454,6 +500,18 @@ export default function TransactionsTab(props) {
           </div>
         )}
       </Card>
+
+      <BudgetCompareCard
+        mob={mob}
+        compare={compare}
+        compareReady={compareReady}
+        showCompare={showCompare}
+        setShowCompare={setShowCompare}
+        basis={basis}
+        setBasis={setBasis}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+      />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
         {pageRows.length === 0 ? (
@@ -1255,6 +1313,222 @@ function PairRow({ tx }) {
     </div>
   );
 }
+
+/* ══════════════════════════ Budget Compare Card (Phase 6a) ══════════════════════════
+   Sits between the filter Card and the table Card. Renders only when the user
+   has selected a bounded date range (either via preset or custom from/to).
+   Shows:
+     • Collapsible header with basis toggle (48/52) and show/hide arrow
+     • Summary stat cards: spent / budgeted / % used / days remaining / projected
+     • Bar chart: per-category actual vs budgeted, red-over / green-under, plus
+       uncategorized as its own bar
+   All math comes from `compare` (produced by compareBudgetToActual). This
+   component owns zero business logic — pure rendering of the aggregator output. */
+function BudgetCompareCard({ mob, compare, compareReady, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo }) {
+  // Build the chart dataset once. Expense rows come first (what users care about
+  // most on this tab), then uncategorized as its own bar. Savings rows are
+  // deferred to a future enhancement — keeps this chart focused on "did I
+  // stay under my spending budget?"
+  const chartData = useMemo(() => {
+    if (!compare) return [];
+    const rows = compare.expense.rows.map(r => ({
+      category: r.category,
+      actual: r.actual,
+      budgeted: r.budgeted,
+      over: r.over,
+      refunded: r.refunded,
+      kind: "expense",
+    }));
+    if (compare.uncategorized) {
+      rows.push({
+        category: "Uncategorized",
+        actual: compare.uncategorized.actual,
+        budgeted: 0,
+        over: false,
+        refunded: 0,
+        kind: "uncategorized",
+        count: compare.uncategorized.count,
+      });
+    }
+    return rows;
+  }, [compare]);
+
+  // Helpful empty state: users land here before picking a range
+  if (!compareReady) {
+    return (
+      <Card style={{ marginTop: 16, padding: 14, background: "var(--input-bg, #fafafa)", border: "1px dashed var(--bdr2, #ddd)" }}>
+        <div style={{ fontSize: 13, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 18 }}>📊</span>
+          <strong style={{ color: "var(--tx, #333)" }}>Budget comparison:</strong>
+          <span>select a date range above (preset or custom) to see actual spending vs. budgeted amounts.</span>
+        </div>
+      </Card>
+    );
+  }
+
+  const exp = compare.expense;
+  const p = compare.period;
+
+  // Card color logic:
+  //   - green when spent ≤ budget
+  //   - red when over (or projected to go over before period ends)
+  const overBudget = exp.totalActual > exp.totalBudget + 0.005;
+  const willBeOver = !overBudget && exp.projectedOver;
+  const statusColor = overBudget ? "#E8573A" : willBeOver ? "#F2A93B" : "#2ECC71";
+  const statusTint  = overBudget ? "rgba(232, 87, 58, 0.10)" : willBeOver ? "rgba(242, 169, 59, 0.12)" : "rgba(46, 204, 113, 0.10)";
+
+  const pctUsedStr = exp.totalBudget > 0
+    ? (exp.pctUsed * 100).toFixed(0) + "%"
+    : (exp.totalActual > 0 ? "—" : "0%");
+
+  return (
+    <Card style={{ marginTop: 16, overflow: "hidden" }}>
+      {/* Header: title + basis toggle + collapse arrow */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: showCompare ? 14 : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <h3 onClick={() => setShowCompare(v => !v)}
+            style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: mob ? 16 : 18, fontWeight: 800, color: "var(--tx, #333)", cursor: "pointer", userSelect: "none" }}
+            title={showCompare ? "Hide budget comparison" : "Show budget comparison"}>
+            Budget vs. actual <span style={{ color: "var(--tx3, #999)", fontWeight: 600, fontSize: mob ? 13 : 14 }}>{showCompare ? "▾" : "▸"}</span>
+          </h3>
+          <span style={{ fontSize: 12, color: "var(--tx3, #999)" }}>
+            {dateFrom} → {dateTo} · {p.days} day{p.days === 1 ? "" : "s"}
+          </span>
+        </div>
+        {showCompare && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Basis</span>
+            <button onClick={() => setBasis(48)}
+              title="48 paychecks/yr — matches the app's budget convention ($150/wk × 48 ÷ 12 = $600/mo)"
+              style={basisBtn(basis === 48)}>48</button>
+            <button onClick={() => setBasis(52)}
+              title="52 weeks/yr — spreads the 48-paycheck budget across all calendar weeks"
+              style={basisBtn(basis === 52)}>52</button>
+          </div>
+        )}
+      </div>
+
+      {showCompare && (
+        <>
+          {/* Summary stat cards */}
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 8, marginBottom: 14 }}>
+            <StatCard label="Spent" value={fmt(exp.totalActual)} color={statusColor} tint={statusTint}
+              hint={exp.totalRefunds > 0 ? `net of ${fmt(exp.totalRefunds)} refunded` : null} />
+            <StatCard label="Budgeted" value={fmt(exp.totalBudget)} color="var(--tx, #333)" tint="transparent"
+              hint={`${basis}-basis × ${p.days}d`} />
+            <StatCard label="% used" value={pctUsedStr} color={statusColor} tint={statusTint}
+              hint={overBudget ? `over by ${fmt(exp.totalActual - exp.totalBudget)}` : `${fmt(Math.max(0, exp.totalBudget - exp.totalActual))} remaining`} />
+            <StatCard label="Days left" value={String(p.remaining)}
+              color={p.remaining === 0 ? "var(--tx3, #999)" : "var(--tx, #333)"} tint="transparent"
+              hint={p.elapsed > 0 ? `${p.elapsed} elapsed` : p.remaining === p.days ? "period not started" : null} />
+            <StatCard label="Projected" value={fmt(exp.projected)}
+              color={exp.projectedOver ? "#E8573A" : "#2ECC71"}
+              tint={exp.projectedOver ? "rgba(232, 87, 58, 0.10)" : "rgba(46, 204, 113, 0.10)"}
+              hint={p.elapsed > 0 && p.elapsed < p.days ? "at current pace" : "= actual"} />
+          </div>
+
+          {/* Chart */}
+          {chartData.length === 0 ? (
+            <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13, background: "var(--input-bg, #fafafa)", borderRadius: 8 }}>
+              No spending and no budget categories in this period.
+            </div>
+          ) : (
+            <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
+                  <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
+                  <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
+                    stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
+                    tick={{ fill: "var(--tx2, #555)" }} />
+                  <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
+                  {/* Budgeted — muted gray baseline bar */}
+                  <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
+                  {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
+                  <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
+                    {chartData.map((row, i) => (
+                      <Cell key={i} fill={
+                        row.kind === "uncategorized" ? "#F2A93B"
+                        : row.over ? "#E8573A"
+                        : "#2ECC71"
+                      } />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Legend / key */}
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 10, fontSize: 11, color: "var(--tx3, #888)" }}>
+            <LegendSwatch color="var(--bdr, #ccc)" label="Budgeted" />
+            <LegendSwatch color="#2ECC71" label="Under budget" />
+            <LegendSwatch color="#E8573A" label="Over budget" />
+            <LegendSwatch color="#F2A93B" label="Uncategorized" />
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function StatCard({ label, value, color, tint, hint }) {
+  return (
+    <div style={{ padding: "10px 12px", background: tint, borderRadius: 8, border: "1px solid var(--bdr2, #eee)" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #888)", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color, fontFamily: "'DM Sans', sans-serif", fontVariantNumeric: "tabular-nums", marginTop: 2 }}>{value}</div>
+      {hint && <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 2 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function LegendSwatch({ color, label }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 2, background: color }} />
+      {label}
+    </span>
+  );
+}
+
+function CompareTooltip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  // payload has two entries (Budgeted, Actual) both pointing at the same row
+  const row = payload[0].payload;
+  const delta = (row.actual || 0) - (row.budgeted || 0);
+  return (
+    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 180 }}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      {row.kind === "uncategorized" ? (
+        <>
+          <div>Spend: <strong>{fmt(row.actual)}</strong></div>
+          <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.count} transaction{row.count === 1 ? "" : "s"} without a category</div>
+        </>
+      ) : (
+        <>
+          <div>Actual: <strong>{fmt(row.actual)}</strong></div>
+          <div>Budgeted: <strong>{fmt(row.budgeted)}</strong></div>
+          <div style={{ color: delta > 0.005 ? "#E8573A" : delta < -0.005 ? "#2ECC71" : "var(--tx3, #888)", marginTop: 2 }}>
+            {delta > 0.005 ? `Over by ${fmt(delta)}` : delta < -0.005 ? `Under by ${fmt(-delta)}` : "On target"}
+          </div>
+          {row.refunded > 0 && <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>Net of {fmt(row.refunded)} refunded</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+const basisBtn = (active) => ({
+  padding: "3px 10px",
+  fontSize: 12,
+  fontWeight: 700,
+  borderRadius: 10,
+  border: `1px solid ${active ? "#556FB5" : "var(--bdr, #ccc)"}`,
+  background: active ? "#EEF1FA" : "var(--card-bg, #fff)",
+  color: active ? "#556FB5" : "var(--tx2, #555)",
+  cursor: "pointer",
+  fontFamily: "'DM Sans', sans-serif",
+});
 
 const pillBtn = () => ({ padding: "3px 10px", fontSize: 11, fontWeight: 600, borderRadius: 10, border: "1px solid var(--bdr, #ccc)", background: "var(--card-bg, #fff)", color: "var(--tx2, #555)", cursor: "pointer" });
 

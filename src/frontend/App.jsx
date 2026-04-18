@@ -112,6 +112,8 @@ export default function App() {
           cats={S.cats}
           savCats={S.savCats}
           transferCats={S.transferCats}
+          exp={S.exp}
+          sav={S.sav}
           addTransactions={S.addTransactions}
           updateTransaction={S.updateTransaction}
           deleteTransactions={S.deleteTransactions}
