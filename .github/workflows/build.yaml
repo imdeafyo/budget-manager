@@ -10,7 +10,15 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Skip builds triggered by the auto-generated-HTML commits. The
+  # build-generic.yaml workflow pushes a "[skip ci]" commit after every
+  # change, which would otherwise trigger this workflow again and inflate
+  # the version/patch count. Checking the commit message is more reliable
+  # than checking the actor because both are github-actions[bot].
+  # ─────────────────────────────────────────────────────────────────────────
   build:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,16 +31,27 @@ jobs:
     - name: Set version
       id: version
       run: |
-        # Find latest vX.Y.Z tag, default to v1.0.0
+        # Find latest vX.Y.Z tag, default to v1.0.0.
         LATEST=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
         if [ -z "$LATEST" ]; then LATEST="v1.0.0"; fi
         MAJOR=$(echo "$LATEST" | cut -d. -f1)
         MINOR=$(echo "$LATEST" | cut -d. -f2)
-        # Count commits since that tag
-        PATCH=$(git rev-list --count ${LATEST}..HEAD 2>/dev/null || git rev-list --count HEAD)
+
+        # Count commits since the latest semver tag, excluding auto-generated
+        # "[skip ci]" commits from build-generic.yaml. Those are noise and
+        # should not bump the patch version.
+        if git rev-parse "$LATEST" >/dev/null 2>&1; then
+          PATCH=$(git log --format=%s ${LATEST}..HEAD | grep -cv '\[skip ci\]' || echo 0)
+        else
+          PATCH=$(git log --format=%s | grep -cv '\[skip ci\]' || echo 0)
+        fi
+
+        # Guard: a real build always deserves at least patch=1.
+        if [ "$PATCH" = "0" ]; then PATCH=1; fi
+
         TAG="${MAJOR}.${MINOR}.${PATCH}"
         echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-        echo "Generated tag: ${TAG}"
+        echo "Generated tag: ${TAG} (from base ${LATEST})"
 
     - name: Log in to GHCR
       uses: docker/login-action@v4
@@ -64,3 +83,23 @@ jobs:
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
         echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}@${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
         echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Delete old GHCR package versions, keeping only the most recent N plus
+  # anything currently tagged `latest`. Prevents the Packages sidebar from
+  # accumulating dozens of stale image versions.
+  # ─────────────────────────────────────────────────────────────────────────
+  cleanup:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+    - name: Prune old GHCR versions
+      uses: actions/delete-package-versions@v5
+      with:
+        package-name: ${{ github.event.repository.name }}
+        package-type: container
+        min-versions-to-keep: 5
+        delete-only-untagged-versions: false
+        ignore-versions: '^latest$'
