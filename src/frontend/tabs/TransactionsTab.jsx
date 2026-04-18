@@ -275,15 +275,36 @@ export default function TransactionsTab(props) {
     [transactions]
   );
 
-  const openTransferDetection = () => {
-    const pairs = findTransferCandidates(transactions, {
+  const runTransferScan = (includeDismissed = false) => {
+    // When including dismissed rows, strip the flag *in a scan-only copy* so
+    // the candidate generator treats them as eligible. We don't mutate state
+    // here — the dismissed flag gets cleared for real only if the user pairs
+    // the row (markPaired clears _transfer_dismissed as a side effect).
+    const rows = includeDismissed
+      ? transactions.map(t => {
+          if (!t.custom_fields?._transfer_dismissed) return t;
+          const cf = { ...t.custom_fields };
+          delete cf._transfer_dismissed;
+          return { ...t, custom_fields: cf };
+        })
+      : transactions;
+    return findTransferCandidates(rows, {
       amountTolerance: Number(transferToleranceAmount) || 0.01,
       dayTolerance:    Number(transferToleranceDays)  || 2,
       requireDifferentAccounts: true,
     });
-    // Pre-check every candidate — user unchecks ones they don't want to pair.
+  };
+
+  const openTransferDetection = () => {
+    const pairs = runTransferScan(false);
     const selected = new Set(pairs.map(p => `${p.a.id}|${p.b.id}`));
-    setTransferModal({ pairs, selected });
+    setTransferModal({ pairs, selected, includeDismissed: false });
+  };
+
+  const rescanIncludingDismissed = (include) => {
+    const pairs = runTransferScan(include);
+    const selected = new Set(pairs.map(p => `${p.a.id}|${p.b.id}`));
+    setTransferModal(m => ({ ...(m || {}), pairs, selected, includeDismissed: include }));
   };
 
   const commitTransferPairs = () => {
@@ -564,6 +585,8 @@ export default function TransactionsTab(props) {
         <TransferPairsModal
           pairs={transferModal.pairs}
           selected={transferModal.selected}
+          includeDismissed={!!transferModal.includeDismissed}
+          onToggleIncludeDismissed={rescanIncludingDismissed}
           onToggle={(key) => setTransferModal(m => {
             const next = new Set(m.selected);
             if (next.has(key)) next.delete(key); else next.add(key);
@@ -1125,9 +1148,14 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
    checkbox; Confirm marks the checked pairs as transfers. Dismiss flags the
    checked pairs as "not a transfer, stop suggesting." The modal is purely
    presentational — the parent owns the state and commit logic. */
-function TransferPairsModal({ pairs, selected, onToggle, onSelectAll, onSelectNone, onClose, onConfirm, onDismissSelected }) {
+function TransferPairsModal({ pairs, selected, includeDismissed, onToggleIncludeDismissed, onToggle, onSelectAll, onSelectNone, onClose, onConfirm, onDismissSelected }) {
   const checkedCount = selected.size;
   const totalCount = pairs.length;
+  // A pair contains a previously-dismissed row if either endpoint still carries
+  // the flag. (We feed the scanner a stripped copy, but the original tx objects
+  // in the pair retain their custom_fields.)
+  const dismissedInPair = (pair) =>
+    !!(pair.a.custom_fields?._transfer_dismissed || pair.b.custom_fields?._transfer_dismissed);
 
   return (
     <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -1136,14 +1164,30 @@ function TransferPairsModal({ pairs, selected, onToggle, onSelectAll, onSelectNo
         <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>
           Detected {totalCount} transfer candidate{totalCount === 1 ? "" : "s"}
         </h3>
-        <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 14, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 10, lineHeight: 1.5 }}>
           Each pair below has opposing amounts in different accounts within a few days.
           Confirm the ones that are real transfers; dismiss coincidental matches so they don't resurface.
         </div>
 
+        {/* Include-dismissed toggle — lets the user rescan with previously-dismissed rows back in play. */}
+        {onToggleIncludeDismissed && (
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--tx2, #555)", padding: "8px 10px", background: "var(--input-bg, #fafafa)", borderRadius: 6, marginBottom: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={includeDismissed}
+              onChange={(e) => onToggleIncludeDismissed(e.target.checked)} />
+            <span>
+              <strong style={{ color: "var(--tx, #333)" }}>Include dismissed rows</strong>
+              <span style={{ color: "var(--tx3, #888)", marginLeft: 6 }}>
+                — rescan with previously-dismissed transactions eligible again. Pairing one will clear its dismissed flag.
+              </span>
+            </span>
+          </label>
+        )}
+
         {totalCount === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13 }}>
-            No candidate pairs found. Adjust the tolerance knobs on the Settings tab if you expected a match.
+            {includeDismissed
+              ? "No candidate pairs found even with dismissed rows included. Adjust the tolerance knobs on the Settings tab if you expected a match."
+              : "No candidate pairs found. Adjust the tolerance knobs on the Settings tab if you expected a match."}
           </div>
         ) : (
           <>
@@ -1156,6 +1200,7 @@ function TransferPairsModal({ pairs, selected, onToggle, onSelectAll, onSelectNo
               {pairs.map(pair => {
                 const key = `${pair.a.id}|${pair.b.id}`;
                 const isChecked = selected.has(key);
+                const wasDismissed = dismissedInPair(pair);
                 return (
                   <div key={key} style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--bdr2, #eee)", alignItems: "center", background: isChecked ? "rgba(85, 111, 181, 0.05)" : "transparent" }}>
                     <input type="checkbox" checked={isChecked} onChange={() => onToggle(key)}
@@ -1163,8 +1208,13 @@ function TransferPairsModal({ pairs, selected, onToggle, onSelectAll, onSelectNo
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <PairRow tx={pair.a} />
                       <PairRow tx={pair.b} />
-                      <div style={{ fontSize: 11, color: "var(--tx3, #999)", fontStyle: "italic" }}>
-                        {pair.reason} · confidence {(pair.confidence * 100).toFixed(0)}%
+                      <div style={{ fontSize: 11, color: "var(--tx3, #999)", fontStyle: "italic", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                        <span>{pair.reason} · confidence {(pair.confidence * 100).toFixed(0)}%</span>
+                        {wasDismissed && (
+                          <span style={{ padding: "1px 6px", background: "rgba(85, 111, 181, 0.12)", color: "#556FB5", borderRadius: 8, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, fontStyle: "normal" }}>
+                            was dismissed
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>

@@ -83,6 +83,26 @@ export default function SettingsTab(props) {
     else setThresholdDraft(String(rowCapThreshold));
   };
 
+  /* ── Dismissed transfer candidates ──
+     Rows the user explicitly said "not a transfer" to in the detection modal.
+     They're excluded from future detection runs; this count + the reset button
+     below give the user an escape hatch if they dismissed something by mistake. */
+  const dismissedCount = useMemo(
+    () => transactions.reduce((n, t) => n + (t.custom_fields?._transfer_dismissed ? 1 : 0), 0),
+    [transactions]
+  );
+
+  const resetAllDismissed = () => {
+    if (!dismissedCount) return;
+    if (!confirm(`Re-enable ${dismissedCount} dismissed transaction${dismissedCount === 1 ? "" : "s"} for transfer detection?\n\nThey'll become candidates again the next time you run "Detect transfers".`)) return;
+    setTransactions(prev => prev.map(t => {
+      if (!t.custom_fields?._transfer_dismissed) return t;
+      const cf = { ...t.custom_fields };
+      delete cf._transfer_dismissed;
+      return { ...t, custom_fields: cf };
+    }));
+  };
+
   /* ── Recent import batches: group transactions by import_batch_id ── */
   const recentBatches = useMemo(() => {
     const byBatch = new Map();
@@ -261,7 +281,7 @@ export default function SettingsTab(props) {
       <CollapsibleCard
         id="transfers"
         title="Transfer detection"
-        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"}`}
+        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"}${dismissedCount ? ` · ${dismissedCount} dismissed` : ""}`}
         style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Transfers are matching pairs of transactions across different accounts — money you moved between
@@ -300,6 +320,26 @@ export default function SettingsTab(props) {
           Run detection from the Transactions tab — click <strong>🔀 Detect transfers</strong> in the toolbar.
           Rows you confirm are flagged (and excluded from spending totals). Rows you dismiss are remembered
           so they won't resurface as candidates on future runs.
+        </div>
+
+        {/* Dismissed-row reset — escape hatch when you accidentally dismiss or unpair. */}
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Dismissed rows
+              </div>
+              <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 4, lineHeight: 1.5 }}>
+                {dismissedCount === 0
+                  ? "No rows are currently dismissed."
+                  : `${dismissedCount} row${dismissedCount === 1 ? " is" : "s are"} excluded from detection because you dismissed or unpaired them. Use this button if you unpaired something by mistake.`}
+              </div>
+            </div>
+            <button onClick={resetAllDismissed} disabled={dismissedCount === 0}
+              style={{ ...btn("var(--card-bg, #fff)", dismissedCount === 0 ? "var(--tx3, #aaa)" : "#556FB5"), border: `1px solid ${dismissedCount === 0 ? "var(--bdr, #ccc)" : "#556FB5"}`, opacity: dismissedCount === 0 ? 0.6 : 1, cursor: dismissedCount === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+              ↺ Reset all dismissed
+            </button>
+          </div>
         </div>
       </CollapsibleCard>
 
