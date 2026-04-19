@@ -244,12 +244,43 @@ export default function TransactionsTab(props) {
   const compareReady  = !!(effectiveFrom && effectiveTo);
   const rangeInferred = compareReady && !explicitRange;
 
+  // ── Chart filter coupling ──
+  // The charts reflect the table's date + category + account filters so the
+  // two views stay in sync. We deliberately skip `search` and `amountMin/Max`
+  // here — they're useful for pinpointing specific rows but would fragment the
+  // budget comparison in ways that aren't meaningful. The chart has its own
+  // `chartCategory` picker that narrows FURTHER (an AND), but never broadens
+  // past the table's catSel.
+  const chartScopedTransactions = useMemo(() => {
+    // Date is already honored via fromIso/toIso on the compare call; we only
+    // need to narrow by category + account here. If neither is active, reuse
+    // the raw array as a cheap passthrough.
+    if (catSel.length === 0 && acctSel.length === 0) return transactions;
+    return applyFilters(transactions, {
+      categories: catSel.length ? catSel : undefined,
+      accounts: acctSel.length ? acctSel : undefined,
+    });
+  }, [transactions, catSel, acctSel]);
+
+  // Budget rows and category list narrow to the selected categories too, so a
+  // bar for "Gas" doesn't show up with its budget when the user filtered to
+  // "Food" only.
+  const catSelSet = useMemo(() => new Set(catSel), [catSel]);
+  const chartScopedExp = useMemo(() => {
+    if (catSel.length === 0) return exp;
+    return (exp || []).filter(it => catSelSet.has((it?.c || "").trim()));
+  }, [exp, catSel, catSelSet]);
+  const chartScopedCats = useMemo(() => {
+    if (catSel.length === 0) return cats;
+    return (cats || []).filter(c => catSelSet.has(c));
+  }, [cats, catSel, catSelSet]);
+
   const compare = useMemo(() => {
     if (!compareReady) return null;
     return compareBudgetToActual({
-      transactions,
-      exp, sav,
-      cats, savCats, transferCats, incomeCats,
+      transactions: chartScopedTransactions,
+      exp: chartScopedExp, sav,
+      cats: chartScopedCats, savCats, transferCats, incomeCats,
       snapshots,
       fromIso: effectiveFrom,
       toIso: effectiveTo,
@@ -257,7 +288,7 @@ export default function TransactionsTab(props) {
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, incomeCats, snapshots, effectiveFrom, effectiveTo, today, basis]);
+  }, [compareReady, chartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, snapshots, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -592,12 +623,17 @@ export default function TransactionsTab(props) {
         setBasis={setBasis}
         dateFrom={effectiveFrom}
         dateTo={effectiveTo}
-        transactions={transactions}
-        exp={exp}
-        cats={cats}
+        transactions={chartScopedTransactions}
+        exp={chartScopedExp}
+        cats={chartScopedCats}
         transferCats={transferCats}
         incomeCats={incomeCats}
         snapshots={snapshots}
+        filterCats={catSel}
+        setFilterCats={setCatSel}
+        setDateFrom={setDateFrom}
+        setDateTo={setDateTo}
+        setPreset={setPreset}
       />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
@@ -1580,7 +1616,35 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [] }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [], filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
+  // ── Drill-down handlers ──
+  // Bar click: toggle the bar's category in the table's catSel. Clicking an
+  // already-filtered category removes it; clicking a new one adds it.
+  // Uncategorized bars aren't toggleable (no category to filter on).
+  const handleBarClick = (data /* Recharts click payload */) => {
+    if (!setFilterCats) return;
+    // Recharts passes either an event-like obj with .activePayload, or sometimes
+    // the row itself depending on how the Bar fires. Normalize.
+    const row = data?.activePayload?.[0]?.payload || data?.payload || data;
+    const cat = row?.category;
+    const kind = row?.kind;
+    if (!cat || kind === "uncategorized") return;
+    setFilterCats(prev => {
+      if (prev.includes(cat)) return prev.filter(c => c !== cat);
+      return [...prev, cat];
+    });
+  };
+
+  // Line click: set the date range to the clicked month's full span. This also
+  // nukes any custom date preset so the dates show as explicit.
+  const handleLineClick = (data) => {
+    if (!setDateFrom || !setDateTo) return;
+    const pt = data?.activePayload?.[0]?.payload;
+    if (!pt?.monthStart || !pt?.monthEnd) return;
+    setDateFrom(pt.monthStart);
+    setDateTo(pt.monthEnd);
+    if (setPreset) setPreset("");
+  };
   // View-mode toggle: "bars" = the original per-category Actual vs Budgeted bar
   // chart, "lines" = monthly-bucketed trends (actual spend vs budgeted over
   // time). chartCategory is only used in lines mode — null/empty = all cats
@@ -1685,6 +1749,12 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                 (all transactions — pick a range above to narrow)
               </em>
             )}
+            {filterCats.length > 0 && (
+              <span style={{ marginLeft: 8, fontSize: 11, color: "#556FB5", fontWeight: 600 }}
+                title={`Charts are restricted to ${filterCats.length} selected categor${filterCats.length === 1 ? "y" : "ies"}: ${filterCats.join(", ")}`}>
+                · filtered to {filterCats.length} categor{filterCats.length === 1 ? "y" : "ies"}
+              </span>
+            )}
           </span>
         </div>
         {showCompare && (
@@ -1759,7 +1829,9 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             ) : (
               <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
+                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}
+                    onClick={handleBarClick}
+                    style={{ cursor: setFilterCats ? "pointer" : "default" }}>
                     <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
                     <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
@@ -1790,7 +1862,9 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             ) : (
               <div style={{ width: "100%", height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
+                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}
+                    onClick={handleLineClick}
+                    style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }}>
                     <CartesianGrid stroke="var(--bdr2, #eee)" strokeDasharray="3 3" />
                     <XAxis dataKey="monthLabel" stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
