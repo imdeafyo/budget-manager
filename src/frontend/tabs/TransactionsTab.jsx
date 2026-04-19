@@ -38,7 +38,7 @@ export default function TransactionsTab(props) {
     mob,
     transactions, transactionColumns, hiddenColumns, setHiddenColumns,
     rowCapWarn, rowCapThreshold,
-    cats, savCats, transferCats = [],
+    cats, savCats, transferCats = [], incomeCats = [],
     exp = [], sav = [],
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
@@ -213,14 +213,14 @@ export default function TransactionsTab(props) {
     return compareBudgetToActual({
       transactions,
       exp, sav,
-      cats, savCats, transferCats,
+      cats, savCats, transferCats, incomeCats,
       fromIso: effectiveFrom,
       toIso: effectiveTo,
       todayIso: today,
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, effectiveFrom, effectiveTo, today, basis]);
+  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, incomeCats, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [

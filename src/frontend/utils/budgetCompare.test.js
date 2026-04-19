@@ -441,4 +441,36 @@ describe("compareBudgetToActual", () => {
     // Projected $800 vs total budget ≈ 692 (593.41 + 98.9) → over
     expect(r.expense.projectedOver).toBe(true);
   });
+
+  it("incomeCats rows are excluded from spending/savings and don't leak into uncategorized", () => {
+    const opts = baseOpts();
+    // Baseline snapshot of totals / uncategorized count before income rows exist
+    const baseline = compareBudgetToActual(opts);
+    const baselineExpTotalActual = baseline.expense.totalActual;
+
+    // Seed paychecks + interest totalling ~$7000 (deposits, positive amounts)
+    opts.transactions = [
+      ...opts.transactions,
+      { id: "i1", date: "2026-04-03", amount: 3000, category: "Paycheck" },
+      { id: "i2", date: "2026-04-17", amount: 3000, category: "Paycheck" },
+      { id: "i3", date: "2026-04-20", amount:  850, category: "Interest" },
+      { id: "i4", date: "2026-04-25", amount:  150, category: "Interest" },
+    ];
+    opts.incomeCats = ["Paycheck", "Interest"];
+
+    const r = compareBudgetToActual(opts);
+
+    // No expense row for income-only categories
+    const expRowNames = r.expense.rows.map(x => x.category);
+    expect(expRowNames).not.toContain("Paycheck");
+    expect(expRowNames).not.toContain("Interest");
+
+    // Uncategorized should be null, or have count 1 (the pre-existing t7 $12 row only)
+    if (r.uncategorized) {
+      expect(r.uncategorized.count).toBe(1);
+    }
+
+    // Expense totals didn't inflate from the income deposits
+    expect(r.expense.totalActual).toBeCloseTo(baselineExpTotalActual, 2);
+  });
 });

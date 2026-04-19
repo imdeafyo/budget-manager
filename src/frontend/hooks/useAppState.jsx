@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS } from "../data/taxDB.js";
+import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcSnapPure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { useM } from "../components/ui.jsx";
@@ -95,6 +95,7 @@ export default function useAppState() {
   const [cats, setCats] = useState(DEF_CATS);
   const [savCats, setSavCats] = useState(DEF_SAV_CATS);
   const [transferCats, setTransferCats] = useState(DEF_TRANSFER_CATS);
+  const [incomeCats, setIncomeCats] = useState(DEF_INCOME_CATS);
   const [newCat, setNewCat] = useState("");
   const [sortBy, setSortBy] = useState("default");
   const [sortDir, setSortDir] = useState("desc");
@@ -175,8 +176,8 @@ export default function useAppState() {
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
+  useEffect(() => { (async () => { try { const r = await fetch("/api/state").then(r => r.json()); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } } catch(e){} setLoaded(true); })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
   useEffect(() => { const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -402,7 +403,7 @@ export default function useAppState() {
     if (ls.c4pre !== undefined) setC4pre(ls.c4pre); if (ls.c4ro !== undefined) setC4ro(ls.c4ro);
     if (ls.k4pre !== undefined) setK4pre(ls.k4pre); if (ls.k4ro !== undefined) setK4ro(ls.k4ro);
     if (ls.exp) setExp(ls.exp); if (ls.sav) setSav(ls.sav);
-    if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats); if (ls.transferCats) setTransferCats(ls.transferCats);
+    if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats); if (ls.transferCats) setTransferCats(ls.transferCats); if (ls.incomeCats) setIncomeCats(ls.incomeCats);
     if (ls.tax) setTax(ls.tax);
     if (ls.p1Name) setP1Name(ls.p1Name); if (ls.p2Name) setP2Name(ls.p2Name);
     if (ls.appTitle) setAppTitle(ls.appTitle); if (ls.customIcon !== undefined) setCustomIcon(ls.customIcon);
@@ -527,7 +528,7 @@ export default function useAppState() {
     c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro,
     // budget items
     exp, setExp, sav, setSav,
-    cats, setCats, savCats, setSavCats, transferCats, setTransferCats, newCat, setNewCat,
+    cats, setCats, savCats, setSavCats, transferCats, setTransferCats, incomeCats, setIncomeCats, newCat, setNewCat,
     sortBy, setSortBy, sortDir, setSortDir,
     hlThresh, setHlThresh, hlPeriod, setHlPeriod,
     niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV,

@@ -212,7 +212,11 @@ export function actualsByCategory(transactions, opts = {}) {
 
 /* ── The main aggregator ──
    Given the period, category sets, budget arrays, and transactions, produce
-   everything the chart + cards need in one pass. */
+   everything the chart + cards need in one pass.
+   `incomeCats` (if provided) identifies categories representing money coming in
+   (paychecks, interest, dividends, gifts). Rows in those categories are excluded
+   from spending and savings totals the same way transfer rows are, so they
+   don't distort budget comparisons. */
 export function compareBudgetToActual(opts) {
   const {
     transactions = [],
@@ -221,6 +225,7 @@ export function compareBudgetToActual(opts) {
     cats = [],                // string[] of expense category names
     savCats = [],             // string[] of savings category names
     transferCats = [],        // string[] of transfer-only category names (excluded)
+    incomeCats = [],          // string[] of income-only category names (excluded)
     fromIso,
     toIso,
     todayIso,
@@ -235,18 +240,22 @@ export function compareBudgetToActual(opts) {
   const expSet = new Set(cats);
   const savSet = new Set(savCats);
   const xferSet = new Set(transferCats);
+  const incSet = new Set(incomeCats);
 
   // Per-category period budgets
   const expBudget = budgetByCategory(exp, days, basis);
   const savBudget = budgetByCategory(sav, days, basis);
 
   // Filter transactions to range + drop transfer-category rows up front (belt
-  // and suspenders with the refunds module's own exclusion).
+  // and suspenders with the refunds module's own exclusion). Income-category
+  // rows are dropped here too — they're money coming in, not spending.
   const inRange = filterByDateRange(transactions, fromIso, toIso).filter(tx => {
     if (!tx) return false;
     if (isMarkedTransfer(tx)) return false;
     // A row's primary category being a transfer-only category = skip
     if (tx.category && xferSet.has(tx.category)) return false;
+    // Income categories are excluded from spending/savings comparison
+    if (tx.category && incSet.has(tx.category)) return false;
     return true;
   });
 
