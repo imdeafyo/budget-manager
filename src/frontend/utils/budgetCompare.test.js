@@ -590,8 +590,21 @@ describe("pickBudgetForDate", () => {
     expect(pickBudgetForDate(liveExp, null, "2024-07-01")).toBe(liveExp);
   });
 
-  it("returns live budget when snapshots are items-only (no fullState.exp)", () => {
-    expect(pickBudgetForDate(liveExp, [itemsOnlySnap], "2023-06-01")).toBe(liveExp);
+  it("returns live budget when snapshots have neither fullState.exp nor items", () => {
+    const emptySnap = { date: "2023-01-01" };
+    expect(pickBudgetForDate(liveExp, [emptySnap], "2023-06-01")).toBe(liveExp);
+  });
+
+  it("reconstructs a budget from legacy items-only snapshots", () => {
+    // Legacy items.v is stored as monthly × 12 (i.e. annual-48-paycheck $$)
+    // so a 3600 → monthly 300 → weekly ~69 after the live->weekly conversion.
+    const r = pickBudgetForDate(liveExp, [itemsOnlySnap], "2023-06-01");
+    expect(r).not.toBe(liveExp);
+    expect(Array.isArray(r)).toBe(true);
+    expect(r[0]).toMatchObject({ n: "Groceries", c: "Food", p: "m" });
+    // 300 / 12 = 25 → actually wait, item.v was 300 in the fixture, so
+    // reconstructed monthly = 300 / 12 = 25. Just assert it's a plausible string.
+    expect(r[0].v).toBe("25");
   });
 
   it("carries forward — latest snapshot on or before the date wins", () => {
@@ -609,10 +622,15 @@ describe("pickBudgetForDate", () => {
     expect(r).toBe(snapA.fullState.exp);
   });
 
-  it("ignores items-only snapshots when picking, even with fullState snapshots present", () => {
+  it("mixes fullState and items-only snapshots — picks correct one by date", () => {
+    // itemsOnlySnap date is 2023-01-01, snapA is 2024-06-15.
+    // For a date between them (2023-06-01), carry-forward selects the
+    // items-only snap (reconstructed), not snapA.
     const r = pickBudgetForDate(liveExp, [itemsOnlySnap, snapA], "2023-06-01");
-    // Only snapA is eligible — carried backward despite itemsOnlySnap being earlier.
-    expect(r).toBe(snapA.fullState.exp);
+    expect(r).not.toBe(liveExp);
+    expect(r).not.toBe(snapA.fullState.exp);
+    // And it's the reconstructed shape
+    expect(r[0]).toMatchObject({ n: "Groceries", p: "m" });
   });
 });
 
