@@ -5,6 +5,7 @@ import {
   itemWeeklyBudget, weeklyToPeriod, budgetByCategory,
   filterByDateRange, actualsByCategory,
   compareBudgetToActual, monthlyBuckets, pickBudgetForDate,
+  reconstructFromItems,
 } from "./budgetCompare.js";
 
 /* ── Date helpers ─────────────────────────────────────────────────────── */
@@ -754,6 +755,39 @@ describe("monthlyBuckets with snapshots", () => {
     expect(buckets[3].budgeted).toBeCloseTo(700, 2); // May
     expect(buckets[4].budgeted).toBeCloseTo(700, 2); // Jun
   });
+
+  it("narrows snapshot-resolved budget to `cats` scope (regression)", () => {
+    // Bug: when the caller narrows `cats` to, say, ["Housing"], past buckets
+    // pull budgets from snapshots via pickBudgetForDate. The resolved
+    // snapshot exp contains every category it ever had — so summing without
+    // re-narrowing would return the whole snapshot total, not the Housing
+    // slice. Fix: the per-bucket sum honors `cats` as a filter.
+    const liveExp = [
+      { n: "Mortgage", c: "Housing", v: "1000", p: "m" }, // live Housing $1000
+    ];
+    const snapMulti = {
+      date: "2024-06-01",
+      fullState: {
+        exp: [
+          { n: "Mortgage", c: "Housing",    v: "800", p: "m" }, // $800 Housing
+          { n: "Groceries", c: "Food",      v: "500", p: "m" }, // $500 Food
+          { n: "Gas",       c: "Auto",      v: "200", p: "m" }, // $200 Auto
+        ],
+      },
+    };
+    const buckets = monthlyBuckets({
+      transactions: [],
+      exp: liveExp,
+      cats: ["Housing"],
+      fromIso: "2024-07-01",
+      toIso: "2024-08-31",
+      snapshots: [snapMulti],
+      todayIso: "2026-04-19", // so both months are "past" and use snapshot
+    });
+    // Each past month should show ONLY Housing from the snapshot ($800/mo),
+    // not the full snapshot total ($1500/mo).
+    for (const b of buckets) expect(b.budgeted).toBeCloseTo(800, 2);
+  });
 });
 
 describe("compareBudgetToActual with snapshots", () => {
@@ -854,5 +888,37 @@ describe("compareBudgetToActual with snapshots", () => {
     const r1 = compareBudgetToActual(opts);
     const r2 = compareBudgetToActual({ ...opts, snapshots: [] });
     expect(r2.expense.rows[0].budgeted).toBeCloseTo(r1.expense.rows[0].budgeted, 2);
+  });
+});
+
+/* ── Legacy shape reconstruction ────────────────────────────────────────── */
+describe("reconstructFromItems", () => {
+  it("returns empty arrays for null/undefined/empty input", () => {
+    expect(reconstructFromItems(null)).toEqual({ exp: [], sav: [] });
+    expect(reconstructFromItems(undefined)).toEqual({ exp: [], sav: [] });
+    expect(reconstructFromItems({})).toEqual({ exp: [], sav: [] });
+  });
+
+  it("converts expense items (v / 12 → monthly) with p='m'", () => {
+    // v = 3600 annual → 300 monthly
+    const { exp } = reconstructFromItems({ Gas: { c: "Auto", t: "N", v: 3600 } });
+    expect(exp).toHaveLength(1);
+    expect(exp[0]).toMatchObject({ n: "Gas", c: "Auto", t: "N", v: "300", p: "m" });
+  });
+
+  it("routes t='S' items to sav, others to exp", () => {
+    const { exp, sav } = reconstructFromItems({
+      Gas: { c: "Auto", t: "N", v: 3600 },
+      Emergency: { c: "Savings", t: "S", v: 6000 },
+      Dining: { c: "Food", t: "D", v: 2400 },
+    });
+    expect(exp.map(x => x.n).sort()).toEqual(["Dining", "Gas"]);
+    expect(sav.map(x => x.n)).toEqual(["Emergency"]);
+    expect(sav[0]).toMatchObject({ v: "500", p: "m" }); // 6000 / 12
+  });
+
+  it("defaults missing category to 'General' and missing type to 'N'", () => {
+    const { exp } = reconstructFromItems({ Mystery: { v: 1200 } });
+    expect(exp[0]).toMatchObject({ c: "General", t: "N", v: "100" });
   });
 });

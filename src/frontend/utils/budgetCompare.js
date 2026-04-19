@@ -98,6 +98,35 @@ export function itemWeeklyBudget(item) {
   return isFinite(wk) ? wk : 0;
 }
 
+/* ── Legacy snapshot shape reconstruction ──
+   Older snapshots store budgets as an `items` dict keyed by line-item name,
+   with values like `{ c, t, v }` where `v` is the annual-48-paycheck dollar
+   amount (weekly × 48). Newer snapshots carry `fullState.exp` and
+   `fullState.sav` in the same shape as the live budget.
+
+   Given an `items` dict, produces `{ exp, sav }` in live shape so callers
+   (chart helpers, migrations, etc.) can treat legacy snapshots uniformly. */
+export function reconstructFromItems(items) {
+  const exp = [];
+  const sav = [];
+  if (!items || typeof items !== "object") return { exp, sav };
+  for (const [name, data] of Object.entries(items)) {
+    if (!data) continue;
+    const monthly = Math.round(((Number(data.v) || 0) / 12) * 100) / 100;
+    const row = {
+      n: name,
+      c: data.c || "General",
+      t: data.t || "N",
+      v: String(monthly),
+      p: "m",
+    };
+    if (data.t === "S") sav.push(row);
+    else exp.push(row);
+  }
+  return { exp, sav };
+}
+
+
 /* ── Snapshot-aware budget selection ──
    Given the live budget, a list of snapshots, and an ISO date, return the
    budget array that was "in effect" on that date. Rules:
@@ -135,28 +164,9 @@ export function pickBudgetForDate(liveExp, snapshots, iso, todayIso) {
       eligible.push({ date: s.date, exp: fsExp });
       continue;
     }
-    // Legacy shape — reconstruct from items. items[x].v is stored as
-    // monthly × 12 (= weekly × 48). Dividing by 12 recovers the monthly value,
-    // which together with p:"m" matches the live exp shape used elsewhere.
-    // Savings items (t === "S") are skipped — they belong to `sav`, not `exp`.
-    const items = s?.items;
-    if (items && typeof items === "object") {
-      const reconstructed = [];
-      for (const [name, data] of Object.entries(items)) {
-        if (!data || data.t === "S") continue;
-        const monthly = Math.round(((Number(data.v) || 0) / 12) * 100) / 100;
-        reconstructed.push({
-          n: name,
-          c: data.c || "General",
-          t: data.t || "N",
-          v: String(monthly),
-          p: "m",
-        });
-      }
-      if (reconstructed.length > 0) {
-        eligible.push({ date: s.date, exp: reconstructed });
-      }
-    }
+    // Legacy shape — reconstruct on the fly via the shared helper.
+    const { exp: rebuilt } = reconstructFromItems(s?.items);
+    if (rebuilt.length > 0) eligible.push({ date: s.date, exp: rebuilt });
   }
   if (eligible.length === 0) return liveExp;
   eligible.sort((a, b) => a.date.localeCompare(b.date));
@@ -554,9 +564,15 @@ export function monthlyBuckets(opts) {
         budgeted += wk * 48 / 12; // monthly equivalent
       }
     } else {
-      // Total monthly budget across all expense categories.
+      // Total monthly budget, narrowed to `cats` when the caller scoped it.
+      // Without this narrowing, a snapshot's reconstructed `exp` would include
+      // every category the snapshot ever had — even when the user filtered
+      // the table to one category — producing a budget line that doesn't match
+      // what's being compared against.
       for (const it of (bucketExp || [])) {
-        if (!(it?.c || "").trim()) continue;
+        const c = (it?.c || "").trim();
+        if (!c) continue;
+        if (expSet.size > 0 && !expSet.has(c)) continue;
         const wk = itemWeeklyBudget(it);
         budgeted += wk * 48 / 12;
       }
