@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
 import { Card, SH, NI } from "../components/ui.jsx";
 import {
@@ -144,6 +144,41 @@ export default function TransactionsTab(props) {
     return visibleRows.slice(start, start + pageSize);
   }, [visibleRows, page, pageSize]);
 
+  // ── Progressive rendering ──
+  // Mounting thousands of <tr>s with inline editors + checkboxes at once freezes
+  // the browser for seconds. Instead, render an initial chunk and grow the slice
+  // as the user scrolls past a sentinel row. pageRows stays the canonical
+  // filter+sort result; displayRows is just the "currently mounted" subset.
+  const RENDER_CHUNK = 200;
+  const [renderLimit, setRenderLimit] = useState(RENDER_CHUNK);
+  // Reset the slice whenever the underlying row set changes (new filter, new
+  // page, new sort, new data). Also bumps when pageSize changes.
+  useEffect(() => { setRenderLimit(RENDER_CHUNK); }, [pageRows]);
+  const displayRows = useMemo(
+    () => pageRows.length > renderLimit ? pageRows.slice(0, renderLimit) : pageRows,
+    [pageRows, renderLimit]
+  );
+  const hasMoreRows = displayRows.length < pageRows.length;
+  // Sentinel <tr> ref + IntersectionObserver: when the sentinel scrolls into
+  // view, bump the limit by another chunk. Observer rebinds when the sentinel
+  // is re-created (i.e. after a scroll-triggered grow).
+  const sentinelRef = useRef(null);
+  useEffect(() => {
+    if (!hasMoreRows) return;
+    const node = sentinelRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+    const obs = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          setRenderLimit(prev => prev + RENDER_CHUNK);
+          break;
+        }
+      }
+    }, { rootMargin: "400px 0px" }); // start loading before it's actually on screen
+    obs.observe(node);
+    return () => obs.disconnect();
+  }, [hasMoreRows]);
+
   const totalPages = pageSize === Infinity
     ? 1
     : Math.max(1, Math.ceil(visibleRows.length / pageSize));
@@ -248,6 +283,14 @@ export default function TransactionsTab(props) {
     if (selected.size === pageRows.length && pageRows.length > 0) setSelected(new Set());
     else setSelected(new Set(pageRows.map(r => r.id)));
   };
+  // Memoized so we don't scan 10k rows on every render. Recomputes only when
+  // the page or the selection actually changes.
+  const allOnPageSelected = useMemo(() => {
+    if (pageRows.length === 0) return false;
+    if (selected.size < pageRows.length) return false;
+    for (const r of pageRows) if (!selected.has(r.id)) return false;
+    return true;
+  }, [pageRows, selected]);
 
   const clearFilters = () => {
     setPreset(""); setDateFrom(""); setDateTo(""); setSearch("");
@@ -563,7 +606,7 @@ export default function TransactionsTab(props) {
               <tr style={{ background: "var(--input-bg, #fafafa)", borderBottom: "2px solid var(--bdr, #e0e0e0)" }}>
                 <th style={{ ...th(), width: 32 }}>
                   <input type="checkbox"
-                    checked={pageRows.length > 0 && pageRows.every(r => selected.has(r.id))}
+                    checked={allOnPageSelected}
                     onChange={toggleSelectAll} />
                 </th>
                 {visibleColumns.map(col => {
@@ -580,7 +623,7 @@ export default function TransactionsTab(props) {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map(tx => (
+              {displayRows.map(tx => (
                 <TxRow key={tx.id}
                   tx={tx}
                   visibleColumns={visibleColumns}
@@ -596,6 +639,14 @@ export default function TransactionsTab(props) {
                   forceExpandSplits={expandAllSplits}
                 />
               ))}
+              {hasMoreRows && (
+                <tr ref={sentinelRef} aria-hidden="true">
+                  <td colSpan={visibleColumns.length + 2}
+                    style={{ padding: "12px 8px", textAlign: "center", fontSize: 12, color: "var(--tx3, #999)", fontStyle: "italic" }}>
+                    Loading more… ({displayRows.length.toLocaleString()} of {pageRows.length.toLocaleString()})
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}
