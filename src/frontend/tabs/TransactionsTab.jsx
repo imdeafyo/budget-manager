@@ -200,10 +200,10 @@ export default function TransactionsTab(props) {
 
   // All categories combined for the inline dropdown
   const allCategoryOptions = useMemo(() => {
-    const s = new Set([...(cats || []), ...(savCats || []), ...(transferCats || [])]);
+    const s = new Set([...(cats || []), ...(savCats || []), ...(transferCats || []), ...(incomeCats || [])]);
     transactions.forEach(t => { if (t.category) s.add(t.category); });
     return [...s].sort();
-  }, [cats, savCats, transferCats, transactions]);
+  }, [cats, savCats, transferCats, incomeCats, transactions]);
 
   // A Set of transfer category names so we can style/exclude transfer rows.
   // Kept as state-derived so changes in Categories tab reflect immediately.
@@ -569,13 +569,10 @@ export default function TransactionsTab(props) {
         {showBulk && (
           <div style={{ padding: 12, background: "var(--input-bg, #fafafa)", borderRadius: 8, marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 12, color: "var(--tx2, #555)", fontWeight: 600 }}>Set category:</span>
-            <select value={bulkCat} onChange={e => setBulkCat(e.target.value)} style={inp()}>
-              <option value="">— choose —</option>
-              {allCategoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <TypeaheadSelect options={allCategoryOptions} value={bulkCat} onChange={setBulkCat} placeholder="— choose —" />
             <button onClick={bulkApplyCategory} disabled={!bulkCat} style={btn("#556FB5", "#fff")}>Apply</button>
             <span style={{ fontSize: 12, color: "var(--tx2, #555)", fontWeight: 600 }}>Set account:</span>
-            <input value={bulkAcct} onChange={e => setBulkAcct(e.target.value)} placeholder="Account name" style={inp()} />
+            <TypeaheadSelect options={allAccts} value={bulkAcct} onChange={setBulkAcct} placeholder="Account name" allowCustom />
             <button onClick={bulkApplyAccount} disabled={!bulkAcct} style={btn("#556FB5", "#fff")}>Apply</button>
             <button onClick={() => { setShowBulk(false); setBulkCat(""); setBulkAcct(""); }} style={btn("var(--card-bg, #fff)", "var(--tx2, #555)")}>Close</button>
           </div>
@@ -965,16 +962,68 @@ function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, al
 /* ── Multi-select dropdown (checkboxes in a popover) ── */
 function MultiSelect({ options, selected, onChange, placeholder }) {
   const [open, setOpen] = useState(false);
-  const label = selected.length === 0 ? (placeholder || "All") : selected.length === 1 ? selected[0] : `${selected.length} selected`;
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Close when clicking outside — keeps the dropdown out of the way once the
+  // user is done choosing.
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [open]);
+
+  // Autofocus the search input when the dropdown opens so the user can just
+  // start typing to filter.
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
+
+  // Clear the query when closing so reopening starts fresh. Keeping it across
+  // open/close cycles is confusing because the label says "All categories" but
+  // a stale filter would still hide options.
+  useEffect(() => { if (!open) setQuery(""); }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => String(o).toLowerCase().includes(q));
+  }, [options, query]);
+
+  const label = selected.length === 0
+    ? (placeholder || "All")
+    : selected.length === 1 ? selected[0] : `${selected.length} selected`;
+
   return (
-    <div style={{ position: "relative" }}>
+    <div ref={wrapRef} style={{ position: "relative" }}>
       <button onClick={() => setOpen(v => !v)} style={{ ...inp(), width: "100%", textAlign: "left", cursor: "pointer" }}>
         {label} <span style={{ float: "right" }}>▾</span>
       </button>
       {open && (
-        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #e0e0e0)", borderRadius: 6, zIndex: 10, maxHeight: 240, overflowY: "auto", boxShadow: "var(--shadow, 0 4px 12px rgba(0,0,0,.1))", padding: 4 }}>
-          {options.length === 0 && <div style={{ padding: 8, color: "var(--tx3, #999)", fontSize: 12 }}>No options yet</div>}
-          {options.map(o => (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #e0e0e0)", borderRadius: 6, zIndex: 10, maxHeight: 280, overflowY: "auto", boxShadow: "var(--shadow, 0 4px 12px rgba(0,0,0,.1))", padding: 4 }}>
+          {/* Search box — sticky so it stays visible while scrolling a long
+              list. Same sensitivity as the inline row editor's category
+              dropdown (case-insensitive substring match). */}
+          <div style={{ position: "sticky", top: -4, background: "var(--card-bg, #fff)", padding: 4, marginBottom: 4, borderBottom: "1px solid var(--bdr2, #eee)", zIndex: 1 }}>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Type to search…"
+              style={{ ...inp(), width: "100%", fontSize: 12, padding: "4px 8px" }}
+              onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}
+            />
+          </div>
+          {filtered.length === 0 && (
+            <div style={{ padding: 8, color: "var(--tx3, #999)", fontSize: 12 }}>
+              {options.length === 0 ? "No options yet" : "No matches"}
+            </div>
+          )}
+          {filtered.map(o => (
             <label key={o} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", cursor: "pointer", fontSize: 13 }}>
               <input type="checkbox" checked={selected.includes(o)} onChange={() => {
                 if (selected.includes(o)) onChange(selected.filter(x => x !== o));
@@ -987,6 +1036,96 @@ function MultiSelect({ options, selected, onChange, placeholder }) {
             <button onClick={() => onChange([])} style={{ background: "none", border: "none", color: "#556FB5", cursor: "pointer", fontSize: 12 }}>Clear</button>
             <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "var(--tx2, #555)", cursor: "pointer", fontSize: 12, marginLeft: "auto" }}>Close</button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── TypeaheadSelect ──
+   Single-value picker with inline search. Used in bulk edit for category +
+   account so the UX matches the filter MultiSelect's new search experience.
+   `allowCustom` lets the bulk-edit account field still accept values that
+   aren't in the existing list (e.g. first-time account names). */
+function TypeaheadSelect({ options, value, onChange, placeholder, allowCustom = false }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (open && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [open]);
+
+  // Keep query synced with value so closing/reopening shows the current pick
+  // as the starting query (and user can edit or retype freely).
+  useEffect(() => { setQuery(value || ""); }, [value, open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => String(o).toLowerCase().includes(q));
+  }, [options, query]);
+
+  const commit = (v) => { onChange(v); setOpen(false); };
+  const displayLabel = value || placeholder || "— choose —";
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative", minWidth: 180 }}>
+      <button onClick={() => setOpen(v => !v)}
+        style={{ ...inp(), width: "100%", textAlign: "left", cursor: "pointer", color: value ? "var(--tx, #333)" : "var(--tx3, #999)" }}>
+        {displayLabel} <span style={{ float: "right" }}>▾</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #e0e0e0)", borderRadius: 6, zIndex: 10, maxHeight: 280, overflowY: "auto", boxShadow: "var(--shadow, 0 4px 12px rgba(0,0,0,.1))", padding: 4 }}>
+          <div style={{ position: "sticky", top: -4, background: "var(--card-bg, #fff)", padding: 4, marginBottom: 4, borderBottom: "1px solid var(--bdr2, #eee)", zIndex: 1 }}>
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={allowCustom ? "Type to search or add…" : "Type to search…"}
+              style={{ ...inp(), width: "100%", fontSize: 12, padding: "4px 8px" }}
+              onKeyDown={e => {
+                if (e.key === "Escape") { setOpen(false); }
+                else if (e.key === "Enter") {
+                  // Enter picks the top filtered option; if allowCustom and
+                  // nothing matches, commit the raw query as a new value.
+                  if (filtered.length > 0) commit(filtered[0]);
+                  else if (allowCustom && query.trim()) commit(query.trim());
+                }
+              }}
+            />
+          </div>
+          {filtered.length === 0 && (
+            <div style={{ padding: 8, color: "var(--tx3, #999)", fontSize: 12 }}>
+              {options.length === 0
+                ? (allowCustom ? "Type a new value and press Enter" : "No options yet")
+                : (allowCustom ? `No matches — press Enter to use "${query.trim()}"` : "No matches")}
+            </div>
+          )}
+          {filtered.map(o => (
+            <div key={o} onClick={() => commit(o)}
+              style={{ padding: "4px 8px", cursor: "pointer", fontSize: 13, background: o === value ? "rgba(85, 111, 181, 0.1)" : "transparent" }}>
+              {o}
+            </div>
+          ))}
+          {value && (
+            <div style={{ borderTop: "1px solid var(--bdr2, #eee)", padding: "4px 8px", display: "flex", gap: 8 }}>
+              <button onClick={() => commit("")} style={{ background: "none", border: "none", color: "#E8573A", cursor: "pointer", fontSize: 12 }}>Clear selection</button>
+            </div>
+          )}
         </div>
       )}
     </div>
