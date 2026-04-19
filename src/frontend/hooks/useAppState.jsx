@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcSnapPure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
+import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
 import { useM } from "../components/ui.jsx";
 
 /* ── Runtime mode. "deploy" uses /api/transactions; "generic" bundles
@@ -314,13 +315,51 @@ export default function useAppState() {
   const hlW = evalF(hlThresh);
   const hlWk = hlPeriod === "m" ? hlW * 12 / 48 : hlPeriod === "y" ? hlW / 48 : hlW;
 
+  // ── Over-budget flag ──
+  // Compares current-month actual spend vs. the monthly budget per category,
+  // producing a Set of over-budget category names. The Budget tab uses this
+  // to tint line items red so the user sees which categories blew through
+  // their budget for the period. Cheap early exit when there are no
+  // transactions yet.
+  const overBudgetCats = useMemo(() => {
+    if (!Array.isArray(transactions) || transactions.length === 0) return new Set();
+    const now = new Date();
+    const y = now.getUTCFullYear(), m = now.getUTCMonth();
+    const first = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+    const last  = new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    try {
+      const cmp = compareBudgetToActual({
+        transactions,
+        exp, sav,
+        cats, savCats, transferCats, incomeCats,
+        snapshots,
+        fromIso: first,
+        toIso: last,
+        todayIso: today,
+        basis: 48,
+        treatRefundsAsNetting,
+      });
+      const out = new Set();
+      for (const row of cmp.expense.rows) {
+        // Only flag rows with a real budget target AND spending past it. We
+        // deliberately skip budget-less uncategorized rows — those belong in
+        // their own callout, not as a red tint on real categories.
+        if (row.budgeted > 0 && row.over) out.add(row.category);
+      }
+      return out;
+    } catch {
+      return new Set();
+    }
+  }, [transactions, exp, sav, cats, savCats, transferCats, incomeCats, snapshots, treatRefundsAsNetting]);
+
   const applySort = items => {
     const s = [...items];
     if (sortBy === "amount") s.sort((a, b) => sortDir === "desc" ? b.wk - a.wk : a.wk - b.wk);
     else if (sortBy === "category") s.sort((a, b) => a.c.localeCompare(b.c) || a.n.localeCompare(b.n));
     return s;
   };
-  const ewk = useMemo(() => exp.map((e, i) => ({ ...e, idx: i, wk: toWk(e.v, e.p), hl: toWk(e.v, e.p) >= hlWk && hlWk > 0 })), [exp, hlW, hlPeriod]);
+  const ewk = useMemo(() => exp.map((e, i) => ({ ...e, idx: i, wk: toWk(e.v, e.p), hl: toWk(e.v, e.p) >= hlWk && hlWk > 0, ov: overBudgetCats.has(e.c) })), [exp, hlW, hlPeriod, overBudgetCats]);
   const necI = useMemo(() => applySort(ewk.filter(e => e.t === "N")), [ewk, sortBy, sortDir]);
   const disI = useMemo(() => applySort(ewk.filter(e => e.t === "D")), [ewk, sortBy, sortDir]);
   const savSorted = useMemo(() => { const items = sav.map((s, i) => ({ ...s, idx: i, wk: toWk(s.v, s.p), hl: toWk(s.v, s.p) >= hlWk && hlWk > 0 })); if (sortBy === "amount") items.sort((a, b) => sortDir === "desc" ? b.wk - a.wk : a.wk - b.wk); return items; }, [sav, sortBy, sortDir, hlW]);
@@ -370,6 +409,32 @@ export default function useAppState() {
     setSnapsRecalced(true);
     setSnapshots(prev => prev.map(s => recalcSnap(s)));
   }, [loaded, recalcSnap, snapshots.length, snapsRecalced]);
+
+  // One-time migration: backfill fullState.exp/sav on legacy snapshots that
+  // only have `items`. The charts already reconstruct on the fly, but
+  // persisting the reconstructed shape makes snapshots self-descriptive and
+  // lets future code rely on fullState without constantly reaching for
+  // reconstructFromItems. Runs exactly once per load; skipped if nothing
+  // needs backfilling.
+  const [snapsBackfilled, setSnapsBackfilled] = useState(false);
+  useEffect(() => {
+    if (!loaded || snapsBackfilled || snapshots.length === 0) return;
+    setSnapsBackfilled(true);
+    setSnapshots(prev => {
+      let changed = false;
+      const next = prev.map(s => {
+        // Already has a live-shape budget? Leave alone.
+        if (Array.isArray(s?.fullState?.exp) && s.fullState.exp.length > 0) return s;
+        // No items to reconstruct from? Leave alone — nothing to do.
+        if (!s?.items || typeof s.items !== "object") return s;
+        const { exp, sav } = reconstructFromItems(s.items);
+        if (exp.length === 0 && sav.length === 0) return s;
+        changed = true;
+        return { ...s, fullState: { ...(s.fullState || {}), exp, sav } };
+      });
+      return changed ? next : prev;
+    });
+  }, [loaded, snapsBackfilled, snapshots.length]);
 
   const restoreFullState = useCallback((idx) => {
     const snap = snapshots[idx];

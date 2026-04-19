@@ -107,7 +107,11 @@ export function ExpRowInner({ item, cats, onUpdate, onRemove }) {
   const vc = useContext(VisColsCtx);
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
   return (
-    <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0", alignItems: "center", background: item.hl ? "rgba(232,87,58,0.08)" : "transparent", borderRadius: item.hl ? 4 : 0 }}>
+    <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "4px 0 4px 6px", alignItems: "center",
+      background: item.ov ? "rgba(232,87,58,0.18)" : item.hl ? "rgba(232,87,58,0.08)" : "transparent",
+      borderLeft: item.ov ? "3px solid #E8573A" : "3px solid transparent",
+      borderRadius: (item.ov || item.hl) ? 4 : 0 }}
+      title={item.ov ? `Over budget this month — category "${item.c}" has exceeded its budgeted amount` : undefined}>
       <div style={{ fontSize: 12, color: "var(--tx2, #555)", display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
         <button onClick={() => onUpdate({ t: isN ? "D" : "N" })} title={isN ? "→ Discretionary" : "→ Necessity"}
           style={{ fontSize: 9, color: "#fff", fontWeight: 700, border: "none", borderRadius: 5, padding: "2px 6px", background: isN ? "#556FB5" : "#E8573A", cursor: "pointer", flexShrink: 0 }}>{isN ? "NEC" : "DIS"}</button>
