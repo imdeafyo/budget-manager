@@ -538,24 +538,35 @@ describe("monthlyBuckets", () => {
     expect(buckets[2].days).toBe(10);
   });
 
-  it("budgeted scales with days-in-bucket and basis", () => {
+  it("budgeted is a flat monthly figure (weekly × 48 / 12), independent of day count", () => {
     const buckets = monthlyBuckets(baseOpts());
-    // Full-month Feb: 28 days, basis 48, total weekly $175 → 175 × (28/7) × (48/52)
-    // Note: implementation rounds budgeted to cents, so precision of 1 dp (0.05)
-    // is the right tolerance against the raw arithmetic.
-    const expectedFeb = 175 * (28 / 7) * (48 / 52);
-    expect(buckets[0].budgeted).toBeCloseTo(expectedFeb, 1);
-    // Full-month March: 31 days → 175 × (31/7) × (48/52)
-    const expectedMar = 175 * (31 / 7) * (48 / 52);
-    expect(buckets[1].budgeted).toBeCloseTo(expectedMar, 1);
+    // Budget tab convention: monthly = weekly × 48 / 12. Total weekly = $175.
+    const monthly = 175 * 48 / 12; // = 700
+    expect(buckets[0].budgeted).toBeCloseTo(monthly, 2); // Feb (28d)
+    expect(buckets[1].budgeted).toBeCloseTo(monthly, 2); // Mar (31d)
+    expect(buckets[2].budgeted).toBeCloseTo(monthly, 2); // Apr (30d)
+    // All three equal despite different day counts.
+    expect(buckets[0].budgeted).toEqual(buckets[1].budgeted);
+    expect(buckets[1].budgeted).toEqual(buckets[2].budgeted);
   });
 
   it("single-category budget only uses that category's line items", () => {
     const opts = { ...baseOpts(), category: "Food" };
     const buckets = monthlyBuckets(opts);
-    // Food only: $150/wk × (28/7) × (48/52)
-    const expectedFeb = 150 * (28 / 7) * (48 / 52);
-    expect(buckets[0].budgeted).toBeCloseTo(expectedFeb, 1);
+    // Food only: $150/wk × 48 / 12 = $600/mo, flat across all buckets
+    const expected = 150 * 48 / 12;
+    expect(buckets[0].budgeted).toBeCloseTo(expected, 2);
+    expect(buckets[1].budgeted).toBeCloseTo(expected, 2);
+  });
+
+  it("partial first/last bucket is prorated by days-in-bucket / days-in-full-month", () => {
+    // Range: Feb 15 → Apr 10. Feb is 14d of 28 → 50%, Apr is 10d of 30 → 1/3.
+    const opts = { ...baseOpts(), fromIso: "2026-02-15", toIso: "2026-04-10" };
+    const buckets = monthlyBuckets(opts);
+    const fullMonthly = 175 * 48 / 12;
+    expect(buckets[0].budgeted).toBeCloseTo(fullMonthly * (14 / 28), 2); // Feb partial
+    expect(buckets[1].budgeted).toBeCloseTo(fullMonthly, 2);             // March full
+    expect(buckets[2].budgeted).toBeCloseTo(fullMonthly * (10 / 30), 2); // Apr partial
   });
 
   it("returns empty array when the range is invalid", () => {
@@ -563,12 +574,12 @@ describe("monthlyBuckets", () => {
     expect(monthlyBuckets({ ...baseOpts(), fromIso: "2026-04-30", toIso: "2026-02-01" })).toEqual([]);
   });
 
-  it("respects basis 52 vs 48", () => {
+  it("basis is no longer an input that affects monthlyBuckets output", () => {
+    // Line-chart view is monthly — basis 48 vs 52 should produce the same
+    // numbers since we only emit a flat monthly figure per bucket.
     const b48 = monthlyBuckets({ ...baseOpts(), basis: 48 });
     const b52 = monthlyBuckets({ ...baseOpts(), basis: 52 });
-    // 52 basis is always larger (budget spread over more weeks at the same weekly rate).
-    expect(b52[0].budgeted).toBeGreaterThan(b48[0].budgeted);
-    expect(b52[0].budgeted / b48[0].budgeted).toBeCloseTo(52 / 48, 3);
+    expect(b52[0].budgeted).toEqual(b48[0].budgeted);
   });
 });
 
@@ -632,6 +643,38 @@ describe("pickBudgetForDate", () => {
     // And it's the reconstructed shape
     expect(r[0]).toMatchObject({ n: "Groceries", p: "m" });
   });
+
+  it("live overrides snapshots for the current month even when a snapshot exists", () => {
+    // todayIso in April 2026 — any April date should yield live, not the
+    // April snapshot. This mirrors "what you are actively planning today".
+    const snapApr = {
+      date: "2026-04-06",
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
+    };
+    expect(pickBudgetForDate(liveExp, [snapApr], "2026-04-01", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [snapApr], "2026-04-30", "2026-04-19")).toBe(liveExp);
+  });
+
+  it("live overrides snapshots for future months", () => {
+    const snapApr = {
+      date: "2026-04-06",
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
+    };
+    expect(pickBudgetForDate(liveExp, [snapApr], "2026-05-15", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [snapApr], "2027-01-15", "2026-04-19")).toBe(liveExp);
+  });
+
+  it("past months still use their nearest snapshot even when live override is active", () => {
+    const snapApr = {
+      date: "2026-04-06",
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
+    };
+    // March 2026 → earlier than the April snapshot but the only one eligible,
+    // so it's carried backward. Must NOT return live.
+    const r = pickBudgetForDate(liveExp, [snapApr], "2026-03-15", "2026-04-19");
+    expect(r).toBe(snapApr.fullState.exp);
+    expect(r).not.toBe(liveExp);
+  });
 });
 
 describe("monthlyBuckets with snapshots", () => {
@@ -650,26 +693,24 @@ describe("monthlyBuckets with snapshots", () => {
       basis: 48,
       snapshots: [snapOld],
     });
-    // Jan + Feb 2024 predate snapOld → carry it backward → $100/wk
-    // Mar + Apr 2024 on/after snapOld → carry forward → still $100/wk
-    // (snapOld is the only snapshot, so all four months use it.)
-    // Confirm Jan's budget uses $100/wk, not live's $175/wk.
-    // Jan: 31 days × (100/7) × (48/52)
-    const expectedJanSnap = 100 * (31 / 7) * (48 / 52);
-    const expectedJanLive = 175 * (31 / 7) * (48 / 52);
-    expect(buckets[0].budgeted).toBeCloseTo(expectedJanSnap, 1);
-    expect(buckets[0].budgeted).not.toBeCloseTo(expectedJanLive, 1);
+    // Jan + Feb 2024 predate snapOld → carry it backward. Mar + Apr 2024 on/
+    // after snapOld → carry forward. Either way, snapOld is the only eligible
+    // snapshot so every month uses its $100/wk budget = $400/mo monthly.
+    const snapMonthly = 100 * 48 / 12; // = 400
+    const liveMonthly = 175 * 48 / 12; // = 700
+    expect(buckets[0].budgeted).toBeCloseTo(snapMonthly, 2);
+    expect(buckets[0].budgeted).not.toBeCloseTo(liveMonthly, 2);
   });
 
   it("transitions mid-range: months before snapshot use old budget, after use new", () => {
     const liveExp = [{ n: "Groceries", c: "Food", v: "700", p: "m" }]; // live = $175/wk
     const snapOld = {
       date: "2024-01-01",
-      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] }, // $100/wk
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] }, // $100/wk → $400/mo
     };
     const snapNew = {
       date: "2024-03-01",
-      fullState: { exp: [{ n: "Groceries", c: "Food", v: "800", p: "m" }] }, // $200/wk
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "800", p: "m" }] }, // $200/wk → $800/mo
     };
     const buckets = monthlyBuckets({
       transactions: [],
@@ -680,12 +721,38 @@ describe("monthlyBuckets with snapshots", () => {
       basis: 48,
       snapshots: [snapOld, snapNew],
     });
-    // Jan + Feb use snapOld ($100/wk), March + April use snapNew ($200/wk).
-    const janExpected = 100 * (31 / 7) * (48 / 52);
-    const marExpected = 200 * (31 / 7) * (48 / 52);
-    expect(buckets[0].budgeted).toBeCloseTo(janExpected, 1);   // Jan
-    expect(buckets[2].budgeted).toBeCloseTo(marExpected, 1);   // Mar
-    expect(buckets[3].budgeted).toBeCloseTo(200 * (30 / 7) * (48 / 52), 1); // Apr
+    // Jan + Feb use snapOld ($400/mo), March + April use snapNew ($800/mo).
+    // Flat monthly figures — no day-count scaling.
+    expect(buckets[0].budgeted).toBeCloseTo(400, 2);  // Jan
+    expect(buckets[1].budgeted).toBeCloseTo(400, 2);  // Feb
+    expect(buckets[2].budgeted).toBeCloseTo(800, 2);  // Mar
+    expect(buckets[3].budgeted).toBeCloseTo(800, 2);  // Apr
+  });
+
+  it("live-override: current and future months use live; past months use snapshots", () => {
+    // Live: Groceries $700/mo ($175/wk). Snapshot Apr 2026: $400/mo ($100/wk).
+    // todayIso set to April 2026.
+    const liveExp = [{ n: "Groceries", c: "Food", v: "700", p: "m" }];
+    const snapApr = {
+      date: "2026-04-06",
+      fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
+    };
+    const buckets = monthlyBuckets({
+      transactions: [],
+      exp: liveExp,
+      cats: ["Food"],
+      fromIso: "2026-02-01",
+      toIso: "2026-06-30",
+      snapshots: [snapApr],
+      todayIso: "2026-04-19",
+    });
+    // Feb, Mar → past → snapshot carry-backward → $400/mo
+    expect(buckets[0].budgeted).toBeCloseTo(400, 2); // Feb
+    expect(buckets[1].budgeted).toBeCloseTo(400, 2); // Mar
+    // Apr (current), May, Jun (future) → live → $700/mo
+    expect(buckets[2].budgeted).toBeCloseTo(700, 2); // Apr
+    expect(buckets[3].budgeted).toBeCloseTo(700, 2); // May
+    expect(buckets[4].budgeted).toBeCloseTo(700, 2); // Jun
   });
 });
 
@@ -722,7 +789,7 @@ describe("compareBudgetToActual with snapshots", () => {
       transactions: [],
       fromIso: "2026-04-01",
       toIso:   "2026-04-30",
-      todayIso: "2026-04-15",
+      todayIso: "2026-07-01", // push "today" past the range so snapshot picking drives the answer
       basis: 48,
     };
     const rLive = compareBudgetToActual(optsNoSnap);
@@ -761,7 +828,7 @@ describe("compareBudgetToActual with snapshots", () => {
       transactions: [],
       fromIso: "2026-04-01",
       toIso:   "2026-04-30",
-      todayIso: "2026-04-20",
+      todayIso: "2026-07-01", // push "today" past the range so era-splitting drives the answer
       basis: 48,
       snapshots: [snapA, snapB],
     });

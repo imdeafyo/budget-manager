@@ -101,19 +101,29 @@ export function itemWeeklyBudget(item) {
 /* ── Snapshot-aware budget selection ──
    Given the live budget, a list of snapshots, and an ISO date, return the
    budget array that was "in effect" on that date. Rules:
-     • Sort snapshots ascending by date. A snapshot is "eligible" if it either
-       has a `fullState.exp` array (newer shape) or an `items` dict (legacy
-       shape) — we reconstruct a live-shape array from `items` for legacy rows.
-     • If `date` is on or after a snapshot's date, carry that snapshot's budget
-       forward. The latest snapshot ≤ date wins (the one "last set before").
-     • If `date` predates the earliest snapshot, carry that earliest snapshot
-       backward (symmetric with carry-forward — we'd rather guess with what we
-       do have than show zero budget).
-     • If no snapshots are eligible at all, fall back to the live budget. This
-       is also the behavior for callers that pass no snapshots.
-   Returns the `liveExp` array unchanged (same reference) when falling back,
-   so callers can cheaply detect "nothing changed". */
-export function pickBudgetForDate(liveExp, snapshots, iso) {
+     • If `iso` is in the current month or the future (relative to
+       `todayIso`, defaulting to today), live wins — the idea is that the
+       current/future view should reflect what you're actively planning, not
+       a snapshot that got frozen before today's budget changes landed.
+     • Otherwise, find the latest snapshot on or before `iso` and use its
+       budget. Falls back to the earliest snapshot for dates before any
+       snapshot exists (carry-backward).
+     • Snapshots are "eligible" if they have either `fullState.exp` (newer
+       shape) or an `items` dict (legacy). Legacy items are reconstructed into
+       a live-shape array on the fly.
+     • Returns `liveExp` unchanged (same reference) when falling back, so
+       callers can cheaply detect "nothing changed".
+   `todayIso` is optional; when omitted, uses the real today. Tests pin it
+   explicitly. */
+export function pickBudgetForDate(liveExp, snapshots, iso, todayIso) {
+  if (!iso) return liveExp;
+
+  // Live-override: any bucket in the current month or later uses live.
+  // Comparing yyyy-mm prefixes keeps this TZ-stable and handles the partial-
+  // month edge case correctly (Apr 1 through Apr 30 all count as "April").
+  const today = todayIso || new Date().toISOString().slice(0, 10);
+  if (iso.slice(0, 7) >= today.slice(0, 7)) return liveExp;
+
   if (!Array.isArray(snapshots) || snapshots.length === 0) return liveExp;
   // Eligible = has any usable budget shape. Attach a `.exp` alias (normalized
   // to live-shape) so downstream code doesn't branch on the two variants.
@@ -150,7 +160,6 @@ export function pickBudgetForDate(liveExp, snapshots, iso) {
   }
   if (eligible.length === 0) return liveExp;
   eligible.sort((a, b) => a.date.localeCompare(b.date));
-  if (!iso) return liveExp;
 
   // Latest snapshot on or before the date
   let chosen = null;
@@ -313,7 +322,7 @@ export function compareBudgetToActual(opts) {
   // so we accumulate each era's contribution separately and sum per category.
   // When no snapshots are supplied, this reduces to the original single-era
   // budgetByCategory(exp, days, basis) call.
-  const expBudget = eraAwareBudget(exp, snapshots, fromIso, toIso, basis);
+  const expBudget = eraAwareBudget(exp, snapshots, fromIso, toIso, basis, todayIso);
   const savBudget = budgetByCategory(sav, days, basis);
 
   // Filter transactions to range + drop transfer-category rows up front (belt
@@ -457,6 +466,7 @@ export function monthlyBuckets(opts) {
     basis = 48,
     category = null,          // null = all; otherwise single expense category name
     snapshots = [],           // optional — enables per-era historical budgets
+    todayIso,                 // optional — controls live-override cutoff (default: real today)
     treatRefundsAsNetting = true,
   } = opts || {};
 
@@ -525,22 +535,33 @@ export function monthlyBuckets(opts) {
     // When a specific category is picked, uncategorized doesn't apply.
     if (!category && actuals.uncategorized) actual += actuals.uncategorized.total;
 
-    // Budget for this bucket: weeklyToPeriod scaled to this month's days.
-    // Snapshot-aware: select whichever exp was "in effect" at the bucket's
-    // start. When no snapshots are provided (or none carry fullState.exp),
-    // this returns `exp` unchanged, preserving previous behavior.
-    const bucketExp = pickBudgetForDate(exp, snapshots, bucketFromIso);
+    // Budget for this bucket: the monthly value of whichever exp was in effect,
+    // matching the Budget tab's "monthly" view exactly (weekly × 48 / 12).
+    // Day-count scaling is deliberately avoided — a $750/mo budget is $750
+    // whether the month has 28 days or 31. If the user's picked range clips
+    // the start/end of a month, that single bucket is prorated by the fraction
+    // of the month included: e.g. range "Apr 15 → Apr 30" renders April at
+    // 16/30 of the full-month budget. Middle buckets are always full-month.
+    const bucketExp = pickBudgetForDate(exp, snapshots, bucketFromIso, todayIso);
+    const fullMonthDays = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const frac = fullMonthDays > 0 ? days / fullMonthDays : 1;
     let budgeted = 0;
     if (category) {
       // Budget for just the picked category. Sum all line items with that cat.
       const filtered = (bucketExp || []).filter(it => (it?.c || "").trim() === category);
-      const byCat = budgetByCategory(filtered, days, basis);
-      budgeted = byCat.get(category) || 0;
+      for (const it of filtered) {
+        const wk = itemWeeklyBudget(it);
+        budgeted += wk * 48 / 12; // monthly equivalent
+      }
     } else {
-      // Total budget across all expense categories.
-      const byCat = budgetByCategory(bucketExp, days, basis);
-      for (const [, v] of byCat) budgeted += v;
+      // Total monthly budget across all expense categories.
+      for (const it of (bucketExp || [])) {
+        if (!(it?.c || "").trim()) continue;
+        const wk = itemWeeklyBudget(it);
+        budgeted += wk * 48 / 12;
+      }
     }
+    budgeted *= frac;
 
     buckets.push({
       monthLabel: monthFirst.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }),
@@ -568,7 +589,7 @@ export function monthlyBuckets(opts) {
    carry-backward for pre-earliest). When no snapshots are supplied (or none
    are eligible), this reduces to one call to budgetByCategory over the full
    range. */
-function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis) {
+function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis, todayIso) {
   const totalDays = daysInRange(fromIso, toIso);
   if (!totalDays) return new Map();
 
@@ -618,7 +639,7 @@ function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis) {
   for (const era of eras) {
     const eraDays = daysInRange(era.startIso, era.endIso);
     if (!eraDays) continue;
-    const eraExp = pickBudgetForDate(liveExp, snapshots, era.startIso);
+    const eraExp = pickBudgetForDate(liveExp, snapshots, era.startIso, todayIso);
     const partial = budgetByCategory(eraExp, eraDays, basis);
     for (const [c, v] of partial) {
       out.set(c, (out.get(c) || 0) + v);

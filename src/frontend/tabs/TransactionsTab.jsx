@@ -629,6 +629,7 @@ export default function TransactionsTab(props) {
         transferCats={transferCats}
         incomeCats={incomeCats}
         snapshots={snapshots}
+        today={today}
         filterCats={catSel}
         setFilterCats={setCatSel}
         setDateFrom={setDateFrom}
@@ -1616,7 +1617,7 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [], filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
   // ── Drill-down handlers ──
   // Bar click: toggle the bar's category in the table's catSel. Clicking an
   // already-filtered category removes it; clicking a new one adds it.
@@ -1698,8 +1699,9 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
       toIso: dateTo,
       basis,
       category: chartCategory || null,
+      todayIso: today,
     });
-  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, snapshots, dateFrom, dateTo, basis, chartCategory]);
+  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, snapshots, dateFrom, dateTo, basis, chartCategory, today]);
 
   // Empty state — only reached when there are literally no transactions to work
   // with. (When transactions exist but no range is picked, the parent infers
@@ -1757,17 +1759,6 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             )}
           </span>
         </div>
-        {showCompare && (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Basis</span>
-            <button onClick={() => setBasis(48)}
-              title="48 paychecks/yr — matches the app's budget convention ($150/wk × 48 ÷ 12 = $600/mo)"
-              style={basisBtn(basis === 48)}>48</button>
-            <button onClick={() => setBasis(52)}
-              title="52 weeks/yr — spreads the 48-paycheck budget across all calendar weeks"
-              style={basisBtn(basis === 52)}>52</button>
-          </div>
-        )}
       </div>
 
       {showCompare && (
@@ -1777,7 +1768,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             <StatCard label="Spent" value={fmt(exp.totalActual)} color={statusColor} tint={statusTint}
               hint={exp.totalRefunds > 0 ? `net of ${fmt(exp.totalRefunds)} refunded` : null} />
             <StatCard label="Budgeted" value={fmt(exp.totalBudget)} color="var(--tx, #333)" tint="transparent"
-              hint={`${basis}-basis × ${p.days}d`} />
+              hint={`${p.days} day${p.days === 1 ? "" : "s"}`} />
             <StatCard label="% used" value={pctUsedStr} color={statusColor} tint={statusTint}
               hint={overBudget ? `over by ${fmt(exp.totalActual - exp.totalBudget)}` : `${fmt(Math.max(0, exp.totalBudget - exp.totalActual))} remaining`} />
             <StatCard label="Days left" value={String(p.remaining)}
