@@ -4,7 +4,7 @@ import {
   daysInRange, daysRemaining, daysElapsed,
   itemWeeklyBudget, weeklyToPeriod, budgetByCategory,
   filterByDateRange, actualsByCategory,
-  compareBudgetToActual,
+  compareBudgetToActual, monthlyBuckets,
 } from "./budgetCompare.js";
 
 /* ── Date helpers ─────────────────────────────────────────────────────── */
@@ -472,5 +472,102 @@ describe("compareBudgetToActual", () => {
 
     // Expense totals didn't inflate from the income deposits
     expect(r.expense.totalActual).toBeCloseTo(baselineExpTotalActual, 2);
+  });
+});
+
+/* ── Monthly buckets for the line chart ─────────────────────────────────── */
+describe("monthlyBuckets", () => {
+  const baseOpts = () => ({
+    cats: ["Food", "Auto"],
+    savCats: ["Emergency"],
+    transferCats: ["Transfer"],
+    incomeCats: ["Paycheck"],
+    exp: [
+      { n: "Groceries", c: "Food", v: "600", p: "m" }, // $150/wk
+      { n: "Gas",       c: "Auto", v: "100", p: "m" }, // $25/wk
+    ],
+    transactions: [
+      // Feb
+      { id: "f1", date: "2026-02-05", amount: -200, category: "Food" },
+      { id: "f2", date: "2026-02-20", amount:  -50, category: "Auto" },
+      // March
+      { id: "m1", date: "2026-03-10", amount: -300, category: "Food" },
+      { id: "m2", date: "2026-03-15", amount: -800, category: "Paycheck" },  // income → skip
+      { id: "m3", date: "2026-03-22", amount: -100, category: "Transfer" },  // transfer → skip
+      // April
+      { id: "a1", date: "2026-04-02", amount: -150, category: "Food" },
+      { id: "a2", date: "2026-04-18", amount:  -75, category: "Auto" },
+    ],
+    fromIso: "2026-02-01",
+    toIso:   "2026-04-30",
+    basis: 48,
+  });
+
+  it("produces one bucket per month in range, in order", () => {
+    const buckets = monthlyBuckets(baseOpts());
+    expect(buckets).toHaveLength(3);
+    expect(buckets.map(b => b.monthLabel)).toEqual(["Feb 2026", "Mar 2026", "Apr 2026"]);
+    expect(buckets[0].monthStart).toBe("2026-02-01");
+    expect(buckets[0].monthEnd).toBe("2026-02-28");
+    expect(buckets[1].days).toBe(31);
+  });
+
+  it("sums actuals across all expense cats when category is null", () => {
+    const buckets = monthlyBuckets(baseOpts());
+    const feb = buckets[0], mar = buckets[1], apr = buckets[2];
+    expect(feb.actual).toBeCloseTo(250, 2); // 200 + 50
+    expect(mar.actual).toBeCloseTo(300, 2); // Paycheck + Transfer skipped
+    expect(apr.actual).toBeCloseTo(225, 2); // 150 + 75
+  });
+
+  it("filters actuals to a single category when category is specified", () => {
+    const opts = { ...baseOpts(), category: "Food" };
+    const buckets = monthlyBuckets(opts);
+    expect(buckets[0].actual).toBeCloseTo(200, 2); // Food only, Auto excluded
+    expect(buckets[1].actual).toBeCloseTo(300, 2);
+    expect(buckets[2].actual).toBeCloseTo(150, 2);
+  });
+
+  it("clips first and last buckets to fromIso / toIso", () => {
+    const opts = { ...baseOpts(), fromIso: "2026-02-15", toIso: "2026-04-10" };
+    const buckets = monthlyBuckets(opts);
+    expect(buckets).toHaveLength(3);
+    expect(buckets[0].monthStart).toBe("2026-02-15"); // clipped
+    expect(buckets[0].days).toBe(14);                 // 15th through 28th
+    expect(buckets[2].monthEnd).toBe("2026-04-10");   // clipped
+    expect(buckets[2].days).toBe(10);
+  });
+
+  it("budgeted scales with days-in-bucket and basis", () => {
+    const buckets = monthlyBuckets(baseOpts());
+    // Full-month Feb: 28 days, basis 48, total weekly $175 → 175 × (28/7) × (48/52)
+    // Note: implementation rounds budgeted to cents, so precision of 1 dp (0.05)
+    // is the right tolerance against the raw arithmetic.
+    const expectedFeb = 175 * (28 / 7) * (48 / 52);
+    expect(buckets[0].budgeted).toBeCloseTo(expectedFeb, 1);
+    // Full-month March: 31 days → 175 × (31/7) × (48/52)
+    const expectedMar = 175 * (31 / 7) * (48 / 52);
+    expect(buckets[1].budgeted).toBeCloseTo(expectedMar, 1);
+  });
+
+  it("single-category budget only uses that category's line items", () => {
+    const opts = { ...baseOpts(), category: "Food" };
+    const buckets = monthlyBuckets(opts);
+    // Food only: $150/wk × (28/7) × (48/52)
+    const expectedFeb = 150 * (28 / 7) * (48 / 52);
+    expect(buckets[0].budgeted).toBeCloseTo(expectedFeb, 1);
+  });
+
+  it("returns empty array when the range is invalid", () => {
+    expect(monthlyBuckets({ ...baseOpts(), fromIso: null })).toEqual([]);
+    expect(monthlyBuckets({ ...baseOpts(), fromIso: "2026-04-30", toIso: "2026-02-01" })).toEqual([]);
+  });
+
+  it("respects basis 52 vs 48", () => {
+    const b48 = monthlyBuckets({ ...baseOpts(), basis: 48 });
+    const b52 = monthlyBuckets({ ...baseOpts(), basis: 52 });
+    // 52 basis is always larger (budget spread over more weeks at the same weekly rate).
+    expect(b52[0].budgeted).toBeGreaterThan(b48[0].budgeted);
+    expect(b52[0].budgeted / b48[0].budgeted).toBeCloseTo(52 / 48, 3);
   });
 });

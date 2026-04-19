@@ -363,6 +363,127 @@ export function compareBudgetToActual(opts) {
   };
 }
 
+/* ── Monthly bucketing for the trends line chart ──
+   Produces one row per calendar month that overlaps [fromIso, toIso]. For each
+   bucket we compute:
+     - actual: expense spend in that month (refund-netted, transfer-excluded,
+       income-cat-excluded — same filter the bar chart uses, so the two views
+       stay honest to each other).
+     - budgeted: the sum of weekly budgets for the matching scope, scaled by the
+       bucket's day count and the caller's basis (48 / 52).
+   Optionally filters to a single category; when `category` is null/undefined,
+   aggregates across all expense categories ("all spending vs. all budgeted").
+   The returned rows are safe to feed to Recharts as-is. */
+export function monthlyBuckets(opts) {
+  const {
+    transactions = [],
+    exp = [],
+    cats = [],                // expense category names
+    savCats = [],             // reserved; we don't plot savings on this chart yet
+    transferCats = [],
+    incomeCats = [],
+    fromIso,
+    toIso,
+    basis = 48,
+    category = null,          // null = all; otherwise single expense category name
+    treatRefundsAsNetting = true,
+  } = opts || {};
+
+  if (!fromIso || !toIso) return [];
+
+  const expSet  = new Set(cats);
+  const xferSet = new Set(transferCats);
+  const incSet  = new Set(incomeCats);
+
+  // If a specific category was picked, narrow the expense set so
+  // actualsByCategory only attributes spend to that one.
+  const scopedExpSet = category ? new Set([category]) : expSet;
+
+  // Same top-level row filter as the bar chart: drop transfers + income rows.
+  const scopedRows = (transactions || []).filter(tx => {
+    if (!tx) return false;
+    if (isMarkedTransfer(tx)) return false;
+    if (tx.category && xferSet.has(tx.category)) return false;
+    if (tx.category && incSet.has(tx.category)) return false;
+    return true;
+  });
+
+  // Enumerate calendar months from fromIso's month start to toIso's month end.
+  // Using UTC to keep the math TZ-stable (matches daysInRange's convention).
+  const start = new Date(fromIso + "T00:00:00Z");
+  const end   = new Date(toIso   + "T00:00:00Z");
+  if (isNaN(start) || isNaN(end) || end < start) return [];
+
+  const buckets = [];
+  // Walk month-by-month. first = first day of fromIso's month.
+  let y = start.getUTCFullYear();
+  let m = start.getUTCMonth(); // 0-11
+  const endY = end.getUTCFullYear();
+  const endM = end.getUTCMonth();
+
+  // Clip the first bucket's start to the user's fromIso (so partial first
+  // months show only the days actually in range). Same for the last bucket's
+  // end with toIso. This matches what users expect when picking e.g. "Apr 15
+  // → Jun 30": April should be 16 days, May a full month, June 30 days.
+  while (y < endY || (y === endY && m <= endM)) {
+    const monthFirst = new Date(Date.UTC(y, m, 1));
+    const monthLast  = new Date(Date.UTC(y, m + 1, 0)); // last day of month
+    const bucketFromDate = monthFirst < start ? start : monthFirst;
+    const bucketToDate   = monthLast  > end   ? end   : monthLast;
+    const bucketFromIso  = bucketFromDate.toISOString().slice(0, 10);
+    const bucketToIso    = bucketToDate.toISOString().slice(0, 10);
+    const days = daysInRange(bucketFromIso, bucketToIso);
+
+    // Transactions inside this bucket (reuses the same string comparison the
+    // main aggregator uses).
+    const inBucket = filterByDateRange(scopedRows, bucketFromIso, bucketToIso);
+
+    // Actual via the shared aggregator so refund-netting + split attribution
+    // match the bar chart exactly.
+    const actuals = actualsByCategory(inBucket, {
+      expenseCategorySet: scopedExpSet,
+      savingsCategorySet: new Set(savCats),
+      treatRefundsAsNetting,
+    });
+
+    // Sum across whichever categories are in scope (one or all).
+    let actual = 0;
+    for (const [, amt] of actuals.expense) actual += amt;
+    // If category is null, we also want uncategorized rolled in for the "all"
+    // view since they're real spend that didn't make it into a named bucket.
+    // When a specific category is picked, uncategorized doesn't apply.
+    if (!category && actuals.uncategorized) actual += actuals.uncategorized.total;
+
+    // Budget for this bucket: weeklyToPeriod scaled to this month's days.
+    let budgeted = 0;
+    if (category) {
+      // Budget for just the picked category. Sum all line items with that cat.
+      const filtered = (exp || []).filter(it => (it?.c || "").trim() === category);
+      const byCat = budgetByCategory(filtered, days, basis);
+      budgeted = byCat.get(category) || 0;
+    } else {
+      // Total budget across all expense categories.
+      const byCat = budgetByCategory(exp, days, basis);
+      for (const [, v] of byCat) budgeted += v;
+    }
+
+    buckets.push({
+      monthLabel: monthFirst.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }),
+      monthStart: bucketFromIso,
+      monthEnd:   bucketToIso,
+      days,
+      actual: round2(actual),
+      budgeted: round2(budgeted),
+    });
+
+    // advance to next month
+    m += 1;
+    if (m > 11) { m = 0; y += 1; }
+  }
+
+  return buckets;
+}
+
 /* ── Internal helpers ── */
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function sum(arr)  { let s = 0; for (const x of arr) s += Number(x) || 0; return s; }

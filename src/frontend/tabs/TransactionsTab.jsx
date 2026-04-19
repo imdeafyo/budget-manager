@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
+import { BarChart, Bar, LineChart, Line, Legend, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from "recharts";
 import { Card, SH, NI } from "../components/ui.jsx";
 import {
   BUILTIN_COLUMNS, newTransaction,
@@ -18,7 +18,7 @@ import {
   isMarkedTransfer, pairReason,
 } from "../utils/transfers.js";
 import { fmt } from "../utils/calc.js";
-import { compareBudgetToActual, UNCATEGORIZED } from "../utils/budgetCompare.js";
+import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/budgetCompare.js";
 import ImportModal from "../components/ImportModal.jsx";
 
 const PRESETS = [
@@ -590,6 +590,11 @@ export default function TransactionsTab(props) {
         setBasis={setBasis}
         dateFrom={effectiveFrom}
         dateTo={effectiveTo}
+        transactions={transactions}
+        exp={exp}
+        cats={cats}
+        transferCats={transferCats}
+        incomeCats={incomeCats}
       />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
@@ -1572,7 +1577,14 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [] }) {
+  // View-mode toggle: "bars" = the original per-category Actual vs Budgeted bar
+  // chart, "lines" = monthly-bucketed trends (actual spend vs budgeted over
+  // time). chartCategory is only used in lines mode — null/empty = all cats
+  // summed, otherwise a single category name.
+  const [chartMode, setChartMode] = useState("bars");
+  const [chartCategory, setChartCategory] = useState(""); // "" = all
+
   // Build the chart dataset once. Expense rows come first (what users care about
   // most on this tab), then uncategorized as its own bar. Savings rows are
   // deferred to a future enhancement — keeps this chart focused on "did I
@@ -1600,6 +1612,26 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
     }
     return rows;
   }, [compare]);
+
+  // Line-chart data: monthly buckets for the active category scope. We only
+  // pay the cost when the user has actually switched to lines mode — avoids
+  // recomputing across every scroll / selection change while they're looking
+  // at the bar chart.
+  const lineData = useMemo(() => {
+    if (chartMode !== "lines") return [];
+    if (!compareReady || !dateFrom || !dateTo) return [];
+    return monthlyBuckets({
+      transactions,
+      exp: expBudget,
+      cats,
+      transferCats,
+      incomeCats,
+      fromIso: dateFrom,
+      toIso: dateTo,
+      basis,
+      category: chartCategory || null,
+    });
+  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, dateFrom, dateTo, basis, chartCategory]);
 
   // Empty state — only reached when there are literally no transactions to work
   // with. (When transactions exist but no range is picked, the parent infers
@@ -1683,36 +1715,91 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
               hint={p.elapsed > 0 && p.elapsed < p.days ? "at current pace" : "= actual"} />
           </div>
 
+          {/* Chart mode toggle + category picker (lines mode only) */}
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 0, border: "1px solid var(--bdr, #ccc)", borderRadius: 8, overflow: "hidden" }}>
+              <button onClick={() => setChartMode("bars")}
+                title="Per-category actual vs budgeted for this period"
+                style={modeBtn(chartMode === "bars")}>
+                📊 Categories
+              </button>
+              <button onClick={() => setChartMode("lines")}
+                title="Monthly actual spend vs budget over time"
+                style={modeBtn(chartMode === "lines")}>
+                📈 Over time
+              </button>
+            </div>
+            {chartMode === "lines" && (
+              <>
+                <span style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Category</span>
+                <select value={chartCategory} onChange={e => setChartCategory(e.target.value)}
+                  style={{ ...inp(), width: "auto", minWidth: 160, fontSize: 12 }}>
+                  <option value="">All categories (summed)</option>
+                  {[...cats].sort().map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {lineData.length > 0 && lineData.length < 2 && (
+                  <span style={{ fontSize: 11, color: "var(--tx3, #999)", fontStyle: "italic" }}>
+                    Widen the date range to see trends across multiple months.
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
           {/* Chart */}
-          {chartData.length === 0 ? (
-            <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13, background: "var(--input-bg, #fafafa)", borderRadius: 8 }}>
-              No spending and no budget categories in this period.
-            </div>
+          {chartMode === "bars" ? (
+            chartData.length === 0 ? (
+              <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13, background: "var(--input-bg, #fafafa)", borderRadius: 8 }}>
+                No spending and no budget categories in this period.
+              </div>
+            ) : (
+              <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
+                    <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
+                    <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
+                    <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
+                      stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
+                      tick={{ fill: "var(--tx2, #555)" }} />
+                    <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
+                    {/* Budgeted — muted gray baseline bar */}
+                    <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
+                    {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
+                    <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
+                      {chartData.map((row, i) => (
+                        <Cell key={i} fill={
+                          row.kind === "uncategorized" ? "#F2A93B"
+                          : row.over ? "#E8573A"
+                          : "#2ECC71"
+                        } />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )
           ) : (
-            <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
-                  <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
-                  <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
-                    stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
-                    tick={{ fill: "var(--tx2, #555)" }} />
-                  <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
-                  {/* Budgeted — muted gray baseline bar */}
-                  <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
-                  {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
-                  <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
-                    {chartData.map((row, i) => (
-                      <Cell key={i} fill={
-                        row.kind === "uncategorized" ? "#F2A93B"
-                        : row.over ? "#E8573A"
-                        : "#2ECC71"
-                      } />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            lineData.length === 0 ? (
+              <div style={{ padding: 24, textAlign: "center", color: "var(--tx3, #999)", fontSize: 13, background: "var(--input-bg, #fafafa)", borderRadius: 8 }}>
+                No months in range — pick a date range that spans at least one calendar month.
+              </div>
+            ) : (
+              <div style={{ width: "100%", height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
+                    <CartesianGrid stroke="var(--bdr2, #eee)" strokeDasharray="3 3" />
+                    <XAxis dataKey="monthLabel" stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
+                    <YAxis tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
+                    <Tooltip content={<LineTooltip category={chartCategory} />} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Line type="monotone" dataKey="budgeted" name="Budgeted" stroke="var(--tx3, #888)"
+                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }} />
+                    <Line type="monotone" dataKey="actual" name="Actual" stroke="#556FB5"
+                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )
           )}
 
           {/* Legend / key */}
@@ -1785,6 +1872,41 @@ const basisBtn = (active) => ({
   cursor: "pointer",
   fontFamily: "'DM Sans', sans-serif",
 });
+
+const modeBtn = (active) => ({
+  padding: "5px 12px",
+  fontSize: 12,
+  fontWeight: 700,
+  border: "none",
+  background: active ? "#EEF1FA" : "var(--card-bg, #fff)",
+  color: active ? "#556FB5" : "var(--tx2, #555)",
+  cursor: "pointer",
+  fontFamily: "'DM Sans', sans-serif",
+});
+
+function LineTooltip({ active, payload, label, category }) {
+  if (!active || !payload || !payload.length) return null;
+  const row = payload[0].payload;
+  const actual = row?.actual || 0;
+  const budgeted = row?.budgeted || 0;
+  const delta = actual - budgeted;
+  return (
+    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 180 }}>
+      <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginBottom: 4 }}>
+        {category ? category : "All categories"}
+      </div>
+      <div>Actual: <strong>{fmt(actual)}</strong></div>
+      <div>Budgeted: <strong>{fmt(budgeted)}</strong></div>
+      <div style={{ color: delta > 0.005 ? "#E8573A" : delta < -0.005 ? "#2ECC71" : "var(--tx3, #888)", marginTop: 2 }}>
+        {delta > 0.005 ? `Over by ${fmt(delta)}` : delta < -0.005 ? `Under by ${fmt(-delta)}` : "On target"}
+      </div>
+      {row?.days != null && (
+        <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.days} day{row.days === 1 ? "" : "s"} in bucket</div>
+      )}
+    </div>
+  );
+}
 
 const pillBtn = () => ({ padding: "3px 10px", fontSize: 11, fontWeight: 600, borderRadius: 10, border: "1px solid var(--bdr, #ccc)", background: "var(--card-bg, #fff)", color: "var(--tx2, #555)", cursor: "pointer" });
 
