@@ -40,6 +40,7 @@ export default function TransactionsTab(props) {
     rowCapWarn, rowCapThreshold,
     cats, savCats, transferCats = [], incomeCats = [],
     exp = [], sav = [],
+    snapshots = [],
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
     transactionRules = [], setTransactionRules,
@@ -249,13 +250,14 @@ export default function TransactionsTab(props) {
       transactions,
       exp, sav,
       cats, savCats, transferCats, incomeCats,
+      snapshots,
       fromIso: effectiveFrom,
       toIso: effectiveTo,
       todayIso: today,
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, incomeCats, effectiveFrom, effectiveTo, today, basis]);
+  }, [compareReady, transactions, exp, sav, cats, savCats, transferCats, incomeCats, snapshots, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -595,6 +597,7 @@ export default function TransactionsTab(props) {
         cats={cats}
         transferCats={transferCats}
         incomeCats={incomeCats}
+        snapshots={snapshots}
       />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
@@ -1577,7 +1580,7 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [] }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [] }) {
   // View-mode toggle: "bars" = the original per-category Actual vs Budgeted bar
   // chart, "lines" = monthly-bucketed trends (actual spend vs budgeted over
   // time). chartCategory is only used in lines mode — null/empty = all cats
@@ -1626,12 +1629,13 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
       cats,
       transferCats,
       incomeCats,
+      snapshots,
       fromIso: dateFrom,
       toIso: dateTo,
       basis,
       category: chartCategory || null,
     });
-  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, dateFrom, dateTo, basis, chartCategory]);
+  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, snapshots, dateFrom, dateTo, basis, chartCategory]);
 
   // Empty state — only reached when there are literally no transactions to work
   // with. (When transactions exist but no range is picked, the parent infers
