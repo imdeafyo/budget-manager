@@ -1653,6 +1653,16 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
   const [chartMode, setChartMode] = useState("bars");
   const [chartCategory, setChartCategory] = useState(""); // "" = all
 
+  // Keep chartCategory consistent with the currently-available category list.
+  // When the table's category filter narrows or changes, a previously-picked
+  // chartCategory can become invalid (not in the scoped `cats`), which would
+  // silently zero out the line chart. Reset to "" in that case so the chart
+  // defaults to the scoped "all".
+  useEffect(() => {
+    if (!chartCategory) return;
+    if (!cats || !cats.includes(chartCategory)) setChartCategory("");
+  }, [cats, chartCategory]);
+
   // Build the chart dataset once. Expense rows come first (what users care about
   // most on this tab), then uncategorized as its own bar. Savings rows are
   // deferred to a future enhancement — keeps this chart focused on "did I
