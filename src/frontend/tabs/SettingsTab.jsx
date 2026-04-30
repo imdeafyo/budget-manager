@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { Card, SH } from "../components/ui.jsx";
 import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils/transactions.js";
 import { newRule, compileRule, moveRule, applyRulesToAll } from "../utils/rules.js";
+import { summarizeState, diffSummaries } from "../utils/history.js";
 
 /* ── CollapsibleCard ──
    Card with a clickable header that toggles the body open/closed. Persists
@@ -411,6 +412,8 @@ export default function SettingsTab(props) {
           </div>
         )}
       </CollapsibleCard>
+
+      <BackupHistoryCard mob={mob} />
     </>
   );
 }
@@ -849,3 +852,333 @@ const lbl = () => ({ display: "block", fontSize: 11, color: "var(--tx3, #888)", 
 const btn = (bg, color) => ({ padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6, border: "none", background: bg, color, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" });
 const th = { padding: "8px 10px", textAlign: "left", fontSize: 11, color: "var(--tx3, #888)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 };
 const td = { padding: "8px 10px", verticalAlign: "middle", color: "var(--tx, #333)" };
+
+/* ── BackupHistoryCard ──
+   Periodic state-history snapshots written by a server-side cron. The user
+   can list them, manually trigger one, preview a row's contents, and
+   restore. All work is done via /api/history/* — this component is dumb
+   about state, it just calls the backend and re-fetches.
+
+   The list paginates because retention can hold up to ~78 rows per user
+   on default policy; we don't dump them all into memory at once. */
+function BackupHistoryCard({ mob }) {
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [limit] = useState(25);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState(null); // { meta, state, summary, diff } | null
+  const [restoreId, setRestoreId] = useState(null);
+
+  const fetchRows = async (off = 0) => {
+    setLoading(true); setError("");
+    try {
+      const r = await fetch(`/api/history?limit=${limit}&offset=${off}`).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      setRows(r.rows || []);
+      setTotal(r.total || 0);
+      setOffset(off);
+    } catch (e) { setError(e.message || "Load failed"); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchRows(0); }, []);
+
+  const handleSnapshotNow = async () => {
+    setBusy(true); setError("");
+    try {
+      const r = await fetch("/api/history/snapshot", { method: "POST" }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      if (!r.inserted) setError(`No snapshot taken: ${r.reason}`);
+      await fetchRows(0);
+    } catch (e) { setError(e.message || "Snapshot failed"); }
+    finally { setBusy(false); }
+  };
+
+  const handlePreview = async (row) => {
+    setBusy(true); setError("");
+    try {
+      const [oneRes, currentRes] = await Promise.all([
+        fetch(`/api/history/${row.id}/state`).then(r => r.json()),
+        fetch("/api/state").then(r => r.json()),
+      ]);
+      if (oneRes.error) throw new Error(oneRes.error);
+      const candidate = oneRes.state;
+      const current = currentRes?.state || {};
+      setPreview({
+        meta: row,
+        state: candidate,
+        summary: summarizeState(candidate),
+        diff: diffSummaries(current, candidate),
+      });
+    } catch (e) { setError(e.message || "Preview failed"); }
+    finally { setBusy(false); }
+  };
+
+  const handleRestore = async (id) => {
+    setBusy(true); setError("");
+    try {
+      const r = await fetch(`/api/history/${id}/restore`, { method: "POST" }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      setRestoreId(null);
+      setPreview(null);
+      // Force a full reload — the simplest way to guarantee the frontend re-reads state.
+      window.location.reload();
+    } catch (e) { setError(e.message || "Restore failed"); setBusy(false); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm("Delete this backup row? This cannot be undone.")) return;
+    setBusy(true); setError("");
+    try {
+      const r = await fetch(`/api/history/${id}`, { method: "DELETE" }).then(r => r.json());
+      if (r.error) throw new Error(r.error);
+      await fetchRows(offset);
+    } catch (e) { setError(e.message || "Delete failed"); }
+    finally { setBusy(false); }
+  };
+
+  const summary = `${total.toLocaleString()} backup${total === 1 ? "" : "s"} stored`;
+
+  return (
+    <CollapsibleCard id="backups" title="Backup history" summary={summary} style={{ marginTop: 16 }}>
+      <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+        The server takes periodic snapshots of your full state (default: every hour for 24h, daily for 30d,
+        weekly for 12w, monthly for 12mo). You can preview any backup, restore it (your current state will be
+        saved as a "pre-restore" snapshot first so the restore is itself reversible), or take a manual
+        snapshot now.
+      </p>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <button onClick={handleSnapshotNow} disabled={busy}
+          style={btn("var(--accent, #E8573A)", "#fff")}>
+          📸 Snapshot now
+        </button>
+        <button onClick={() => fetchRows(offset)} disabled={loading || busy}
+          style={btn("var(--bg2, #f0f0f0)", "var(--tx, #333)")}>
+          ↻ Refresh
+        </button>
+        {error && <span style={{ fontSize: 12, color: "#E8573A" }}>{error}</span>}
+        {loading && <span style={{ fontSize: 12, color: "var(--tx3, #888)" }}>Loading…</span>}
+      </div>
+
+      {rows.length === 0 && !loading && (
+        <div style={{ fontSize: 13, color: "var(--tx3, #888)", padding: "12px 0" }}>
+          No backups yet. The cron will take its first snapshot within ~1 minute, or click "Snapshot now".
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid var(--bdr, #ccc)" }}>
+                <th style={th}>When</th>
+                <th style={th}>Type</th>
+                <th style={th}>Size</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.id} style={{ borderBottom: "1px solid var(--bdr2, #eee)" }}>
+                  <td style={td} title={r.saved_at}>
+                    <div>{relTime(r.saved_at)}</div>
+                    <div style={{ fontSize: 11, color: "var(--tx3, #888)" }}>{formatTimestamp(r.saved_at)}</div>
+                  </td>
+                  <td style={td}>
+                    <span style={labelChip(r.label)}>{r.label || "—"}</span>
+                  </td>
+                  <td style={td}>{(r.state_size_bytes / 1024).toFixed(1)} KB</td>
+                  <td style={td}>
+                    <button onClick={() => handlePreview(r)} disabled={busy}
+                      style={{ ...btn("transparent", "var(--tx, #333)"), border: "1px solid var(--bdr, #ccc)" }}>
+                      Preview
+                    </button>
+                    <button onClick={() => setRestoreId(r.id)} disabled={busy}
+                      style={{ ...btn("transparent", "#E8573A"), border: "1px solid var(--bdr, #ccc)", marginLeft: 6 }}>
+                      Restore
+                    </button>
+                    <button onClick={() => handleDelete(r.id)} disabled={busy}
+                      title="Delete this backup row"
+                      style={{ ...btn("transparent", "var(--tx3, #888)"), border: "1px solid var(--bdr, #ccc)", marginLeft: 6 }}>
+                      🗑
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {total > limit && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, fontSize: 12, color: "var(--tx3, #888)" }}>
+          <button onClick={() => fetchRows(Math.max(0, offset - limit))} disabled={offset === 0 || loading}
+            style={btn("var(--bg2, #f0f0f0)", "var(--tx, #333)")}>← Prev</button>
+          <span>{offset + 1} – {Math.min(offset + limit, total)} of {total}</span>
+          <button onClick={() => fetchRows(offset + limit)} disabled={offset + limit >= total || loading}
+            style={btn("var(--bg2, #f0f0f0)", "var(--tx, #333)")}>Next →</button>
+        </div>
+      )}
+
+      {preview && (
+        <PreviewModal preview={preview} onClose={() => setPreview(null)}
+          onRestore={() => { setRestoreId(preview.meta.id); }} />
+      )}
+      {restoreId !== null && (
+        <RestoreConfirmModal
+          onCancel={() => setRestoreId(null)}
+          onConfirm={() => handleRestore(restoreId)}
+          busy={busy}
+        />
+      )}
+    </CollapsibleCard>
+  );
+}
+
+function PreviewModal({ preview, onClose, onRestore }) {
+  const { meta, summary, diff } = preview;
+  return (
+    <div onClick={onClose} style={modalBackdrop}>
+      <div onClick={e => e.stopPropagation()} style={modalBody}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, color: "var(--tx, #333)" }}>
+            Backup preview
+          </h3>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "var(--tx3, #888)" }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginBottom: 12 }}>
+          {formatTimestamp(meta.saved_at)} · <span style={labelChip(meta.label)}>{meta.label || "—"}</span> · {(meta.state_size_bytes / 1024).toFixed(1)} KB
+        </div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 16 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--bdr, #ccc)" }}>
+              <th style={th}>Field</th>
+              <th style={{ ...th, textAlign: "right" }}>Current</th>
+              <th style={{ ...th, textAlign: "right" }}>This backup</th>
+              <th style={{ ...th, textAlign: "right" }}>Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <DiffRow name="Expense items" d={diff.exp} />
+            <DiffRow name="Savings items" d={diff.sav} />
+            <DiffRow name="Snapshots" d={diff.snapshots} />
+            <DiffRow name="Transactions" d={diff.transactions} />
+            <DiffRow name="P1 salary" d={diff.cSal} format={n => `$${n.toLocaleString()}`} />
+            <DiffRow name="P2 salary" d={diff.kSal} format={n => `$${n.toLocaleString()}`} />
+            <DiffRow name="State size" d={diff.sizeBytes} format={n => `${(n / 1024).toFixed(1)} KB`} />
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose}
+            style={{ ...btn("transparent", "var(--tx, #333)"), border: "1px solid var(--bdr, #ccc)" }}>
+            Close
+          </button>
+          <button onClick={onRestore}
+            style={btn("var(--accent, #E8573A)", "#fff")}>
+            Restore this backup…
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiffRow({ name, d, format }) {
+  const fmt = format || (n => n.toLocaleString());
+  const dlt = d.delta;
+  const color = dlt === 0 ? "var(--tx3, #888)" : dlt > 0 ? "#3ca85e" : "#E8573A";
+  const sign = dlt > 0 ? "+" : "";
+  return (
+    <tr style={{ borderBottom: "1px solid var(--bdr2, #eee)" }}>
+      <td style={td}>{name}</td>
+      <td style={{ ...td, textAlign: "right" }}>{fmt(d.current)}</td>
+      <td style={{ ...td, textAlign: "right" }}>{fmt(d.candidate)}</td>
+      <td style={{ ...td, textAlign: "right", color, fontWeight: 600 }}>{dlt === 0 ? "—" : `${sign}${fmt(dlt).replace(/^-/, "−")}`}</td>
+    </tr>
+  );
+}
+
+function RestoreConfirmModal({ onCancel, onConfirm, busy }) {
+  return (
+    <div onClick={onCancel} style={modalBackdrop}>
+      <div onClick={e => e.stopPropagation()} style={{ ...modalBody, maxWidth: 480 }}>
+        <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, color: "var(--tx, #333)" }}>
+          Restore this backup?
+        </h3>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", lineHeight: 1.5, marginTop: 0 }}>
+          Your current state will be saved as a "pre-restore" backup first, so this is reversible. The page
+          will reload after the restore completes.
+        </p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={onCancel} disabled={busy}
+            style={{ ...btn("transparent", "var(--tx, #333)"), border: "1px solid var(--bdr, #ccc)" }}>
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={busy}
+            style={btn("var(--accent, #E8573A)", "#fff")}>
+            {busy ? "Restoring…" : "Restore"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function relTime(iso) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  const now = Date.now();
+  const s = Math.round((now - t) / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 14) return `${d}d ago`;
+  const w = Math.round(d / 7);
+  if (w < 8) return `${w}w ago`;
+  const mo = Math.round(d / 30);
+  return `${mo}mo ago`;
+}
+
+function labelChip(label) {
+  const colors = {
+    hourly:  { bg: "rgba(232,87,58,0.12)",  fg: "#E8573A" },
+    daily:   { bg: "rgba(242,169,59,0.15)", fg: "#B07720" },
+    weekly:  { bg: "rgba(60,168,94,0.12)",  fg: "#3ca85e" },
+    monthly: { bg: "rgba(106,121,224,0.12)", fg: "#5a6ad9" },
+    manual:  { bg: "rgba(201,107,112,0.12)", fg: "#a8585d" },
+    "pre-restore": { bg: "rgba(150,150,150,0.15)", fg: "#666" },
+  };
+  // For compound labels, color by the first tier.
+  const first = (label || "").split("+")[0];
+  const c = colors[first] || { bg: "rgba(150,150,150,0.15)", fg: "#666" };
+  return {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 600,
+    background: c.bg,
+    color: c.fg,
+  };
+}
+
+const modalBackdrop = {
+  position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+};
+const modalBody = {
+  background: "var(--card-bg, #fff)", color: "var(--tx, #333)",
+  borderRadius: 12, padding: 20, maxWidth: 640, width: "calc(100% - 32px)",
+  maxHeight: "85vh", overflowY: "auto",
+  fontFamily: "'DM Sans',sans-serif",
+  boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+};
