@@ -36,6 +36,17 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, tax },
                   }]);
                   setSnapLabel(""); setSnapDate("");
+                  // Pair every saved snapshot with a backup-history row so the user has a recovery
+                  // point alongside every meaningful waypoint. Wait out the 600ms auto-save debounce
+                  // before firing so the backup captures the freshly-saved state, not the pre-save one.
+                  // Best-effort: ignore errors (e.g. running in generic mode where the endpoint 404s).
+                  setTimeout(() => {
+                    fetch("/api/history/snapshot", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ label: "manual+pre-milestone" }),
+                    }).catch(() => {});
+                  }, 800);
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
                 <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const msgs = []; if (d.liveState) { restoreLiveState(d.liveState); msgs.push("Live state restored"); } const incoming = d.snapshots || (Array.isArray(d) ? d : null); if (incoming && Array.isArray(incoming)) { setSnapshots(prev => { const byId = new Map(prev.map(s => [s.id, s])); let updated = 0, added = 0; for (const s of incoming) { if (byId.has(s.id)) { byId.set(s.id, { ...byId.get(s.id), ...s }); updated++; } else { byId.set(s.id, s); added++; } } msgs.push(`${added} new snapshots, ${updated} updated`); return Array.from(byId.values()).sort((a, b) => (a.date || "").localeCompare(b.date || "")); }); } if (msgs.length === 0) msgs.push("No data found to import"); setTimeout(() => alert(msgs.join("\n")), 100); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
                 <button onClick={() => { const data = { liveState: { ...st, snapshots: undefined }, snapshots }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url); }} style={{ padding: "9px 16px", background: "#F2A93B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📤 Export</button>

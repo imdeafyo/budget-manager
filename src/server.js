@@ -504,11 +504,14 @@ app.get('/api/history/:id/state/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Manual snapshot.
+// Manual snapshot. Optional body: { label: "..." } overrides the default "manual" label.
+// Used by the milestone-save flow to label backups as "pre-milestone" so they're
+// distinguishable in the backup history list.
 app.post('/api/history/snapshot/:userId?', async (req, res) => {
   const userId = req.params.userId || 'default';
+  const labelOverride = (req.body && typeof req.body.label === 'string') ? req.body.label.slice(0, 200) : 'manual';
   try {
-    const r = await takeSnapshot(userId, { forcedLabel: 'manual' });
+    const r = await takeSnapshot(userId, { forcedLabel: labelOverride });
     res.json(r);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

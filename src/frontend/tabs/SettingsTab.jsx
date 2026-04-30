@@ -1156,6 +1156,7 @@ function labelChip(label) {
     monthly: { bg: "rgba(106,121,224,0.12)", fg: "#5a6ad9" },
     manual:  { bg: "rgba(201,107,112,0.12)", fg: "#a8585d" },
     "pre-restore": { bg: "rgba(150,150,150,0.15)", fg: "#666" },
+    "pre-milestone": { bg: "rgba(85,111,181,0.12)", fg: "#556FB5" },
   };
   // For compound labels, color by the first tier.
   const first = (label || "").split("+")[0];
