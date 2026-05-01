@@ -4,27 +4,27 @@ import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 import { buildMonthlyIncomeSeries, incomeCategories, windowRange } from "../utils/income.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setSnapshots, snapDate, setSnapDate, snapLabel, setSnapLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear, setViewingSnap, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, msHistView, setMsHistView, msHistYear, setMsHistYear, setViewingMs, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
   // Local UI state for the income history chart's category-type toggle.
   // "all" = Total line only; any other value = just that single category line.
   const [incomeTypeSel, setIncomeTypeSel] = useState("all");
   return (
     <div>
             <Card style={{ marginBottom: 20, overflow: "hidden" }}>
-              <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Save Budget Snapshot</h3>
+              <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Save Milestone</h3>
               <div style={{ display: "flex", gap: 8, alignItems: mob ? "stretch" : "flex-end", flexDirection: mob ? "column" : "row", flexWrap: mob ? "nowrap" : "wrap" }}>
                 <div style={{ flex: mob ? "none" : "0 0 auto", width: mob ? "100%" : 150 }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Date</label>
-                  <input type="date" value={snapDate || new Date().toISOString().slice(0, 10)} onChange={e => setSnapDate(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "8px 6px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box", maxWidth: "100%" }} /></div>
+                  <input type="date" value={msDate || new Date().toISOString().slice(0, 10)} onChange={e => setMsDate(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "8px 6px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box", maxWidth: "100%" }} /></div>
                 <div style={{ flex: mob ? "none" : "1 1 120px", minWidth: 0, width: mob ? "100%" : "auto" }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Label</label>
-                  <input value={snapLabel} onChange={e => setSnapLabel(e.target.value)} placeholder="What changed?" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /></div>
+                  <input value={msLabel} onChange={e => setMsLabel(e.target.value)} placeholder="What changed?" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /></div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button onClick={() => {
-                  // Build per-item snapshot data
-                  const itemSnaps = {};
-                  ewk.forEach(e => { itemSnaps[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
-                  savSorted.forEach(s => { itemSnaps[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
-                  setSnapshots(prev => [...prev, {
-                    id: Date.now(), date: snapDate || new Date().toISOString().slice(0, 10), label: snapLabel || "Snapshot",
+                  // Build per-item milestone data
+                  const itemMs = {};
+                  ewk.forEach(e => { itemMs[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
+                  savSorted.forEach(s => { itemMs[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
+                  setMilestones(prev => [...prev, {
+                    id: Date.now(), date: msDate || new Date().toISOString().slice(0, 10), label: msLabel || "Milestone",
                     grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW,
                     remW, savRate: C.net > 0 ? (totalSavPlusRemW / C.net * 100) : 0,
                     savRateGross: (C.cw + C.kw) > 0 ? (totalSavPlusRemW / (C.cw + C.kw) * 100) : 0,
@@ -32,11 +32,11 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
                     eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
                     cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
-                    items: itemSnaps,
+                    items: itemMs,
                     fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, tax },
                   }]);
-                  setSnapLabel(""); setSnapDate("");
-                  // Pair every saved snapshot with a backup-history row so the user has a recovery
+                  setMsLabel(""); setMsDate("");
+                  // Pair every saved milestone with a backup-history row so the user has a recovery
                   // point alongside every meaningful waypoint. Wait out the 600ms auto-save debounce
                   // before firing so the backup captures the freshly-saved state, not the pre-save one.
                   // Best-effort: ignore errors (e.g. running in generic mode where the endpoint 404s).
@@ -48,8 +48,8 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     }).catch(() => {});
                   }, 800);
                 }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
-                <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const msgs = []; if (d.liveState) { restoreLiveState(d.liveState); msgs.push("Live state restored"); } const incoming = d.snapshots || (Array.isArray(d) ? d : null); if (incoming && Array.isArray(incoming)) { setSnapshots(prev => { const byId = new Map(prev.map(s => [s.id, s])); let updated = 0, added = 0; for (const s of incoming) { if (byId.has(s.id)) { byId.set(s.id, { ...byId.get(s.id), ...s }); updated++; } else { byId.set(s.id, s); added++; } } msgs.push(`${added} new snapshots, ${updated} updated`); return Array.from(byId.values()).sort((a, b) => (a.date || "").localeCompare(b.date || "")); }); } if (msgs.length === 0) msgs.push("No data found to import"); setTimeout(() => alert(msgs.join("\n")), 100); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
-                <button onClick={() => { const data = { liveState: { ...st, snapshots: undefined }, snapshots }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url); }} style={{ padding: "9px 16px", background: "#F2A93B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📤 Export</button>
+                <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const msgs = []; if (d.liveState) { restoreLiveState(d.liveState); msgs.push("Live state restored"); } /* snapshots→milestones rename shim: pre-rename exports used `snapshots`. Read either; export writes only `milestones`. */ const incoming = d.milestones || d.snapshots || (Array.isArray(d) ? d : null); if (incoming && Array.isArray(incoming)) { setMilestones(prev => { const byId = new Map(prev.map(s => [s.id, s])); let updated = 0, added = 0; for (const s of incoming) { if (byId.has(s.id)) { byId.set(s.id, { ...byId.get(s.id), ...s }); updated++; } else { byId.set(s.id, s); added++; } } msgs.push(`${added} new milestones, ${updated} updated`); return Array.from(byId.values()).sort((a, b) => (a.date || "").localeCompare(b.date || "")); }); } if (msgs.length === 0) msgs.push("No data found to import"); setTimeout(() => alert(msgs.join("\n")), 100); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
+                <button onClick={() => { const data = { liveState: { ...st, milestones: undefined }, milestones }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url); }} style={{ padding: "9px 16px", background: "#F2A93B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📤 Export</button>
                 </div>
               </div>
             </Card>
@@ -73,10 +73,10 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
 
             {(() => {
               const livePoint = { date: "Now", label: "Current", grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW, remW, cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw, eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet };
-              const allPoints = [...snapshots, livePoint];
+              const allPoints = [...milestones, livePoint];
               const sortedAll = allPoints.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
               // Phase 6a: honor the chartTimeWindow toggle. Always keep the live
-              // 'Now' point; filter historical snapshots by the resolved window.
+              // 'Now' point; filter historical milestones by the resolved window.
               const { from: winFrom, to: winTo } = windowRange(chartTimeWindow);
               const sorted = sortedAll.filter(s => {
                 if (!s.date || s.date === "Now") return true;
@@ -89,10 +89,10 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
               const p1NetKey = `${p1Name} Net`, p2NetKey = `${p2Name} Net`;
               const p1GrossKey = `${p1Name} Gross`, p2GrossKey = `${p2Name} Gross`;
               const trendData = sorted.map(s => {
-                const snapEaipNet = s.eaipNet !== undefined ? s.eaipNet : curEaipNet;
-                const snapEaipGross = s.eaipGross !== undefined ? s.eaipGross : curEaipGross;
-                const eaip = includeEaip ? snapEaipNet : 0;
-                const eaipG = includeEaip ? snapEaipGross : 0;
+                const mEaipNet = s.eaipNet !== undefined ? s.eaipNet : curEaipNet;
+                const mEaipGross = s.eaipGross !== undefined ? s.eaipGross : curEaipGross;
+                const eaip = includeEaip ? mEaipNet : 0;
+                const eaipG = includeEaip ? mEaipGross : 0;
                 const cw = chartWeeks; // 48 or 52
                 const netInc = (s.netW || 0) * cw + eaip;
                 const grossInc = (s.grossW || 0) * cw + eaipG;
@@ -101,10 +101,10 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                 const necAnn = Math.round((s.necW || 0) * 48);
                 const disAnn = Math.round((s.disW || 0) * 48);
                 const notBudgeted = Math.max(0, Math.round(netInc) - expAnn - savAnn);
-                const snapCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet;
-                const snapKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
-                const snapCEaipG = s.eaipGross !== undefined ? ((s.cEaipNet || 0) + ((s.eaipGross || 0) - (s.eaipNet || 0)) * ((s.cEaipNet || 0) / Math.max(s.eaipNet || 1, 1))) : 0;
-                // Per-person gross bonus: derive from snapshot data
+                const mCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet;
+                const mKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
+                const mCEaipG = s.eaipGross !== undefined ? ((s.cEaipNet || 0) + ((s.eaipGross || 0) - (s.eaipNet || 0)) * ((s.cEaipNet || 0) / Math.max(s.eaipNet || 1, 1))) : 0;
+                // Per-person gross bonus: derive from milestone data
                 const cGrossBonus = includeEaip ? (s.cEaipPct !== undefined ? (s.cSalary || (s.cGrossW || 0) * 52) * (s.cEaipPct / 100) : (curCEaipNet > 0 ? C.cEaipGross : 0)) : 0;
                 const kGrossBonus = includeEaip ? (s.kEaipPct !== undefined ? (s.kSalary || (s.kGrossW || 0) * 52) * (s.kEaipPct / 100) : (curKEaipNet > 0 ? C.kEaipGross : 0)) : 0;
                 return {
@@ -115,8 +115,8 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                   Savings: savAnn,
                   "Not Budgeted": notBudgeted,
                   "Net Salary": Math.round(netInc),
-                  [p1NetKey]: Math.round(((s.cNetW || 0) * cw) + (includeEaip ? snapCEaip : 0)),
-                  [p2NetKey]: Math.round(((s.kNetW || 0) * cw) + (includeEaip ? snapKEaip : 0)),
+                  [p1NetKey]: Math.round(((s.cNetW || 0) * cw) + (includeEaip ? mCEaip : 0)),
+                  [p2NetKey]: Math.round(((s.kNetW || 0) * cw) + (includeEaip ? mKEaip : 0)),
                   "Gross Salary": Math.round(grossInc),
                   [p1GrossKey]: Math.round((s.cGrossW || 0) * cw + cGrossBonus),
                   [p2GrossKey]: Math.round((s.kGrossW || 0) * cw + kGrossBonus),
@@ -128,14 +128,14 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
               const xTF = v => v === "Now" ? "Now" : String(v).slice(0, 4);
               const CAT_COLORS_H = ["#E8573A", "#F2A93B", "#4ECDC4", "#556FB5", "#9B59B6", "#1ABC9C", "#E67E22", "#2ECC71", "#95A5A6", "#D35400", "#C0392B", "#3498DB", "#8E44AD", "#27AE60", "#F39C12", "#16A085"];
               const histMode = catHistMode, histView = itemHistMode, isCat = histView === "category";
-              const allCatsH = new Set(); snapshots.forEach(sn => { if (sn.items) Object.values(sn.items).forEach(d => { if (d.c && d.t !== "S") allCatsH.add(d.c); }); }); ewk.forEach(e => { if (e.c) allCatsH.add(e.c); });
+              const allCatsH = new Set(); milestones.forEach(sn => { if (sn.items) Object.values(sn.items).forEach(d => { if (d.c && d.t !== "S") allCatsH.add(d.c); }); }); ewk.forEach(e => { if (e.c) allCatsH.add(e.c); });
               const catListH = [...allCatsH].sort();
-              const allNamesH = new Set(); snapshots.forEach(sn => { if (sn.items) Object.keys(sn.items).forEach(k => allNamesH.add(k)); }); ewk.forEach(e => allNamesH.add(e.n)); savSorted.forEach(sv => allNamesH.add(sv.n));
+              const allNamesH = new Set(); milestones.forEach(sn => { if (sn.items) Object.keys(sn.items).forEach(k => allNamesH.add(k)); }); ewk.forEach(e => allNamesH.add(e.n)); savSorted.forEach(sv => allNamesH.add(sv.n));
               const namesH = [...allNamesH].sort();
               const selCat = catHistoryName || catListH[0] || "", selItem = itemHistoryName || namesH[0] || "";
               const ccMap = {}; catListH.forEach((c, i) => { ccMap[c] = CAT_COLORS_H[i % CAT_COLORS_H.length]; });
               const icMap = {}; namesH.forEach((n, i) => { icMap[n] = CAT_COLORS_H[i % CAT_COLORS_H.length]; });
-              const sortedH = [...snapshots].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+              const sortedH = [...milestones].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
               const sortedHFiltered = sortedH.filter(s => {
                 if (!s.date) return true;
                 if (winFrom && s.date < winFrom) return false;
@@ -143,9 +143,9 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                 return true;
               });
               const hPts = [...sortedHFiltered, { date: "Now", label: "Current", _current: true }];
-              const sCatD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { catListH.forEach(c => { row[c] = Math.round(ewk.filter(e => e.c === c).reduce((sm, e) => sm + e.wk * chartWeeks, 0)); }); row._incLine = Math.round(savRateBase === "gross" ? (C.cw + C.kw) * chartWeeks + (includeEaip ? C.eaipGross : 0) : C.net * chartWeeks + (includeEaip ? C.eaipNet : 0)); } else { catListH.forEach(c => { let tot = 0; if (sn.items) Object.values(sn.items).forEach(d => { if (d.c === c && d.t !== "S") tot += d.v || 0; }); row[c] = Math.round(tot); }); const snapEaipN = sn.eaipNet !== undefined ? sn.eaipNet : curEaipNet; const snapEaipG = sn.eaipGross !== undefined ? sn.eaipGross : curEaipGross; row._incLine = Math.round(savRateBase === "gross" ? (sn.grossW || 0) * chartWeeks + (includeEaip ? snapEaipG : 0) : (sn.netW || 0) * chartWeeks + (includeEaip ? snapEaipN : 0)); } return row; });
+              const sCatD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { catListH.forEach(c => { row[c] = Math.round(ewk.filter(e => e.c === c).reduce((sm, e) => sm + e.wk * chartWeeks, 0)); }); row._incLine = Math.round(savRateBase === "gross" ? (C.cw + C.kw) * chartWeeks + (includeEaip ? C.eaipGross : 0) : C.net * chartWeeks + (includeEaip ? C.eaipNet : 0)); } else { catListH.forEach(c => { let tot = 0; if (sn.items) Object.values(sn.items).forEach(d => { if (d.c === c && d.t !== "S") tot += d.v || 0; }); row[c] = Math.round(tot); }); const mEaipN = sn.eaipNet !== undefined ? sn.eaipNet : curEaipNet; const mEaipG = sn.eaipGross !== undefined ? sn.eaipGross : curEaipGross; row._incLine = Math.round(savRateBase === "gross" ? (sn.grossW || 0) * chartWeeks + (includeEaip ? mEaipG : 0) : (sn.netW || 0) * chartWeeks + (includeEaip ? mEaipN : 0)); } return row; });
               const lcp = sCatD[sCatD.length - 1] || {}; const clSorted = [...catListH].sort((a, b) => (lcp[b] || 0) - (lcp[a] || 0));
-              const sItemD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { namesH.forEach(n => { const ex = ewk.find(x => x.n === n); const sv = savSorted.find(x => x.n === n); row[n] = Math.round((ex ? ex.wk * chartWeeks : sv ? sv.wk * chartWeeks : 0) * 100) / 100; }); row._incLine = Math.round(savRateBase === "gross" ? (C.cw + C.kw) * chartWeeks + (includeEaip ? C.eaipGross : 0) : C.net * chartWeeks + (includeEaip ? C.eaipNet : 0)); } else { namesH.forEach(n => { row[n] = sn.items?.[n]?.v || 0; }); const snapEaipN = sn.eaipNet !== undefined ? sn.eaipNet : curEaipNet; const snapEaipG = sn.eaipGross !== undefined ? sn.eaipGross : curEaipGross; row._incLine = Math.round(savRateBase === "gross" ? (sn.grossW || 0) * chartWeeks + (includeEaip ? snapEaipG : 0) : (sn.netW || 0) * chartWeeks + (includeEaip ? snapEaipN : 0)); } return row; });
+              const sItemD = hPts.map(sn => { const row = { date: sn.date, label: sn.label }; if (sn._current) { namesH.forEach(n => { const ex = ewk.find(x => x.n === n); const sv = savSorted.find(x => x.n === n); row[n] = Math.round((ex ? ex.wk * chartWeeks : sv ? sv.wk * chartWeeks : 0) * 100) / 100; }); row._incLine = Math.round(savRateBase === "gross" ? (C.cw + C.kw) * chartWeeks + (includeEaip ? C.eaipGross : 0) : C.net * chartWeeks + (includeEaip ? C.eaipNet : 0)); } else { namesH.forEach(n => { row[n] = sn.items?.[n]?.v || 0; }); const mEaipN = sn.eaipNet !== undefined ? sn.eaipNet : curEaipNet; const mEaipG = sn.eaipGross !== undefined ? sn.eaipGross : curEaipGross; row._incLine = Math.round(savRateBase === "gross" ? (sn.grossW || 0) * chartWeeks + (includeEaip ? mEaipG : 0) : (sn.netW || 0) * chartWeeks + (includeEaip ? mEaipN : 0)); } return row; });
               const lip = sItemD[sItemD.length - 1] || {}; const nlSorted = [...namesH].sort((a, b) => (lip[b] || 0) - (lip[a] || 0)).slice(0, 12);
               const curCatT = ewk.filter(e => e.c === selCat).reduce((sm, e) => sm + e.wk * chartWeeks, 0);
               const catLD = hPts.map(sn => { if (sn._current) return { date: "Now", label: "Current", value: Math.round(curCatT) }; let tot = 0; if (sn.items) Object.values(sn.items).forEach(d => { if (d.c === selCat && d.t !== "S") tot += d.v || 0; }); return { date: sn.date, label: sn.label, value: Math.round(tot) }; });
@@ -217,7 +217,7 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     </Card>
                   );
                 })()) : null,
-                budgetHistory: snapshots.length > 1 ? dragWrapRender("budgetHistory", <Card key={`bh-${chartWeeks}-${includeEaip}-${savRateBase}`}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}><h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Budget History <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>({chartWeeks}wk)</span></h3>{modeBtn(histView, "category", "Category", "#556FB5", setItemHistMode)}{modeBtn(histView, "item", "Item", "#E67E22", setItemHistMode)}<span style={{ width: 1, height: 20, background: "var(--bdr, #ddd)" }} />{modeBtn(histMode, "line", "Line", "#4ECDC4", setCatHistMode)}{modeBtn(histMode, "stacked", "Stacked", "#E8573A", setCatHistMode)}{histMode === "line" && isCat && <select value={selCat} onChange={e => setCatHistoryName(e.target.value)} style={{ border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)" }}>{catListH.map(c => <option key={c} value={c}>{c}</option>)}</select>}{histMode === "line" && !isCat && <select value={selItem} onChange={e => setItemHistoryName(e.target.value)} style={{ border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)" }}>{namesH.map(n => <option key={n} value={n}>{n}</option>)}</select>}</div><div style={{ width: "100%", minHeight: 300 }}><ResponsiveContainer width="100%" height={300}>{histMode === "stacked" ? (isCat ? (<AreaChart data={sCatD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{clSorted.map(c => <Area key={c} type="monotone" dataKey={c} stackId="1" stroke={ccMap[c]} fill={ccMap[c]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_incLine" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={savRateBase === "gross" ? "Gross Income" : "Net Income"} /></AreaChart>) : (<AreaChart data={sItemD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{nlSorted.map(n => <Area key={n} type="monotone" dataKey={n} stackId="1" stroke={icMap[n]} fill={icMap[n]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_incLine" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={savRateBase === "gross" ? "Gross Income" : "Net Income"} /></AreaChart>)) : (isCat ? (<LineChart data={catLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke={ccMap[selCat] || "#556FB5"} strokeWidth={2.5} dot={{ r: 4, fill: ccMap[selCat] || "#556FB5" }} name={selCat} /></LineChart>) : (<LineChart data={itemLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} name={selItem} /></LineChart>))}</ResponsiveContainer></div></Card>, true) : null,
+                budgetHistory: milestones.length > 1 ? dragWrapRender("budgetHistory", <Card key={`bh-${chartWeeks}-${includeEaip}-${savRateBase}`}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}><h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Budget History <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>({chartWeeks}wk)</span></h3>{modeBtn(histView, "category", "Category", "#556FB5", setItemHistMode)}{modeBtn(histView, "item", "Item", "#E67E22", setItemHistMode)}<span style={{ width: 1, height: 20, background: "var(--bdr, #ddd)" }} />{modeBtn(histMode, "line", "Line", "#4ECDC4", setCatHistMode)}{modeBtn(histMode, "stacked", "Stacked", "#E8573A", setCatHistMode)}{histMode === "line" && isCat && <select value={selCat} onChange={e => setCatHistoryName(e.target.value)} style={{ border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)" }}>{catListH.map(c => <option key={c} value={c}>{c}</option>)}</select>}{histMode === "line" && !isCat && <select value={selItem} onChange={e => setItemHistoryName(e.target.value)} style={{ border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)" }}>{namesH.map(n => <option key={n} value={n}>{n}</option>)}</select>}</div><div style={{ width: "100%", minHeight: 300 }}><ResponsiveContainer width="100%" height={300}>{histMode === "stacked" ? (isCat ? (<AreaChart data={sCatD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{clSorted.map(c => <Area key={c} type="monotone" dataKey={c} stackId="1" stroke={ccMap[c]} fill={ccMap[c]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_incLine" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={savRateBase === "gross" ? "Gross Income" : "Net Income"} /></AreaChart>) : (<AreaChart data={sItemD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Legend wrapperStyle={{ fontSize: 9 }} />{nlSorted.map(n => <Area key={n} type="monotone" dataKey={n} stackId="1" stroke={icMap[n]} fill={icMap[n]} fillOpacity={0.6} />)}<Line type="monotone" dataKey="_incLine" stroke="#4ECDC4" strokeWidth={2.5} dot={{ r: 4, fill: "#4ECDC4" }} name={savRateBase === "gross" ? "Gross Income" : "Net Income"} /></AreaChart>)) : (isCat ? (<LineChart data={catLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke={ccMap[selCat] || "#556FB5"} strokeWidth={2.5} dot={{ r: 4, fill: ccMap[selCat] || "#556FB5" }} name={selCat} /></LineChart>) : (<LineChart data={itemLD}><XAxis dataKey="date" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={xTF} /><YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmt(v)} /><Tooltip formatter={v => fmt(v)} contentStyle={cs} /><Line type="monotone" dataKey="value" stroke="#556FB5" strokeWidth={2.5} dot={{ r: 4, fill: "#556FB5" }} name={selItem} /></LineChart>))}</ResponsiveContainer></div></Card>, true) : null,
               };
               const validOrder = chartOrder.filter(k => chartComponents[k] !== undefined);
               Object.keys(chartComponents).forEach(k => { if (!validOrder.includes(k)) validOrder.push(k); });
@@ -228,12 +228,12 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
               );
             })()}
 
-            {snapshots.length > 0 && (
+            {milestones.length > 0 && (
               <Card>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                  <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Snapshot History</h3>
-                  <button onClick={() => setSnapHistView(p => p === "years" ? "all" : "years")} style={{ padding: "5px 14px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: snapHistView === "all" ? "#EEF1FA" : "transparent", color: "#556FB5", cursor: "pointer" }}>
-                    {snapHistView === "years" ? "Show All" : "Group by Year"}
+                  <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Milestone History</h3>
+                  <button onClick={() => setMsHistView(p => p === "years" ? "all" : "years")} style={{ padding: "5px 14px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: msHistView === "all" ? "#EEF1FA" : "transparent", color: "#556FB5", cursor: "pointer" }}>
+                    {msHistView === "years" ? "Show All" : "Group by Year"}
                   </button>
                 </div>
                 <div style={{ overflowX: "auto" }}>
@@ -241,15 +241,15 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                     <span>Date</span><span>Label</span><span style={{ textAlign: "right" }}>Net Income</span><span style={{ textAlign: "right" }}>Expenses</span><span style={{ textAlign: "right" }}>Savings</span><span style={{ textAlign: "right" }}>Bonus</span><span style={{ textAlign: "right" }}>Sav. Rate</span><span style={{ textAlign: "right" }}>Remaining</span><span />
                   </div>
                   {(() => {
-                    const sorted = [...snapshots].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+                    const sorted = [...milestones].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
                     // Group by year
                     const years = {};
                     sorted.forEach(s => { const yr = (s.date || "").slice(0, 4) || "Unknown"; if (!years[yr]) years[yr] = []; years[yr].push(s); });
                     const yearKeys = Object.keys(years).sort((a, b) => b.localeCompare(a));
                     // Auto-select first year if none selected
-                    const activeYear = snapHistYear || yearKeys[0];
+                    const activeYear = msHistYear || yearKeys[0];
                     const renderRow = (s) => {
-                      const ri = snapshots.findIndex(x => x.id === s.id);
+                      const ri = milestones.findIndex(x => x.id === s.id);
                       const dateStr = s.date || "";
                       const dateObj = dateStr ? new Date(dateStr + "T00:00:00") : null;
                       const formattedDate = dateObj ? dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : dateStr;
@@ -257,9 +257,9 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                         <div key={s.id} style={{ display: "grid", gridTemplateColumns: "100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, padding: "6px 0", alignItems: "center", borderTop: "1px solid var(--bdr,#f0f0f0)", fontSize: 11, minWidth: 850 }}>
                           <div style={{ display: "flex", flexDirection: "column" }}>
                             <span style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)" }}>{formattedDate}</span>
-                            <input type="date" value={s.date} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], date: e.target.value }; setSnapshots(n); }} style={{ fontSize: 9, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "1px 3px", color: "var(--tx3,#888)", background: "transparent", marginTop: 2 }} />
+                            <input type="date" value={s.date} onChange={e => { const n = [...milestones]; n[ri] = { ...n[ri], date: e.target.value }; setMilestones(n); }} style={{ fontSize: 9, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "1px 3px", color: "var(--tx3,#888)", background: "transparent", marginTop: 2 }} />
                           </div>
-                          <input value={s.label} onChange={e => { const n = [...snapshots]; n[ri] = { ...n[ri], label: e.target.value }; setSnapshots(n); }} style={{ fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 4px", color: "var(--tx,#333)", background: "transparent" }} />
+                          <input value={s.label} onChange={e => { const n = [...milestones]; n[ri] = { ...n[ri], label: e.target.value }; setMilestones(n); }} style={{ fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 4px", color: "var(--tx,#333)", background: "transparent" }} />
                           <span style={{ textAlign: "right", color: "#4ECDC4" }}>{fmt((s.netW || 0) * 48)}</span>
                           <span style={{ textAlign: "right", color: "#E8573A" }}>{fmt((s.expW || 0) * 48)}</span>
                           <span style={{ textAlign: "right", color: "#2ECC71" }}>{fmt((s.savW || 0) * 48)}</span>
@@ -267,21 +267,21 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
                           <span style={{ textAlign: "right", color: "#556FB5" }}>{(s.savRate || 0).toFixed(1)}%</span>
                           <span style={{ textAlign: "right", color: (s.remW || 0) >= 0 ? "#2ECC71" : "#E74C3C" }}>{fmt((s.remW || 0) * 48)}</span>
                           <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                            <button onClick={() => { setViewingSnap(ri); setTab("budget"); }} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
+                            <button onClick={() => { setViewingMs(ri); setTab("budget"); }} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
                             {(s.fullState || s.items) && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }} title={s.fullState ? "Full restore" : "Restores items only"}>↩</button>}
-                            <button onClick={() => setSnapshots(snapshots.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid var(--input-border, #ddd)", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
+                            <button onClick={() => setMilestones(milestones.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid var(--input-border, #ddd)", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
                           </div>
                         </div>
                       );
                     };
-                    if (snapHistView === "all") {
+                    if (msHistView === "all") {
                       return sorted.map(renderRow);
                     }
                     return yearKeys.map(yr => (
                       <div key={yr}>
-                        <div onClick={() => setSnapHistYear(p => p === yr ? null : yr)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", cursor: "pointer", borderTop: "2px solid var(--bdr2, #d0cdc8)", userSelect: "none" }}>
+                        <div onClick={() => setMsHistYear(p => p === yr ? null : yr)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", cursor: "pointer", borderTop: "2px solid var(--bdr2, #d0cdc8)", userSelect: "none" }}>
                           <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "var(--tx, #333)" }}>{yr}</span>
-                          <span style={{ fontSize: 11, color: "var(--tx3, #999)" }}>({years[yr].length} snapshot{years[yr].length !== 1 ? "s" : ""})</span>
+                          <span style={{ fontSize: 11, color: "var(--tx3, #999)" }}>({years[yr].length} milestone{years[yr].length !== 1 ? "s" : ""})</span>
                           <span style={{ fontSize: 12, color: "var(--tx3, #999)", marginLeft: "auto" }}>{activeYear === yr ? "▾" : "▸"}</span>
                         </div>
                         {activeYear === yr && years[yr].map(renderRow)}
@@ -295,13 +295,13 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
             {restoreConfirm !== null && (
               <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setRestoreConfirm(null)}>
                 <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 32, maxWidth: 440, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-                  <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Restore Snapshot?</h3>
+                  <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Restore Milestone?</h3>
                   <p style={{ fontSize: 14, color: "var(--tx2,#555)", margin: "0 0 8px" }}>This will replace your <strong>entire current budget</strong> with:</p>
                   <div style={{ padding: "10px 14px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, marginBottom: 16 }}>
-                    <div style={{ fontWeight: 700, color: "var(--tx,#333)" }}>{snapshots[restoreConfirm]?.label}</div>
-                    <div style={{ fontSize: 12, color: "var(--tx3,#888)" }}>{snapshots[restoreConfirm]?.date}</div>
+                    <div style={{ fontWeight: 700, color: "var(--tx,#333)" }}>{milestones[restoreConfirm]?.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--tx3,#888)" }}>{milestones[restoreConfirm]?.date}</div>
                   </div>
-                  <p style={{ fontSize: 13, color: "#E8573A", margin: "0 0 20px" }}>Consider saving a snapshot of your current budget first.</p>
+                  <p style={{ fontSize: 13, color: "#E8573A", margin: "0 0 20px" }}>Consider saving a milestone of your current budget first.</p>
                   <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
                     <button onClick={() => setRestoreConfirm(null)} style={{ padding: "9px 20px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
                     <button onClick={() => {
@@ -313,7 +313,7 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, snapshots, setS
               </div>
             )}
 
-            {snapshots.length === 0 && <Card style={{ textAlign: "center", padding: 40 }}><div style={{ fontSize: 14, color: "#999" }}>No snapshots yet. Save your first above to start tracking trends.</div></Card>}
+            {milestones.length === 0 && <Card style={{ textAlign: "center", padding: 40 }}><div style={{ fontSize: 14, color: "#999" }}>No milestones yet. Save your first above to start tracking trends.</div></Card>}
     </div>
   );
 }

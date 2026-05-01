@@ -195,7 +195,7 @@ describe("pruneRetention", () => {
 describe("summarizeState", () => {
   it("handles missing/empty state defensively", () => {
     expect(summarizeState(null).exp).toBe(0);
-    expect(summarizeState(undefined).snapshots).toBe(0);
+    expect(summarizeState(undefined).milestones).toBe(0);
     expect(summarizeState({}).cSal).toBe(0);
   });
 
@@ -203,7 +203,7 @@ describe("summarizeState", () => {
     const s = {
       exp: [{}, {}, {}],
       sav: [{}, {}],
-      snapshots: [{}],
+      milestones: [{}],
       transactions: [{}, {}, {}, {}],
       cSal: 100000,
       kSal: 80000,
@@ -211,11 +211,16 @@ describe("summarizeState", () => {
     const out = summarizeState(s);
     expect(out.exp).toBe(3);
     expect(out.sav).toBe(2);
-    expect(out.snapshots).toBe(1);
+    expect(out.milestones).toBe(1);
     expect(out.transactions).toBe(4);
     expect(out.cSal).toBe(100000);
     expect(out.kSal).toBe(80000);
     expect(out.sizeBytes).toBeGreaterThan(0);
+  });
+
+  it("read shim: accepts pre-rename `snapshots` key for milestone count", () => {
+    const out = summarizeState({ snapshots: [{}, {}, {}] });
+    expect(out.milestones).toBe(3);
   });
 
   it("coerces non-numeric salary fields to 0", () => {
@@ -225,12 +230,12 @@ describe("summarizeState", () => {
 
 describe("diffSummaries", () => {
   it("computes per-field deltas", () => {
-    const cur = { exp: [{}, {}], sav: [{}], snapshots: [], transactions: [], cSal: 100000, kSal: 80000 };
-    const cand = { exp: [{}, {}, {}], sav: [{}], snapshots: [{}], transactions: [{}], cSal: 110000, kSal: 80000 };
+    const cur = { exp: [{}, {}], sav: [{}], milestones: [], transactions: [], cSal: 100000, kSal: 80000 };
+    const cand = { exp: [{}, {}, {}], sav: [{}], milestones: [{}], transactions: [{}], cSal: 110000, kSal: 80000 };
     const d = diffSummaries(cur, cand);
     expect(d.exp.delta).toBe(1);
     expect(d.sav.delta).toBe(0);
-    expect(d.snapshots.delta).toBe(1);
+    expect(d.milestones.delta).toBe(1);
     expect(d.transactions.delta).toBe(1);
     expect(d.cSal.delta).toBe(10000);
     expect(d.kSal.delta).toBe(0);

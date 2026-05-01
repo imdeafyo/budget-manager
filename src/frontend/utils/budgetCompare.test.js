@@ -445,7 +445,7 @@ describe("compareBudgetToActual", () => {
 
   it("incomeCats rows are excluded from spending/savings and don't leak into uncategorized", () => {
     const opts = baseOpts();
-    // Baseline snapshot of totals / uncategorized count before income rows exist
+    // Baseline milestone of totals / uncategorized count before income rows exist
     const baseline = compareBudgetToActual(opts);
     const baselineExpTotalActual = baseline.expense.totalActual;
 
@@ -584,33 +584,33 @@ describe("monthlyBuckets", () => {
   });
 });
 
-/* ── Snapshot-aware budget selection ────────────────────────────────────── */
+/* ── Milestone-aware budget selection ────────────────────────────────────── */
 describe("pickBudgetForDate", () => {
   const liveExp = [{ n: "Groceries", c: "Food", v: "600", p: "m" }];
-  const snapA = {
+  const mA = {
     date: "2024-06-15",
     fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
   };
-  const snapB = {
+  const mB = {
     date: "2025-01-01",
     fullState: { exp: [{ n: "Groceries", c: "Food", v: "500", p: "m" }] },
   };
-  const itemsOnlySnap = { date: "2023-01-01", items: { Groceries: { v: 300, c: "Food" } } };
+  const itemsOnlyM = { date: "2023-01-01", items: { Groceries: { v: 300, c: "Food" } } };
 
-  it("returns live budget when no snapshots supplied", () => {
+  it("returns live budget when no milestones supplied", () => {
     expect(pickBudgetForDate(liveExp, [], "2024-07-01")).toBe(liveExp);
     expect(pickBudgetForDate(liveExp, null, "2024-07-01")).toBe(liveExp);
   });
 
-  it("returns live budget when snapshots have neither fullState.exp nor items", () => {
-    const emptySnap = { date: "2023-01-01" };
-    expect(pickBudgetForDate(liveExp, [emptySnap], "2023-06-01")).toBe(liveExp);
+  it("returns live budget when milestones have neither fullState.exp nor items", () => {
+    const emptyM = { date: "2023-01-01" };
+    expect(pickBudgetForDate(liveExp, [emptyM], "2023-06-01")).toBe(liveExp);
   });
 
-  it("reconstructs a budget from legacy items-only snapshots", () => {
+  it("reconstructs a budget from legacy items-only milestones", () => {
     // Legacy items.v is stored as monthly × 12 (i.e. annual-48-paycheck $$)
     // so a 3600 → monthly 300 → weekly ~69 after the live->weekly conversion.
-    const r = pickBudgetForDate(liveExp, [itemsOnlySnap], "2023-06-01");
+    const r = pickBudgetForDate(liveExp, [itemsOnlyM], "2023-06-01");
     expect(r).not.toBe(liveExp);
     expect(Array.isArray(r)).toBe(true);
     expect(r[0]).toMatchObject({ n: "Groceries", c: "Food", p: "m" });
@@ -619,69 +619,69 @@ describe("pickBudgetForDate", () => {
     expect(r[0].v).toBe("25");
   });
 
-  it("carries forward — latest snapshot on or before the date wins", () => {
-    const r = pickBudgetForDate(liveExp, [snapA, snapB], "2024-08-01");
-    expect(r).toBe(snapA.fullState.exp);
+  it("carries forward — latest milestone on or before the date wins", () => {
+    const r = pickBudgetForDate(liveExp, [mA, mB], "2024-08-01");
+    expect(r).toBe(mA.fullState.exp);
   });
 
-  it("carries forward across a boundary — newer snapshot takes over on its date", () => {
-    const r = pickBudgetForDate(liveExp, [snapA, snapB], "2025-01-01");
-    expect(r).toBe(snapB.fullState.exp);
+  it("carries forward across a boundary — newer milestone takes over on its date", () => {
+    const r = pickBudgetForDate(liveExp, [mA, mB], "2025-01-01");
+    expect(r).toBe(mB.fullState.exp);
   });
 
-  it("carries backward — date before earliest uses earliest snapshot", () => {
-    const r = pickBudgetForDate(liveExp, [snapA, snapB], "2023-03-01");
-    expect(r).toBe(snapA.fullState.exp);
+  it("carries backward — date before earliest uses earliest milestone", () => {
+    const r = pickBudgetForDate(liveExp, [mA, mB], "2023-03-01");
+    expect(r).toBe(mA.fullState.exp);
   });
 
-  it("mixes fullState and items-only snapshots — picks correct one by date", () => {
-    // itemsOnlySnap date is 2023-01-01, snapA is 2024-06-15.
+  it("mixes fullState and items-only milestones — picks correct one by date", () => {
+    // itemsOnlyM date is 2023-01-01, mA is 2024-06-15.
     // For a date between them (2023-06-01), carry-forward selects the
-    // items-only snap (reconstructed), not snapA.
-    const r = pickBudgetForDate(liveExp, [itemsOnlySnap, snapA], "2023-06-01");
+    // items-only milestone (reconstructed), not mA.
+    const r = pickBudgetForDate(liveExp, [itemsOnlyM, mA], "2023-06-01");
     expect(r).not.toBe(liveExp);
-    expect(r).not.toBe(snapA.fullState.exp);
+    expect(r).not.toBe(mA.fullState.exp);
     // And it's the reconstructed shape
     expect(r[0]).toMatchObject({ n: "Groceries", p: "m" });
   });
 
-  it("live overrides snapshots for the current month even when a snapshot exists", () => {
+  it("live overrides milestones for the current month even when a milestone exists", () => {
     // todayIso in April 2026 — any April date should yield live, not the
-    // April snapshot. This mirrors "what you are actively planning today".
-    const snapApr = {
+    // April milestone. This mirrors "what you are actively planning today".
+    const mApr = {
       date: "2026-04-06",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
     };
-    expect(pickBudgetForDate(liveExp, [snapApr], "2026-04-01", "2026-04-19")).toBe(liveExp);
-    expect(pickBudgetForDate(liveExp, [snapApr], "2026-04-30", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [mApr], "2026-04-01", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [mApr], "2026-04-30", "2026-04-19")).toBe(liveExp);
   });
 
-  it("live overrides snapshots for future months", () => {
-    const snapApr = {
+  it("live overrides milestones for future months", () => {
+    const mApr = {
       date: "2026-04-06",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
     };
-    expect(pickBudgetForDate(liveExp, [snapApr], "2026-05-15", "2026-04-19")).toBe(liveExp);
-    expect(pickBudgetForDate(liveExp, [snapApr], "2027-01-15", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [mApr], "2026-05-15", "2026-04-19")).toBe(liveExp);
+    expect(pickBudgetForDate(liveExp, [mApr], "2027-01-15", "2026-04-19")).toBe(liveExp);
   });
 
-  it("past months still use their nearest snapshot even when live override is active", () => {
-    const snapApr = {
+  it("past months still use their nearest milestone even when live override is active", () => {
+    const mApr = {
       date: "2026-04-06",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
     };
-    // March 2026 → earlier than the April snapshot but the only one eligible,
+    // March 2026 → earlier than the April milestone but the only one eligible,
     // so it's carried backward. Must NOT return live.
-    const r = pickBudgetForDate(liveExp, [snapApr], "2026-03-15", "2026-04-19");
-    expect(r).toBe(snapApr.fullState.exp);
+    const r = pickBudgetForDate(liveExp, [mApr], "2026-03-15", "2026-04-19");
+    expect(r).toBe(mApr.fullState.exp);
     expect(r).not.toBe(liveExp);
   });
 });
 
-describe("monthlyBuckets with snapshots", () => {
-  it("uses different budgets for months before vs. after a snapshot boundary", () => {
+describe("monthlyBuckets with milestones", () => {
+  it("uses different budgets for months before vs. after a milestone boundary", () => {
     const liveExp = [{ n: "Groceries", c: "Food", v: "700", p: "m" }]; // $175/wk live
-    const snapOld = {
+    const mOld = {
       date: "2024-03-01",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] }, // $100/wk
     };
@@ -692,24 +692,24 @@ describe("monthlyBuckets with snapshots", () => {
       fromIso: "2024-01-01",
       toIso: "2024-04-30",
       basis: 48,
-      snapshots: [snapOld],
+      milestones: [mOld],
     });
-    // Jan + Feb 2024 predate snapOld → carry it backward. Mar + Apr 2024 on/
-    // after snapOld → carry forward. Either way, snapOld is the only eligible
-    // snapshot so every month uses its $100/wk budget = $400/mo monthly.
-    const snapMonthly = 100 * 48 / 12; // = 400
+    // Jan + Feb 2024 predate mOld → carry it backward. Mar + Apr 2024 on/
+    // after mOld → carry forward. Either way, mOld is the only eligible
+    // milestone so every month uses its $100/wk budget = $400/mo monthly.
+    const mMonthly = 100 * 48 / 12; // = 400
     const liveMonthly = 175 * 48 / 12; // = 700
-    expect(buckets[0].budgeted).toBeCloseTo(snapMonthly, 2);
+    expect(buckets[0].budgeted).toBeCloseTo(mMonthly, 2);
     expect(buckets[0].budgeted).not.toBeCloseTo(liveMonthly, 2);
   });
 
-  it("transitions mid-range: months before snapshot use old budget, after use new", () => {
+  it("transitions mid-range: months before milestone use old budget, after use new", () => {
     const liveExp = [{ n: "Groceries", c: "Food", v: "700", p: "m" }]; // live = $175/wk
-    const snapOld = {
+    const mOld = {
       date: "2024-01-01",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] }, // $100/wk → $400/mo
     };
-    const snapNew = {
+    const mNew = {
       date: "2024-03-01",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "800", p: "m" }] }, // $200/wk → $800/mo
     };
@@ -720,9 +720,9 @@ describe("monthlyBuckets with snapshots", () => {
       fromIso: "2024-01-01",
       toIso: "2024-04-30",
       basis: 48,
-      snapshots: [snapOld, snapNew],
+      milestones: [mOld, mNew],
     });
-    // Jan + Feb use snapOld ($400/mo), March + April use snapNew ($800/mo).
+    // Jan + Feb use mOld ($400/mo), March + April use mNew ($800/mo).
     // Flat monthly figures — no day-count scaling.
     expect(buckets[0].budgeted).toBeCloseTo(400, 2);  // Jan
     expect(buckets[1].budgeted).toBeCloseTo(400, 2);  // Feb
@@ -730,11 +730,11 @@ describe("monthlyBuckets with snapshots", () => {
     expect(buckets[3].budgeted).toBeCloseTo(800, 2);  // Apr
   });
 
-  it("live-override: current and future months use live; past months use snapshots", () => {
-    // Live: Groceries $700/mo ($175/wk). Snapshot Apr 2026: $400/mo ($100/wk).
+  it("live-override: current and future months use live; past months use milestones", () => {
+    // Live: Groceries $700/mo ($175/wk). Milestone Apr 2026: $400/mo ($100/wk).
     // todayIso set to April 2026.
     const liveExp = [{ n: "Groceries", c: "Food", v: "700", p: "m" }];
-    const snapApr = {
+    const mApr = {
       date: "2026-04-06",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "400", p: "m" }] },
     };
@@ -744,10 +744,10 @@ describe("monthlyBuckets with snapshots", () => {
       cats: ["Food"],
       fromIso: "2026-02-01",
       toIso: "2026-06-30",
-      snapshots: [snapApr],
+      milestones: [mApr],
       todayIso: "2026-04-19",
     });
-    // Feb, Mar → past → snapshot carry-backward → $400/mo
+    // Feb, Mar → past → milestone carry-backward → $400/mo
     expect(buckets[0].budgeted).toBeCloseTo(400, 2); // Feb
     expect(buckets[1].budgeted).toBeCloseTo(400, 2); // Mar
     // Apr (current), May, Jun (future) → live → $700/mo
@@ -756,16 +756,16 @@ describe("monthlyBuckets with snapshots", () => {
     expect(buckets[4].budgeted).toBeCloseTo(700, 2); // Jun
   });
 
-  it("narrows snapshot-resolved budget to `cats` scope (regression)", () => {
+  it("narrows milestone-resolved budget to `cats` scope (regression)", () => {
     // Bug: when the caller narrows `cats` to, say, ["Housing"], past buckets
-    // pull budgets from snapshots via pickBudgetForDate. The resolved
-    // snapshot exp contains every category it ever had — so summing without
-    // re-narrowing would return the whole snapshot total, not the Housing
+    // pull budgets from milestones via pickBudgetForDate. The resolved
+    // milestone exp contains every category it ever had — so summing without
+    // re-narrowing would return the whole milestone total, not the Housing
     // slice. Fix: the per-bucket sum honors `cats` as a filter.
     const liveExp = [
       { n: "Mortgage", c: "Housing", v: "1000", p: "m" }, // live Housing $1000
     ];
-    const snapMulti = {
+    const mMulti = {
       date: "2024-06-01",
       fullState: {
         exp: [
@@ -781,29 +781,29 @@ describe("monthlyBuckets with snapshots", () => {
       cats: ["Housing"],
       fromIso: "2024-07-01",
       toIso: "2024-08-31",
-      snapshots: [snapMulti],
-      todayIso: "2026-04-19", // so both months are "past" and use snapshot
+      milestones: [mMulti],
+      todayIso: "2026-04-19", // so both months are "past" and use milestone
     });
-    // Each past month should show ONLY Housing from the snapshot ($800/mo),
-    // not the full snapshot total ($1500/mo).
+    // Each past month should show ONLY Housing from the milestone ($800/mo),
+    // not the full milestone total ($1500/mo).
     for (const b of buckets) expect(b.budgeted).toBeCloseTo(800, 2);
   });
 });
 
-describe("compareBudgetToActual with snapshots", () => {
-  it("splits a range spanning a snapshot boundary and sums proportionally", () => {
+describe("compareBudgetToActual with milestones", () => {
+  it("splits a range spanning a milestone boundary and sums proportionally", () => {
     // Live budget $175/wk (Groceries $600/mo + Gas $100/mo from baseOpts).
-    // Snapshot on 2026-04-15 with Groceries doubled to $1200/mo, Gas removed.
+    // Milestone on 2026-04-15 with Groceries doubled to $1200/mo, Gas removed.
     // Range: Apr 1 → Apr 30 (30 days).
-    //   Era 1: Apr 1–14 (14 days) uses original (live = snap absent before).
-    //          Wait — carry-backward means Apr 1–14 uses the snapshot! That's
-    //          a deliberate part of the contract: no snapshot before means
+    //   Era 1: Apr 1–14 (14 days) uses original (live = milestone absent before).
+    //          Wait — carry-backward means Apr 1–14 uses the milestone! That's
+    //          a deliberate part of the contract: no milestone before means
     //          carry the first one backward.
-    //   So actually: Apr 1–14 (14 days) uses the 2026-04-15 snapshot carried
-    //   backward, and Apr 15–30 (16 days) uses the same snapshot. Both eras
-    //   use the same budget. Test with a live budget + one snapshot starting
-    //   mid-range: since the snapshot is the only one, it applies throughout.
-    const snap = {
+    //   So actually: Apr 1–14 (14 days) uses the 2026-04-15 milestone carried
+    //   backward, and Apr 15–30 (16 days) uses the same milestone. Both eras
+    //   use the same budget. Test with a live budget + one milestone starting
+    //   mid-range: since the milestone is the only one, it applies throughout.
+    const m = {
       date: "2026-04-15",
       fullState: {
         exp: [
@@ -811,7 +811,7 @@ describe("compareBudgetToActual with snapshots", () => {
         ],
       },
     };
-    const optsNoSnap = {
+    const optsNoMs = {
       cats: ["Food", "Auto"],
       savCats: ["Emergency"],
       transferCats: ["Transfer"],
@@ -823,48 +823,48 @@ describe("compareBudgetToActual with snapshots", () => {
       transactions: [],
       fromIso: "2026-04-01",
       toIso:   "2026-04-30",
-      todayIso: "2026-07-01", // push "today" past the range so snapshot picking drives the answer
+      todayIso: "2026-07-01", // push "today" past the range so milestone picking drives the answer
       basis: 48,
     };
-    const rLive = compareBudgetToActual(optsNoSnap);
-    const rSnap = compareBudgetToActual({ ...optsNoSnap, snapshots: [snap] });
+    const rLive = compareBudgetToActual(optsNoMs);
+    const rMs = compareBudgetToActual({ ...optsNoMs, milestones: [m] });
 
-    // With snapshot (carry-backward): entire 30-day period uses $300/wk Food,
-    // no Gas. So rSnap.expense Food budget ≈ 300 × (30/7) × (48/52), Gas gone.
-    const expectedFoodSnap = 300 * (30 / 7) * (48 / 52);
-    const foodRowSnap = rSnap.expense.rows.find(r => r.category === "Food");
-    expect(foodRowSnap?.budgeted).toBeCloseTo(expectedFoodSnap, 1);
-    // Without snapshot, Food budget is the live $150/wk scaled.
+    // With milestone (carry-backward): entire 30-day period uses $300/wk Food,
+    // no Gas. So rMs.expense Food budget ≈ 300 × (30/7) × (48/52), Gas gone.
+    const expectedFoodMs = 300 * (30 / 7) * (48 / 52);
+    const foodRowMs = rMs.expense.rows.find(r => r.category === "Food");
+    expect(foodRowMs?.budgeted).toBeCloseTo(expectedFoodMs, 1);
+    // Without milestone, Food budget is the live $150/wk scaled.
     const expectedFoodLive = 150 * (30 / 7) * (48 / 52);
     const foodRowLive = rLive.expense.rows.find(r => r.category === "Food");
     expect(foodRowLive?.budgeted).toBeCloseTo(expectedFoodLive, 1);
     // And the values are genuinely different (not accidentally the same).
-    expect(foodRowSnap.budgeted).not.toBeCloseTo(foodRowLive.budgeted, 1);
+    expect(foodRowMs.budgeted).not.toBeCloseTo(foodRowLive.budgeted, 1);
   });
 
   it("splits properly across an era boundary inside the range", () => {
-    // Two snapshots: one on fromIso, one mid-range. 30-day range, snapshot-B
-    // lands on day 16. Era 1 = days 1–15 (15 days) under snap A; Era 2 = days
-    // 16–30 (15 days) under snap B.
-    const snapA = {
+    // Two milestones: one on fromIso, one mid-range. 30-day range, milestone-B
+    // lands on day 16. Era 1 = days 1–15 (15 days) under m A; Era 2 = days
+    // 16–30 (15 days) under m B.
+    const mA = {
       date: "2026-04-01",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "600", p: "m" }] },   // $150/wk
     };
-    const snapB = {
+    const mB = {
       date: "2026-04-16",
       fullState: { exp: [{ n: "Groceries", c: "Food", v: "1200", p: "m" }] },  // $300/wk
     };
     const r = compareBudgetToActual({
       cats: ["Food"],
       savCats: [],
-      exp: [{ n: "Groceries", c: "Food", v: "800", p: "m" }], // live (irrelevant — snapshots cover the whole range)
+      exp: [{ n: "Groceries", c: "Food", v: "800", p: "m" }], // live (irrelevant — milestones cover the whole range)
       sav: [],
       transactions: [],
       fromIso: "2026-04-01",
       toIso:   "2026-04-30",
       todayIso: "2026-07-01", // push "today" past the range so era-splitting drives the answer
       basis: 48,
-      snapshots: [snapA, snapB],
+      milestones: [mA, mB],
     });
     const expected =
       150 * (15 / 7) * (48 / 52) +  // era A: 15 days at $150/wk
@@ -873,7 +873,7 @@ describe("compareBudgetToActual with snapshots", () => {
     expect(food?.budgeted).toBeCloseTo(expected, 1);
   });
 
-  it("no snapshots → matches pre-snapshot behavior exactly", () => {
+  it("no milestones → matches pre-milestone behavior exactly", () => {
     const opts = {
       cats: ["Food"],
       savCats: [],
@@ -886,7 +886,7 @@ describe("compareBudgetToActual with snapshots", () => {
       basis: 48,
     };
     const r1 = compareBudgetToActual(opts);
-    const r2 = compareBudgetToActual({ ...opts, snapshots: [] });
+    const r2 = compareBudgetToActual({ ...opts, milestones: [] });
     expect(r2.expense.rows[0].budgeted).toBeCloseTo(r1.expense.rows[0].budgeted, 2);
   });
 });

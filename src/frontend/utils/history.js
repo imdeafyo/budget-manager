@@ -90,19 +90,21 @@ export function pruneRetention(rows, config = DEFAULT_HISTORY_CONFIG) {
 }
 
 /* ── summarizeState — produce a small object the History panel uses
-   for preview cards. Counts arrays/snapshots and pulls a few headline
-   numbers. Defensive against missing fields. */
+   for preview cards. Counts arrays/milestones and pulls a few headline
+   numbers. Defensive against missing fields.
+   Read shim: pre-rename state blobs used `state.snapshots`; we accept either. */
 export function summarizeState(state) {
   if (!state || typeof state !== "object") {
-    return { exp: 0, sav: 0, snapshots: 0, transactions: 0, cSal: 0, kSal: 0, sizeBytes: 0 };
+    return { exp: 0, sav: 0, milestones: 0, transactions: 0, cSal: 0, kSal: 0, sizeBytes: 0 };
   }
   const sizeBytes = (() => {
     try { return new Blob([JSON.stringify(state)]).size; } catch { return JSON.stringify(state).length; }
   })();
+  const ms = Array.isArray(state.milestones) ? state.milestones : (Array.isArray(state.snapshots) ? state.snapshots : null);
   return {
     exp: Array.isArray(state.exp) ? state.exp.length : 0,
     sav: Array.isArray(state.sav) ? state.sav.length : 0,
-    snapshots: Array.isArray(state.snapshots) ? state.snapshots.length : 0,
+    milestones: ms ? ms.length : 0,
     transactions: Array.isArray(state.transactions) ? state.transactions.length : 0,
     cSal: Number(state.cSal) || 0,
     kSal: Number(state.kSal) || 0,
@@ -118,7 +120,7 @@ export function diffSummaries(current, candidate) {
   return {
     exp:          { current: c.exp,          candidate: x.exp,          delta: x.exp - c.exp },
     sav:          { current: c.sav,          candidate: x.sav,          delta: x.sav - c.sav },
-    snapshots:    { current: c.snapshots,    candidate: x.snapshots,    delta: x.snapshots - c.snapshots },
+    milestones:   { current: c.milestones,   candidate: x.milestones,   delta: x.milestones - c.milestones },
     transactions: { current: c.transactions, candidate: x.transactions, delta: x.transactions - c.transactions },
     cSal:         { current: c.cSal,         candidate: x.cSal,         delta: x.cSal - c.cSal },
     kSal:         { current: c.kSal,         candidate: x.kSal,         delta: x.kSal - c.kSal },

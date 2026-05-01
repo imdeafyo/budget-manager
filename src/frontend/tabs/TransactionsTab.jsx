@@ -40,7 +40,7 @@ export default function TransactionsTab(props) {
     rowCapWarn, rowCapThreshold,
     cats, savCats, transferCats = [], incomeCats = [],
     exp = [], sav = [],
-    snapshots = [],
+    milestones = [],
     addTransactions, updateTransaction, deleteTransactions, setTransactions,
     importProfiles, setImportProfiles,
     transactionRules = [], setTransactionRules,
@@ -281,14 +281,14 @@ export default function TransactionsTab(props) {
       transactions: chartScopedTransactions,
       exp: chartScopedExp, sav,
       cats: chartScopedCats, savCats, transferCats, incomeCats,
-      snapshots,
+      milestones,
       fromIso: effectiveFrom,
       toIso: effectiveTo,
       todayIso: today,
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, chartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, snapshots, effectiveFrom, effectiveTo, today, basis]);
+  }, [compareReady, chartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, milestones, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -628,7 +628,7 @@ export default function TransactionsTab(props) {
         cats={chartScopedCats}
         transferCats={transferCats}
         incomeCats={incomeCats}
-        snapshots={snapshots}
+        milestones={milestones}
         today={today}
         filterCats={catSel}
         setFilterCats={setCatSel}
@@ -1617,7 +1617,7 @@ function PairRow({ tx }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], snapshots = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], milestones = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
   // ── Drill-down handlers ──
   // Bar click: toggle the bar's category in the table's catSel. Clicking an
   // already-filtered category removes it; clicking a new one adds it.
@@ -1704,14 +1704,14 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
       cats,
       transferCats,
       incomeCats,
-      snapshots,
+      milestones,
       fromIso: dateFrom,
       toIso: dateTo,
       basis,
       category: chartCategory || null,
       todayIso: today,
     });
-  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, snapshots, dateFrom, dateTo, basis, chartCategory, today]);
+  }, [chartMode, compareReady, transactions, expBudget, cats, transferCats, incomeCats, milestones, dateFrom, dateTo, basis, chartCategory, today]);
 
   // Empty state — only reached when there are literally no transactions to work
   // with. (When transactions exist but no range is picked, the parent infers

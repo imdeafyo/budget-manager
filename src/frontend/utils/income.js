@@ -1,5 +1,5 @@
 /* ══════════════════════════ Income aggregation — pure helpers ══════════════════════════
-   Income history is pulled from transactions (not from snapshots, which only
+   Income history is pulled from transactions (not from milestones, which only
    reflect salary + bonus). "Income" here means any positive-amount transaction
    that isn't a transfer between the user's own accounts. That intentionally
    includes securities trades for now — realized P&L handling is out of scope

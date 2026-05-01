@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS } from "../data/taxDB.js";
-import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcSnapPure } from "../utils/calc.js";
+import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
 import { useM } from "../components/ui.jsx";
@@ -17,35 +17,37 @@ export default function useAppState() {
   const parseHash = () => { const h = location.hash.replace("#","").split("/")[0]; return VALID_TABS.includes(h) ? h : "budget"; };
   const [tab, setTabRaw] = useState(parseHash);
   const skipPush = useRef(false);
-  const [viewingSnap, setViewingSnapRaw] = useState(null);
+  const [viewingMs, setViewingMsRaw] = useState(null);
   const setTab = useCallback((t) => {
     setTabRaw(t);
     if (!skipPush.current) {
-      history.pushState({ tab: t, snap: null }, "", "#" + t);
+      history.pushState({ tab: t, ms: null }, "", "#" + t);
     }
     skipPush.current = false;
   }, []);
-  const setViewingSnap = useCallback((v) => {
-    setViewingSnapRaw(v);
+  const setViewingMs = useCallback((v) => {
+    setViewingMsRaw(v);
     if (!skipPush.current) {
       const t = v !== null ? "budget" : (parseHash() || "budget");
-      history.pushState({ tab: t, snap: v }, "", "#" + t + (v !== null ? "/snap/" + v : ""));
+      history.pushState({ tab: t, ms: v }, "", "#" + t + (v !== null ? "/ms/" + v : ""));
     }
     skipPush.current = false;
   }, []);
   useEffect(() => {
     // set initial history entry so first back works
-    if (!location.hash) history.replaceState({ tab: "budget", snap: null }, "", "#budget");
-    else history.replaceState({ tab: parseHash(), snap: null }, "", location.hash);
+    if (!location.hash) history.replaceState({ tab: "budget", ms: null }, "", "#budget");
+    else history.replaceState({ tab: parseHash(), ms: null }, "", location.hash);
     const onPop = (e) => {
       const s = e.state;
       skipPush.current = true;
       if (s && VALID_TABS.includes(s.tab)) {
         setTabRaw(s.tab);
-        setViewingSnapRaw(s.snap !== null && s.snap !== undefined ? s.snap : null);
+        // Back-compat: pre-rename pushStates used `snap`; new ones use `ms`.
+        const msVal = s.ms !== undefined ? s.ms : s.snap;
+        setViewingMsRaw(msVal !== null && msVal !== undefined ? msVal : null);
       } else {
         setTabRaw(parseHash());
-        setViewingSnapRaw(null);
+        setViewingMsRaw(null);
       }
       skipPush.current = false;
     };
@@ -110,13 +112,13 @@ export default function useAppState() {
   const [toolbarOpen, setToolbarOpen] = useState(() => { try { const v = localStorage.getItem("budget-toolbar"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
   const [visCols, setVisCols] = useState(() => { try { const v = localStorage.getItem("budget-cols"); return v ? JSON.parse(v) : { wk: true, mo: !window.innerWidth || window.innerWidth >= 700, y48: true, y52: !window.innerWidth || window.innerWidth >= 700 }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
   const [showPerPerson, setShowPerPerson] = useState(false);
-  const [snapshots, setSnapshots] = useState([]);
-  const [snapLabel, setSnapLabel] = useState("");
-  const [snapDate, setSnapDate] = useState("");
-  const [editSnapIdx, setEditSnapIdx] = useState(null);
+  const [milestones, setMilestones] = useState([]);
+  const [msLabel, setMsLabel] = useState("");
+  const [msDate, setMsDate] = useState("");
+  const [editMsIdx, setEditMsIdx] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [itemHistoryName, setItemHistoryName] = useState("");
-  const [snapTab, setSnapTab] = useState("budget");
+  const [msTab, setMsTab] = useState("budget");
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [bulkName, setBulkName] = useState("");
   const [bulkVal, setBulkVal] = useState("");
@@ -130,8 +132,8 @@ export default function useAppState() {
   const [catHistMode, setCatHistMode] = useState("line");
   const [itemHistMode, setItemHistMode] = useState("category");
   const [necDisMode, setNecDisMode] = useState("line");
-  const [snapHistView, setSnapHistView] = useState("years");
-  const [snapHistYear, setSnapHistYear] = useState(null);
+  const [msHistView, setMsHistView] = useState("years");
+  const [msHistYear, setMsHistYear] = useState(null);
   const [savRateBase, setSavRateBase] = useState("net");
   const [chartWeeks, setChartWeeks] = useState(48);
   // Chart time window: "all" | "ytd" | "1y" | "5y" | "10y"
@@ -140,7 +142,7 @@ export default function useAppState() {
     try { return localStorage.getItem("budget-chart-window") || "all"; } catch { return "all"; }
   });
   useEffect(() => { try { localStorage.setItem("budget-chart-window", chartTimeWindow); } catch {} }, [chartTimeWindow]);
-  const [snapVisCols, setSnapVisCols] = useState(() => { try { const v = localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
+  const [msVisCols, setMsVisCols] = useState(() => { try { const v = localStorage.getItem("budget-milestone-cols") || localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
   const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
   const [dragChart, setDragChart] = useState(null);
@@ -177,8 +179,8 @@ export default function useAppState() {
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,snapshots:setSnapshots,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,snapshots,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
+  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
   useEffect(() => { if (!loaded) return; const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st, loaded]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -333,7 +335,7 @@ export default function useAppState() {
         transactions,
         exp, sav,
         cats, savCats, transferCats, incomeCats,
-        snapshots,
+        milestones,
         fromIso: first,
         toIso: last,
         todayIso: today,
@@ -351,7 +353,7 @@ export default function useAppState() {
     } catch {
       return new Set();
     }
-  }, [transactions, exp, sav, cats, savCats, transferCats, incomeCats, snapshots, treatRefundsAsNetting]);
+  }, [transactions, exp, sav, cats, savCats, transferCats, incomeCats, milestones, treatRefundsAsNetting]);
 
   const applySort = items => {
     const s = [...items];
@@ -397,30 +399,30 @@ export default function useAppState() {
   const rmExp = useCallback(idx => { setExp(prev => prev.filter((_, j) => j !== idx)); }, []);
   const rmSav = useCallback(idx => { setSav(prev => prev.filter((_, j) => j !== idx)); }, []);
 
-  // recalcSnap — thin wrapper around pure recalcSnapPure in calc.js (so it's testable)
-  const recalcSnap = useCallback((snapObj) => {
-    return recalcSnapPure(snapObj, { tax, allTaxDB, fil, TAX_DB_FALLBACK: TAX_DB["2026"] });
+  // recalcMilestone — thin wrapper around pure recalcMilestonePure in calc.js (so it's testable)
+  const recalcMilestone = useCallback((mObj) => {
+    return recalcMilestonePure(mObj, { tax, allTaxDB, fil, TAX_DB_FALLBACK: TAX_DB["2026"] });
   }, [tax, fil, allTaxDB]);
 
-  // Recalculate all snapshot aggregate fields on load
-  const [snapsRecalced, setSnapsRecalced] = useState(false);
+  // Recalculate all milestone aggregate fields on load
+  const [msRecalced, setMsRecalced] = useState(false);
   useEffect(() => {
-    if (!loaded || snapsRecalced || snapshots.length === 0) return;
-    setSnapsRecalced(true);
-    setSnapshots(prev => prev.map(s => recalcSnap(s)));
-  }, [loaded, recalcSnap, snapshots.length, snapsRecalced]);
+    if (!loaded || msRecalced || milestones.length === 0) return;
+    setMsRecalced(true);
+    setMilestones(prev => prev.map(s => recalcMilestone(s)));
+  }, [loaded, recalcMilestone, milestones.length, msRecalced]);
 
-  // One-time migration: backfill fullState.exp/sav on legacy snapshots that
+  // One-time migration: backfill fullState.exp/sav on legacy milestones that
   // only have `items`. The charts already reconstruct on the fly, but
-  // persisting the reconstructed shape makes snapshots self-descriptive and
+  // persisting the reconstructed shape makes milestones self-descriptive and
   // lets future code rely on fullState without constantly reaching for
   // reconstructFromItems. Runs exactly once per load; skipped if nothing
   // needs backfilling.
-  const [snapsBackfilled, setSnapsBackfilled] = useState(false);
+  const [msBackfilled, setMsBackfilled] = useState(false);
   useEffect(() => {
-    if (!loaded || snapsBackfilled || snapshots.length === 0) return;
-    setSnapsBackfilled(true);
-    setSnapshots(prev => {
+    if (!loaded || msBackfilled || milestones.length === 0) return;
+    setMsBackfilled(true);
+    setMilestones(prev => {
       let changed = false;
       const next = prev.map(s => {
         // Already has a live-shape budget? Leave alone.
@@ -434,11 +436,11 @@ export default function useAppState() {
       });
       return changed ? next : prev;
     });
-  }, [loaded, snapsBackfilled, snapshots.length]);
+  }, [loaded, msBackfilled, milestones.length]);
 
   const restoreFullState = useCallback((idx) => {
-    const snap = snapshots[idx];
-    const fs = snap?.fullState;
+    const m = milestones[idx];
+    const fs = m?.fullState;
     if (fs) {
       if (fs.cSal !== undefined) setCS(fs.cSal); if (fs.kSal !== undefined) setKS(fs.kSal);
       if (fs.fil) setFil(fs.fil); if (fs.cEaip !== undefined) setCE(fs.cEaip); if (fs.kEaip !== undefined) setKE(fs.kEaip);
@@ -447,18 +449,18 @@ export default function useAppState() {
       if (fs.k4pre !== undefined) setK4pre(fs.k4pre); if (fs.k4ro !== undefined) setK4ro(fs.k4ro);
       if (fs.exp) setExp(fs.exp); if (fs.sav) setSav(fs.sav);
       if (fs.cats) setCats(fs.cats); if (fs.tax) setTax(fs.tax);
-    } else if (snap?.items) {
+    } else if (m?.items) {
       const newExp = []; const newSav = []; const newCats = new Set(cats);
-      Object.entries(snap.items).forEach(([name, data]) => {
+      Object.entries(m.items).forEach(([name, data]) => {
         if (data.c) newCats.add(data.c);
         if (data.t === "S") { newSav.push({ n: name, v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m", c: data.c || "Other" }); }
         else { newExp.push({ n: name, c: data.c || "General", t: data.t || "N", v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m" }); }
       });
       setExp(newExp); setSav(newSav); setCats([...newCats]);
-      if (snap.cSalary) setCS(String(snap.cSalary));
-      if (snap.kSalary) setKS(String(snap.kSalary));
+      if (m.cSalary) setCS(String(m.cSalary));
+      if (m.kSalary) setKS(String(m.kSalary));
     }
-  }, [snapshots, cats]);
+  }, [milestones, cats]);
 
   const restoreLiveState = useCallback((ls) => {
     if (!ls || typeof ls !== "object") return;
@@ -494,7 +496,7 @@ export default function useAppState() {
   useEffect(() => { try { localStorage.setItem("budget-banner", bannerOpen); } catch {} }, [bannerOpen]);
   useEffect(() => { try { localStorage.setItem("budget-toolbar", toolbarOpen); } catch {} }, [toolbarOpen]);
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
-  useEffect(() => { try { localStorage.setItem("budget-snap-cols", JSON.stringify(snapVisCols)); } catch {} }, [snapVisCols]);
+  useEffect(() => { try { localStorage.setItem("budget-milestone-cols", JSON.stringify(msVisCols)); } catch {} }, [msVisCols]);
   useEffect(() => { try { localStorage.setItem("budget-chart-order", JSON.stringify(chartOrder)); } catch {} }, [chartOrder]);
 
   const chartDragHandlers = useMemo(() => ({
@@ -508,15 +510,15 @@ export default function useAppState() {
     </div>
   );
 
-  // Scroll to top on tab/snap change
-  useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingSnap]);
-  const prevViewingSnap = useRef(viewingSnap);
+  // Scroll to top on tab/ms change
+  useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingMs]);
+  const prevViewingMs = useRef(viewingMs);
   useEffect(() => {
-    const wasNull = prevViewingSnap.current === null;
-    const isNull = viewingSnap === null;
-    if (wasNull !== isNull) setSnapTab("budget");
-    prevViewingSnap.current = viewingSnap;
-  }, [viewingSnap]);
+    const wasNull = prevViewingMs.current === null;
+    const isNull = viewingMs === null;
+    if (wasNull !== isNull) setMsTab("budget");
+    prevViewingMs.current = viewingMs;
+  }, [viewingMs]);
 
   // CSS custom properties for theme
   useEffect(() => {
@@ -604,12 +606,12 @@ export default function useAppState() {
     visCols, setVisCols, showPerPerson, setShowPerPerson,
     // collapse
     collapsed, toggleSec, allExpanded, allCollapsed, isMixed, expandAll, collapseAll, toggleAll,
-    // snapshots
-    snapshots, setSnapshots, snapLabel, setSnapLabel, snapDate, setSnapDate,
-    editSnapIdx, setEditSnapIdx, restoreConfirm, setRestoreConfirm,
-    viewingSnap, setViewingSnap, snapTab, setSnapTab,
-    snapVisCols, setSnapVisCols,
-    recalcSnap, restoreFullState, restoreLiveState, st,
+    // milestones
+    milestones, setMilestones, msLabel, setMsLabel, msDate, setMsDate,
+    editMsIdx, setEditMsIdx, restoreConfirm, setRestoreConfirm,
+    viewingMs, setViewingMs, msTab, setMsTab,
+    msVisCols, setMsVisCols,
+    recalcMilestone, restoreFullState, restoreLiveState, st,
     // bulk add
     showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal,
     bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec,
@@ -620,7 +622,7 @@ export default function useAppState() {
     savRateBase, setSavRateBase, includeEaip, setIncludeEaip,
     catChartMode, setCatChartMode, catHistoryName, setCatHistoryName,
     catHistMode, setCatHistMode, itemHistMode, setItemHistMode,
-    necDisMode, setNecDisMode, snapHistView, setSnapHistView, snapHistYear, setSnapHistYear,
+    necDisMode, setNecDisMode, msHistView, setMsHistView, msHistYear, setMsHistYear,
     itemHistoryName, setItemHistoryName,
     dragChart, chartDragHandlers, dragWrapRender,
     PieTooltip,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   evalF, resolveFormula, calcMatch, calcFed, getMarg,
-  calcStateTax, getStateMarg, toWk, fromWk, recalcSnapPure,
+  calcStateTax, getStateMarg, toWk, fromWk, recalcMilestonePure,
   forecastGrowth, yearsToTarget
 } from "../utils/calc.js";
 import { TAX_DB, STATE_BRACKETS } from "../data/taxDB.js";
@@ -159,11 +159,11 @@ describe("resolveFormula — formula resolution for blur", () => {
   });
 });
 
-/* ══════════════════════════ recalcSnap regression tests ══════════════════════════
-   This is the bug-prone area: a past session discovered recalcSnap wasn't including
+/* ══════════════════════════ recalcMilestone regression tests ══════════════════════════
+   This is the bug-prone area: a past session discovered recalcMilestone wasn't including
    pre-tax deductions and 401(k) pre-tax contributions in net income, diverging from
    the main C calculation. These tests lock that behavior in. */
-describe("recalcSnapPure — snapshot recalculation", () => {
+describe("recalcMilestonePure — milestone recalculation", () => {
   const ctx = {
     tax: { year: "2026", p1State: { name: "Colorado", abbr: "CO", famli: 0.45 }, p2State: { name: "Colorado", abbr: "CO", famli: 0.45 } },
     allTaxDB: TAX_DB,
@@ -171,16 +171,16 @@ describe("recalcSnapPure — snapshot recalculation", () => {
     TAX_DB_FALLBACK: TAX_DB["2026"],
   };
 
-  it("returns zero income for empty snapshot", () => {
-    const out = recalcSnapPure({ items: {} }, ctx);
+  it("returns zero income for empty milestone", () => {
+    const out = recalcMilestonePure({ items: {} }, ctx);
     expect(out.netW).toBe(0);
     expect(out.grossW).toBe(0);
     expect(out.savRate).toBe(0);
   });
 
   it("computes gross weekly from annual salary", () => {
-    const snap = { cSalary: 104000, kSalary: 52000, items: {} };
-    const out = recalcSnapPure(snap, ctx);
+    const m = { cSalary: 104000, kSalary: 52000, items: {} };
+    const out = recalcMilestonePure(m, ctx);
     expect(out.cGrossW).toBeCloseTo(2000, 5); // 104000/52
     expect(out.kGrossW).toBeCloseTo(1000, 5); // 52000/52
     expect(out.grossW).toBeCloseTo(3000, 5);
@@ -188,9 +188,9 @@ describe("recalcSnapPure — snapshot recalculation", () => {
 
   it("pre-tax deductions reduce both taxable income AND net pay", () => {
     // Baseline: 100k salary, no deductions
-    const baseline = recalcSnapPure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
     // Same salary, with $100/wk pre-tax deduction
-    const withPreDed = recalcSnapPure({
+    const withPreDed = recalcMilestonePure({
       cSalary: 100000, kSalary: 0, items: {},
       fullState: { preDed: [{ c: "100", k: "0" }] }
     }, ctx);
@@ -201,9 +201,9 @@ describe("recalcSnapPure — snapshot recalculation", () => {
   });
 
   it("401(k) pre-tax contributions reduce taxable income AND net pay (regression bug)", () => {
-    // This is the exact bug the memory notes called out — recalcSnap was ignoring c4pre
-    const noK = recalcSnapPure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
-    const withK = recalcSnapPure({
+    // This is the exact bug the memory notes called out — recalcMilestone was ignoring c4pre
+    const noK = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const withK = recalcMilestonePure({
       cSalary: 100000, kSalary: 0, items: {},
       fullState: { c4pre: "10" } // 10% pre-tax 401k
     }, ctx);
@@ -216,14 +216,14 @@ describe("recalcSnapPure — snapshot recalculation", () => {
   });
 
   it("expense items aggregate into weekly expense", () => {
-    const snap = {
+    const m = {
       cSalary: 100000, kSalary: 0,
       items: {
         a: { t: "N", v: 4800 },  // $4800/yr necessary
         b: { t: "D", v: 2400 },  // $2400/yr discretionary
       }
     };
-    const out = recalcSnapPure(snap, ctx);
+    const out = recalcMilestonePure(m, ctx);
     // Budget normalizes on 48 paychecks: 4800/48=100, 2400/48=50
     expect(out.necW).toBeCloseTo(100, 5);
     expect(out.disW).toBeCloseTo(50, 5);
@@ -231,48 +231,48 @@ describe("recalcSnapPure — snapshot recalculation", () => {
   });
 
   it("savings rate uses (savings + remaining) / net income", () => {
-    const snap = {
+    const m = {
       cSalary: 104000, kSalary: 0,
       items: {
         save: { t: "S", v: 4800 }, // 100/wk savings
       }
     };
-    const out = recalcSnapPure(snap, ctx);
+    const out = recalcMilestonePure(m, ctx);
     expect(out.savW).toBeCloseTo(100, 5);
     // savRate = (savW + max(0, remW)) / netW * 100
     const expected = (out.savW + Math.max(0, out.remW)) / out.netW * 100;
     expect(out.savRate).toBeCloseTo(expected, 5);
   });
 
-  it("selects tax year from snapshot date", () => {
-    const snap2018 = { date: "2018-06-15", cSalary: 100000, kSalary: 0, items: {} };
-    const snap2026 = { date: "2026-06-15", cSalary: 100000, kSalary: 0, items: {} };
-    const out2018 = recalcSnapPure(snap2018, ctx);
-    const out2026 = recalcSnapPure(snap2026, ctx);
+  it("selects tax year from milestone date", () => {
+    const m2018 = { date: "2018-06-15", cSalary: 100000, kSalary: 0, items: {} };
+    const m2026 = { date: "2026-06-15", cSalary: 100000, kSalary: 0, items: {} };
+    const out2018 = recalcMilestonePure(m2018, ctx);
+    const out2026 = recalcMilestonePure(m2026, ctx);
     // Standard deduction differs between years → net pay should differ
     expect(out2018.netW).not.toBeCloseTo(out2026.netW, 0);
   });
 
   it("bonus (cEaipPct) produces expected gross and net", () => {
-    const snap = {
+    const m = {
       cSalary: 100000, kSalary: 0, items: {},
       cEaipPct: 10, kEaipPct: 0,
     };
-    const out = recalcSnapPure(snap, ctx);
+    const out = recalcMilestonePure(m, ctx);
     expect(out.eaipGross).toBeCloseTo(10000, 2); // 10% of 100k
     expect(out.eaipNet).toBeGreaterThan(0);
     expect(out.eaipNet).toBeLessThan(out.eaipGross); // taxed
   });
 
-  it("round-trips: recalcSnap(recalcSnap(x)) produces identical aggregates", () => {
-    const snap = {
+  it("round-trips: recalcMilestone(recalcMilestone(x)) produces identical aggregates", () => {
+    const m = {
       cSalary: 120000, kSalary: 80000,
       items: { a: { t: "N", v: 12000 }, b: { t: "D", v: 4800 }, c: { t: "S", v: 9600 } },
       fullState: { c4pre: "8", k4pre: "6", preDed: [{ c: "50", k: "25" }] },
       cEaipPct: 8, kEaipPct: 5,
     };
-    const first = recalcSnapPure(snap, ctx);
-    const second = recalcSnapPure(first, ctx);
+    const first = recalcMilestonePure(m, ctx);
+    const second = recalcMilestonePure(first, ctx);
     expect(second.netW).toBeCloseTo(first.netW, 5);
     expect(second.grossW).toBeCloseTo(first.grossW, 5);
     expect(second.savRate).toBeCloseTo(first.savRate, 5);
@@ -280,18 +280,18 @@ describe("recalcSnapPure — snapshot recalculation", () => {
     expect(second.eaipNet).toBeCloseTo(first.eaipNet, 5);
   });
 
-  it("snapshot serialization: JSON round-trip preserves all fields", () => {
-    const snap = {
+  it("milestone serialization: JSON round-trip preserves all fields", () => {
+    const m = {
       date: "2025-03-15", label: "Q1 2025",
       cSalary: 104000, kSalary: 78000,
       items: { exp1: { t: "N", v: 6000, n: "Rent" } },
       fullState: { c4pre: "10", k4pre: "5" },
       cEaipPct: 8, kEaipPct: 5,
     };
-    const calculated = recalcSnapPure(snap, ctx);
+    const calculated = recalcMilestonePure(m, ctx);
     const json = JSON.stringify(calculated);
     const restored = JSON.parse(json);
-    const recalculated = recalcSnapPure(restored, ctx);
+    const recalculated = recalcMilestonePure(restored, ctx);
     expect(recalculated.netW).toBeCloseTo(calculated.netW, 5);
     expect(recalculated.savRate).toBeCloseTo(calculated.savRate, 5);
     expect(recalculated.date).toBe("2025-03-15");

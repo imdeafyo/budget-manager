@@ -98,14 +98,14 @@ export function itemWeeklyBudget(item) {
   return isFinite(wk) ? wk : 0;
 }
 
-/* ── Legacy snapshot shape reconstruction ──
-   Older snapshots store budgets as an `items` dict keyed by line-item name,
+/* ── Legacy milestone shape reconstruction ──
+   Older milestones store budgets as an `items` dict keyed by line-item name,
    with values like `{ c, t, v }` where `v` is the annual-48-paycheck dollar
-   amount (weekly × 48). Newer snapshots carry `fullState.exp` and
+   amount (weekly × 48). Newer milestones carry `fullState.exp` and
    `fullState.sav` in the same shape as the live budget.
 
    Given an `items` dict, produces `{ exp, sav }` in live shape so callers
-   (chart helpers, migrations, etc.) can treat legacy snapshots uniformly. */
+   (chart helpers, migrations, etc.) can treat legacy milestones uniformly. */
 export function reconstructFromItems(items) {
   const exp = [];
   const sav = [];
@@ -127,24 +127,24 @@ export function reconstructFromItems(items) {
 }
 
 
-/* ── Snapshot-aware budget selection ──
-   Given the live budget, a list of snapshots, and an ISO date, return the
+/* ── Milestone-aware budget selection ──
+   Given the live budget, a list of milestones, and an ISO date, return the
    budget array that was "in effect" on that date. Rules:
      • If `iso` is in the current month or the future (relative to
        `todayIso`, defaulting to today), live wins — the idea is that the
        current/future view should reflect what you're actively planning, not
-       a snapshot that got frozen before today's budget changes landed.
-     • Otherwise, find the latest snapshot on or before `iso` and use its
-       budget. Falls back to the earliest snapshot for dates before any
-       snapshot exists (carry-backward).
-     • Snapshots are "eligible" if they have either `fullState.exp` (newer
+       a milestone that got frozen before today's budget changes landed.
+     • Otherwise, find the latest milestone on or before `iso` and use its
+       budget. Falls back to the earliest milestone for dates before any
+       milestone exists (carry-backward).
+     • Milestones are "eligible" if they have either `fullState.exp` (newer
        shape) or an `items` dict (legacy). Legacy items are reconstructed into
        a live-shape array on the fly.
      • Returns `liveExp` unchanged (same reference) when falling back, so
        callers can cheaply detect "nothing changed".
    `todayIso` is optional; when omitted, uses the real today. Tests pin it
    explicitly. */
-export function pickBudgetForDate(liveExp, snapshots, iso, todayIso) {
+export function pickBudgetForDate(liveExp, milestones, iso, todayIso) {
   if (!iso) return liveExp;
 
   // Live-override: any bucket in the current month or later uses live.
@@ -153,11 +153,11 @@ export function pickBudgetForDate(liveExp, snapshots, iso, todayIso) {
   const today = todayIso || new Date().toISOString().slice(0, 10);
   if (iso.slice(0, 7) >= today.slice(0, 7)) return liveExp;
 
-  if (!Array.isArray(snapshots) || snapshots.length === 0) return liveExp;
+  if (!Array.isArray(milestones) || milestones.length === 0) return liveExp;
   // Eligible = has any usable budget shape. Attach a `.exp` alias (normalized
   // to live-shape) so downstream code doesn't branch on the two variants.
   const eligible = [];
-  for (const s of snapshots) {
+  for (const s of milestones) {
     if (!s || !s.date) continue;
     const fsExp = s?.fullState?.exp;
     if (Array.isArray(fsExp) && fsExp.length > 0) {
@@ -171,13 +171,13 @@ export function pickBudgetForDate(liveExp, snapshots, iso, todayIso) {
   if (eligible.length === 0) return liveExp;
   eligible.sort((a, b) => a.date.localeCompare(b.date));
 
-  // Latest snapshot on or before the date
+  // Latest milestone on or before the date
   let chosen = null;
   for (const s of eligible) {
     if (s.date <= iso) chosen = s;
     else break;
   }
-  // Before earliest snapshot → carry earliest backward
+  // Before earliest milestone → carry earliest backward
   if (!chosen) chosen = eligible[0];
   return chosen.exp;
 }
@@ -310,7 +310,7 @@ export function compareBudgetToActual(opts) {
     savCats = [],             // string[] of savings category names
     transferCats = [],        // string[] of transfer-only category names (excluded)
     incomeCats = [],          // string[] of income-only category names (excluded)
-    snapshots = [],           // optional — enables per-era historical budgets
+    milestones = [],           // optional — enables per-era historical budgets
     fromIso,
     toIso,
     todayIso,
@@ -327,12 +327,12 @@ export function compareBudgetToActual(opts) {
   const xferSet = new Set(transferCats);
   const incSet = new Set(incomeCats);
 
-  // Per-category period budgets. When snapshots are supplied, the range may
-  // span multiple budget "eras" (live vs. one or more historical snapshots),
+  // Per-category period budgets. When milestones are supplied, the range may
+  // span multiple budget "eras" (live vs. one or more historical milestones),
   // so we accumulate each era's contribution separately and sum per category.
-  // When no snapshots are supplied, this reduces to the original single-era
+  // When no milestones are supplied, this reduces to the original single-era
   // budgetByCategory(exp, days, basis) call.
-  const expBudget = eraAwareBudget(exp, snapshots, fromIso, toIso, basis, todayIso);
+  const expBudget = eraAwareBudget(exp, milestones, fromIso, toIso, basis, todayIso);
   const savBudget = budgetByCategory(sav, days, basis);
 
   // Filter transactions to range + drop transfer-category rows up front (belt
@@ -475,7 +475,7 @@ export function monthlyBuckets(opts) {
     toIso,
     basis = 48,
     category = null,          // null = all; otherwise single expense category name
-    snapshots = [],           // optional — enables per-era historical budgets
+    milestones = [],           // optional — enables per-era historical budgets
     todayIso,                 // optional — controls live-override cutoff (default: real today)
     treatRefundsAsNetting = true,
   } = opts || {};
@@ -552,7 +552,7 @@ export function monthlyBuckets(opts) {
     // the start/end of a month, that single bucket is prorated by the fraction
     // of the month included: e.g. range "Apr 15 → Apr 30" renders April at
     // 16/30 of the full-month budget. Middle buckets are always full-month.
-    const bucketExp = pickBudgetForDate(exp, snapshots, bucketFromIso, todayIso);
+    const bucketExp = pickBudgetForDate(exp, milestones, bucketFromIso, todayIso);
     const fullMonthDays = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
     const frac = fullMonthDays > 0 ? days / fullMonthDays : 1;
     let budgeted = 0;
@@ -565,8 +565,8 @@ export function monthlyBuckets(opts) {
       }
     } else {
       // Total monthly budget, narrowed to `cats` when the caller scoped it.
-      // Without this narrowing, a snapshot's reconstructed `exp` would include
-      // every category the snapshot ever had — even when the user filtered
+      // Without this narrowing, a milestone's reconstructed `exp` would include
+      // every category the milestone ever had — even when the user filtered
       // the table to one category — producing a budget line that doesn't match
       // what's being compared against.
       for (const it of (bucketExp || [])) {
@@ -598,22 +598,22 @@ export function monthlyBuckets(opts) {
 
 /* ── Internal helpers ── */
 
-/* Sum budget contributions across whichever snapshot "eras" intersect the
-   [fromIso, toIso] range. Splits the range at each snapshot date where a
+/* Sum budget contributions across whichever milestone "eras" intersect the
+   [fromIso, toIso] range. Splits the range at each milestone date where a
    different budget takes effect, and for each sub-range uses the budget that
    pickBudgetForDate selects (carry-forward from nearest-on-or-before, with
-   carry-backward for pre-earliest). When no snapshots are supplied (or none
+   carry-backward for pre-earliest). When no milestones are supplied (or none
    are eligible), this reduces to one call to budgetByCategory over the full
    range. */
-function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis, todayIso) {
+function eraAwareBudget(liveExp, milestones, fromIso, toIso, basis, todayIso) {
   const totalDays = daysInRange(fromIso, toIso);
   if (!totalDays) return new Map();
 
-  // Collect snapshot dates that could mark era boundaries. A snapshot is a
+  // Collect milestone dates that could mark era boundaries. A milestone is a
   // boundary if pickBudgetForDate would select a different budget for dates
-  // ≥ its date versus just before. We simplify by treating any snapshot with
+  // ≥ its date versus just before. We simplify by treating any milestone with
   // either fullState.exp or a non-trivial items dict as a potential boundary.
-  const eligibleDates = (Array.isArray(snapshots) ? snapshots : [])
+  const eligibleDates = (Array.isArray(milestones) ? milestones : [])
     .filter(s => {
       if (!s || !s.date) return false;
       if (Array.isArray(s?.fullState?.exp) && s.fullState.exp.length > 0) return true;
@@ -627,13 +627,13 @@ function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis, todayIso) {
     .map(s => s.date)
     .sort((a, b) => a.localeCompare(b));
 
-  // No eligible snapshots → single era, full range, live budget.
+  // No eligible milestones → single era, full range, live budget.
   if (eligibleDates.length === 0) {
     return budgetByCategory(liveExp, totalDays, basis);
   }
 
   // Determine era boundaries inside [fromIso, toIso]. A new era starts on each
-  // eligible snapshot date that falls strictly after fromIso.
+  // eligible milestone date that falls strictly after fromIso.
   const cutoffs = [fromIso];
   for (const d of eligibleDates) {
     if (d > fromIso && d <= toIso) cutoffs.push(d);
@@ -655,7 +655,7 @@ function eraAwareBudget(liveExp, snapshots, fromIso, toIso, basis, todayIso) {
   for (const era of eras) {
     const eraDays = daysInRange(era.startIso, era.endIso);
     if (!eraDays) continue;
-    const eraExp = pickBudgetForDate(liveExp, snapshots, era.startIso, todayIso);
+    const eraExp = pickBudgetForDate(liveExp, milestones, era.startIso, todayIso);
     const partial = budgetByCategory(eraExp, eraDays, basis);
     for (const [c, v] of partial) {
       out.set(c, (out.get(c) || 0) + v);

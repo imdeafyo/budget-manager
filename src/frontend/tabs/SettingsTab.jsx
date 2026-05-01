@@ -1066,7 +1066,7 @@ function PreviewModal({ preview, onClose, onRestore }) {
           <tbody>
             <DiffRow name="Expense items" d={diff.exp} />
             <DiffRow name="Savings items" d={diff.sav} />
-            <DiffRow name="Snapshots" d={diff.snapshots} />
+            <DiffRow name="Milestones" d={diff.milestones} />
             <DiffRow name="Transactions" d={diff.transactions} />
             <DiffRow name="P1 salary" d={diff.cSal} format={n => `$${n.toLocaleString()}`} />
             <DiffRow name="P2 salary" d={diff.kSal} format={n => `$${n.toLocaleString()}`} />

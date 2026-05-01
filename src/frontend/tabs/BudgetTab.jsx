@@ -1,7 +1,7 @@
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 
-export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, snapshots, NI: _ni }) {
+export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, NI: _ni }) {
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "4px 12px 2px", background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", borderTop: `1px solid ${dk ? "#333" : waf ? "#c0bbb5" : "#ddd"}` }}>
       <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
@@ -67,7 +67,7 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
   );
 }
 
-export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, snapshots, setSnapshots, recalcSnap }) {
+export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, milestones, setMilestones, recalcMilestone }) {
   return (
     <div>
 
@@ -232,7 +232,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         </div>
       )}
 
-      {/* Bulk add to multiple snapshots + current */}
+      {/* Bulk add to multiple milestones + current */}
       {showBulkAdd && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowBulkAdd(false)}>
           <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 28, maxWidth: 560, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", maxHeight: "85vh", overflowY: "auto" }}>
@@ -261,11 +261,11 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
                   <span style={{ fontSize: 13, fontWeight: 600 }}>Current Budget</span>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 6, marginBottom: 6 }}>
-                  <button onClick={() => { const t = { current: !!bulkTargets.current }; snapshots.forEach(s => { t[s.id] = true; }); setBulkTargets(t); }} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: "1px solid #556FB5", borderRadius: 4, background: "#EEF1FA", color: "#556FB5", cursor: "pointer" }}>Select All Snapshots</button>
+                  <button onClick={() => { const t = { current: !!bulkTargets.current }; milestones.forEach(s => { t[s.id] = true; }); setBulkTargets(t); }} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: "1px solid #556FB5", borderRadius: 4, background: "#EEF1FA", color: "#556FB5", cursor: "pointer" }}>Select All Milestones</button>
                   <button onClick={() => { setBulkTargets({ current: !!bulkTargets.current }); }} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr, #ddd)", borderRadius: 4, background: "transparent", color: "var(--tx3, #888)", cursor: "pointer" }}>Deselect All</button>
                 </div>
                 <div style={{ maxHeight: 200, overflowY: "auto" }}>
-                  {[...snapshots].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(s => (
+                  {[...milestones].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(s => (
                     <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--bdr, #f0f0f0)" }}>
                       <input type="checkbox" checked={!!bulkTargets[s.id]} onChange={e => setBulkTargets(p => ({ ...p, [s.id]: e.target.checked }))} />
                       <span style={{ fontSize: 11, color: "var(--tx3, #888)", minWidth: 70 }}>{s.date}</span>
@@ -291,10 +291,10 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
                   }
                   const selectedIds = Object.entries(bulkTargets).filter(([k, v]) => k !== "current" && v).map(([k]) => +k || k);
                   if (selectedIds.length > 0) {
-                    setSnapshots(prev => prev.map(s => {
+                    setMilestones(prev => prev.map(s => {
                       if (!selectedIds.includes(s.id)) return s;
                       const it = { ...(s.items || {}), [name]: { v: yearly, t: bulkSec === "exp" ? bulkType : "S", c: bulkCat || "" } };
-                      return recalcSnap({ ...s, items: it });
+                      return recalcMilestone({ ...s, items: it });
                     }));
                   }
                   setShowBulkAdd(false);
