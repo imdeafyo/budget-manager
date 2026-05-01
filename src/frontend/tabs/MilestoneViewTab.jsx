@@ -52,7 +52,15 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
           const skNet = skw - skPreW - sk4preW - sk4roW - skFed - skSS - skMc - skSt - skFL - skPostW;
           const mNetW = scNet + skNet;
           const netY = mNetW * 48;
+          const netY52 = mNetW * 52;
+          // Match the live BudgetTab math: expenses are fixed dollar amounts
+          // (rent doesn't increase if you got more paychecks), savings is a
+          // weekly rate so it scales 48→52, income scales 48→52. Remaining
+          // therefore differs between y48 and y52 — Y52 captures the extra
+          // 4 paychecks worth of income that aren't already allocated.
+          const savW = savT / 48;
           const remY = netY - expT - savT;
+          const remY52 = netY52 - expT - savW * 52;
           const cNetY = scNet * 48, kNetY = skNet * 48;
 
           const upMs = (field, val) => { const n = [...milestones]; n[viewingMs] = recalcMilestone({ ...n[viewingMs], [field]: val }); setMilestones(n); };
@@ -201,10 +209,10 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                 <Row label="Total Expenses" wk={expT / 48} mo={expT / 12} y48={expT} y52={expT} bold border />
                 {savItems.length > 0 && <SH color="#2ECC71">Savings</SH>}
                 {savItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
-                {savItems.length > 0 && <Row label="Total Savings" wk={savT / 48} mo={savT / 12} y48={savT} y52={savT * 52 / 48} bold border color="#2ECC71" />}
+                {savItems.length > 0 && <Row label="Total Savings" wk={savW} mo={savT / 12} y48={savT} y52={savW * 52} bold border color="#2ECC71" />}
                 <button onClick={() => addMsItem("S")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Savings</button>
                 <div style={{ marginTop: 8, padding: "10px 8px", background: remY >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-                  <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY * 52 / 48} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
+                  <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY52} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
                 </div>
               </>; })()}
               </Card>

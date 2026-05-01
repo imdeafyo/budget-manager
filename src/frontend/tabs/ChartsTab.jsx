@@ -4,7 +4,7 @@ import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 import { buildMonthlyIncomeSeries, incomeCategories, windowRange } from "../utils/income.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, msHistView, setMsHistView, msHistYear, setMsHistYear, setViewingMs, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], incomeCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, msHistView, setMsHistView, msHistYear, setMsHistYear, setViewingMs, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
   // Local UI state for the income history chart's category-type toggle.
   // "all" = Total line only; any other value = just that single category line.
   const [incomeTypeSel, setIncomeTypeSel] = useState("all");
@@ -33,7 +33,7 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, set
                     eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
                     cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
                     items: itemMs,
-                    fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, tax },
+                    fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats, transferCats, incomeCats, tax },
                   }]);
                   setMsLabel(""); setMsDate("");
                   // Pair every saved milestone with a backup-history row so the user has a recovery

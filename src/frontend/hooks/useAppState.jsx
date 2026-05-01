@@ -448,7 +448,11 @@ export default function useAppState() {
       if (fs.c4pre !== undefined) setC4pre(fs.c4pre); if (fs.c4ro !== undefined) setC4ro(fs.c4ro);
       if (fs.k4pre !== undefined) setK4pre(fs.k4pre); if (fs.k4ro !== undefined) setK4ro(fs.k4ro);
       if (fs.exp) setExp(fs.exp); if (fs.sav) setSav(fs.sav);
-      if (fs.cats) setCats(fs.cats); if (fs.tax) setTax(fs.tax);
+      if (fs.cats) setCats(fs.cats);
+      if (fs.savCats) setSavCats(fs.savCats);
+      if (fs.transferCats) setTransferCats(fs.transferCats);
+      if (fs.incomeCats) setIncomeCats(fs.incomeCats);
+      if (fs.tax) setTax(fs.tax);
     } else if (m?.items) {
       const newExp = []; const newSav = []; const newCats = new Set(cats);
       Object.entries(m.items).forEach(([name, data]) => {
