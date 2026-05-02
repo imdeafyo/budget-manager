@@ -111,14 +111,13 @@ export default function TransactionsTab(props) {
   // pairKey = `${aId}|${bId}` — stable per candidate, survives re-sorts.
   const [transferModal, setTransferModal] = useState(null);
 
-  // Apply preset to date fields. "All time" (empty preset) clears dateFrom/dateTo.
-  // Non-empty preset values resolve to a concrete date range.
+  // Apply preset to date fields. Only acts on non-empty presets — clearing the
+  // preset (which happens whenever the user edits a date input or the chart
+  // sets dates directly) must NOT touch dateFrom/dateTo, otherwise picking a
+  // preset and then nudging a date wipes the whole range. "All time" is
+  // handled explicitly in the preset <select>'s onChange below.
   useEffect(() => {
-    if (!preset) {
-      setDateFrom("");
-      setDateTo("");
-      return;
-    }
+    if (!preset) return;
     const r = presetRange(preset);
     setDateFrom(r.dateFrom);
     setDateTo(r.dateTo);
@@ -552,7 +551,14 @@ export default function TransactionsTab(props) {
             <div>
               <label style={lbl()}>Date range</label>
               <div style={{ display: "flex", gap: 4 }}>
-                <select value={preset} onChange={e => setPreset(e.target.value)} style={{ ...inp(), flex: 1 }}>
+                <select value={preset} onChange={e => {
+                  const v = e.target.value;
+                  setPreset(v);
+                  // "All time" must clear dates explicitly — the preset effect
+                  // only acts on non-empty presets so that manual date edits
+                  // (which also clear the preset) don't wipe the range.
+                  if (!v) { setDateFrom(""); setDateTo(""); }
+                }} style={{ ...inp(), flex: 1 }}>
                   {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                 </select>
                 <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPreset(""); }} style={{ ...inp(), flex: 1 }} />
