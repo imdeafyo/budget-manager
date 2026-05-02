@@ -7,6 +7,7 @@ import TaxRatesTab from "./tabs/TaxRatesTab.jsx";
 import BudgetTab, { BudgetToolbar } from "./tabs/BudgetTab.jsx";
 import ChartsTab from "./tabs/ChartsTab.jsx";
 import MilestoneViewTab from "./tabs/MilestoneViewTab.jsx";
+import MilestonesSubtab from "./tabs/MilestonesSubtab.jsx";
 import ForecastTab from "./tabs/ForecastTab.jsx";
 import TransactionsTab from "./tabs/TransactionsTab.jsx";
 import SettingsTab from "./tabs/SettingsTab.jsx";
@@ -69,13 +70,29 @@ export default function App() {
             <button style={S.ts(S.tab === "budget")} onClick={() => S.setTab("budget")}>Budget</button>
             <button style={S.ts(S.tab === "transactions")} onClick={() => S.setTab("transactions")}>Transactions</button>
             <button style={S.ts(S.tab === "charts")} onClick={() => S.setTab("charts")}>Charts</button>
-            <button style={S.ts(S.tab === "forecast")} onClick={() => S.setTab("forecast")}>Forecast</button>
             <button style={S.ts(S.tab === "cats")} onClick={() => S.setTab("cats")}>Categories</button>
             <button style={S.ts(S.tab === "prefs")} onClick={() => S.setTab("prefs")}>Settings</button>
           </div>
+          {/* Subtab pill row — only shown for tabs that have subtabs (Budget, Charts). */}
+          {(S.tab === "budget" || S.tab === "charts") && (
+            <div style={{ display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto" }}>
+              {S.tab === "budget" && [["live", "Live"], ["milestones", "Milestones"]].map(([k, l]) => {
+                const active = S.budgetSubtab === k;
+                return (
+                  <button key={k} onClick={() => S.setBudgetSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
+                );
+              })}
+              {S.tab === "charts" && [["trends", "Trends"], ["forecast", "Forecast"]].map(([k, l]) => {
+                const active = S.chartsSubtab === k;
+                return (
+                  <button key={k} onClick={() => S.setChartsSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
+                );
+              })}
+            </div>
+          )}
         </div>
         {/* Banner + Toolbar - inside sticky header, only on budget tab */}
-        {S.tab === "budget" && S.viewingMs === null && <BudgetToolbar mob={S.mob} dk={S.dk} waf={S.waf} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} tSavW={S.tSavW} remY52={S.remY52} bannerOpen={S.bannerOpen} setBannerOpen={S.setBannerOpen} toolbarOpen={S.toolbarOpen} setToolbarOpen={S.setToolbarOpen} visCols={S.visCols} setVisCols={S.setVisCols} sortBy={S.sortBy} setSortBy={S.setSortBy} sortDir={S.sortDir} setSortDir={S.setSortDir} hlThresh={S.hlThresh} setHlThresh={S.setHlThresh} hlPeriod={S.hlPeriod} setHlPeriod={S.setHlPeriod} showPerPerson={S.showPerPerson} setShowPerPerson={S.setShowPerPerson} isMixed={S.isMixed} allExpanded={S.allExpanded} expandAll={S.expandAll} collapseAll={S.collapseAll} toggleAll={S.toggleAll} setShowAddItem={S.setShowAddItem} setShowBulkAdd={S.setShowBulkAdd} cats={S.cats} setBulkTargets={S.setBulkTargets} setBulkName={S.setBulkName} setBulkVal={S.setBulkVal} setBulkCat={S.setBulkCat} milestones={S.milestones} />}
+        {S.tab === "budget" && S.budgetSubtab === "live" && <BudgetToolbar mob={S.mob} dk={S.dk} waf={S.waf} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} tSavW={S.tSavW} remY52={S.remY52} bannerOpen={S.bannerOpen} setBannerOpen={S.setBannerOpen} toolbarOpen={S.toolbarOpen} setToolbarOpen={S.setToolbarOpen} visCols={S.visCols} setVisCols={S.setVisCols} sortBy={S.sortBy} setSortBy={S.setSortBy} sortDir={S.sortDir} setSortDir={S.setSortDir} hlThresh={S.hlThresh} setHlThresh={S.setHlThresh} hlPeriod={S.hlPeriod} setHlPeriod={S.setHlPeriod} showPerPerson={S.showPerPerson} setShowPerPerson={S.setShowPerPerson} isMixed={S.isMixed} allExpanded={S.allExpanded} expandAll={S.expandAll} collapseAll={S.collapseAll} toggleAll={S.toggleAll} setShowAddItem={S.setShowAddItem} setShowBulkAdd={S.setShowBulkAdd} cats={S.cats} setBulkTargets={S.setBulkTargets} setBulkName={S.setBulkName} setBulkVal={S.setBulkVal} setBulkCat={S.setBulkCat} milestones={S.milestones} setMilestones={S.setMilestones} msDate={S.msDate} setMsDate={S.setMsDate} msLabel={S.msLabel} setMsLabel={S.setMsLabel} ewk={S.ewk} savSorted={S.savSorted} st={S.st} C_full={S.C} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW_full={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} exp={S.exp} sav={S.sav} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} tax={S.tax} />}
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: S.mob ? "12px 10px 60px" : "24px 20px 60px" }}>
@@ -89,16 +106,44 @@ export default function App() {
         {/* ═══ CATEGORIES ═══ */}
         {S.tab === "cats" && <CategoriesTab mob={S.mob} cats={S.cats} setCats={S.setCats} newCat={S.newCat} setNewCat={S.setNewCat} savCats={S.savCats} setSavCats={S.setSavCats} transferCats={S.transferCats} setTransferCats={S.setTransferCats} incomeCats={S.incomeCats} setIncomeCats={S.setIncomeCats} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} transactions={S.transactions} setTransactions={S.setTransactions} />}
 
-        {/* ═══ BUDGET MILESTONE VIEW ═══ */}
-        {S.tab === "budget" && S.viewingMs !== null && S.milestones[S.viewingMs] && <MilestoneViewTab mob={S.mob} viewingMs={S.viewingMs} setViewingMs={S.setViewingMs} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} msVisCols={S.msVisCols} setMsVisCols={S.setMsVisCols} msTab={S.msTab} setMsTab={S.setMsTab} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} allTaxDB={S.allTaxDB} fil={S.fil} cats={S.cats} savCats={S.savCats} />}
+        {/* ═══ BUDGET — Live subtab ═══ */}
+        {S.tab === "budget" && S.budgetSubtab === "live" && <BudgetTab mob={S.mob} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} visCols={S.visCols} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} preDed={S.preDed} postDed={S.postDed} showPerPerson={S.showPerPerson} collapsed={S.collapsed} toggleSec={S.toggleSec} necI={S.necI} disI={S.disI} savSorted={S.savSorted} cats={S.cats} savCats={S.savCats} updExp={S.updExp} updSav={S.updSav} rmExp={S.rmExp} rmSav={S.rmSav} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} remY48={S.remY48} remY52={S.remY52} totalSavPlusRemW={S.totalSavPlusRemW} showAddItem={S.showAddItem} setShowAddItem={S.setShowAddItem} niN={S.niN} setNiN={S.setNiN} niC={S.niC} setNiC={S.setNiC} niT={S.niT} setNiT={S.setNiT} niS={S.niS} setNiS={S.setNiS} niP={S.niP} setNiP={S.setNiP} niV={S.niV} setNiV={S.setNiV} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} showBulkAdd={S.showBulkAdd} setShowBulkAdd={S.setShowBulkAdd} bulkName={S.bulkName} setBulkName={S.setBulkName} bulkVal={S.bulkVal} setBulkVal={S.setBulkVal} bulkPer={S.bulkPer} setBulkPer={S.setBulkPer} bulkType={S.bulkType} setBulkType={S.setBulkType} bulkSec={S.bulkSec} setBulkSec={S.setBulkSec} bulkCat={S.bulkCat} setBulkCat={S.setBulkCat} bulkTargets={S.bulkTargets} setBulkTargets={S.setBulkTargets} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} />}
 
-        {S.tab === "budget" && S.viewingMs === null && <BudgetTab mob={S.mob} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} visCols={S.visCols} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} preDed={S.preDed} postDed={S.postDed} showPerPerson={S.showPerPerson} collapsed={S.collapsed} toggleSec={S.toggleSec} necI={S.necI} disI={S.disI} savSorted={S.savSorted} cats={S.cats} savCats={S.savCats} updExp={S.updExp} updSav={S.updSav} rmExp={S.rmExp} rmSav={S.rmSav} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} remY48={S.remY48} remY52={S.remY52} totalSavPlusRemW={S.totalSavPlusRemW} showAddItem={S.showAddItem} setShowAddItem={S.setShowAddItem} niN={S.niN} setNiN={S.setNiN} niC={S.niC} setNiC={S.setNiC} niT={S.niT} setNiT={S.setNiT} niS={S.niS} setNiS={S.setNiS} niP={S.niP} setNiP={S.setNiP} niV={S.niV} setNiV={S.setNiV} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} showBulkAdd={S.showBulkAdd} setShowBulkAdd={S.setShowBulkAdd} bulkName={S.bulkName} setBulkName={S.setBulkName} bulkVal={S.bulkVal} setBulkVal={S.setBulkVal} bulkPer={S.bulkPer} setBulkPer={S.setBulkPer} bulkType={S.bulkType} setBulkType={S.setBulkType} bulkSec={S.bulkSec} setBulkSec={S.setBulkSec} bulkCat={S.bulkCat} setBulkCat={S.setBulkCat} bulkTargets={S.bulkTargets} setBulkTargets={S.setBulkTargets} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} />}
+        {/* ═══ BUDGET — Milestones subtab. Toggles between list mode (no milestone selected)
+             and detail mode (viewingMs set). MilestoneViewTab is now inlined here instead
+             of being its own top-level page. ═══ */}
+        {S.tab === "budget" && S.budgetSubtab === "milestones" && S.viewingMs === null && (
+          <MilestonesSubtab mob={S.mob} milestones={S.milestones} setMilestones={S.setMilestones} msHistView={S.msHistView} setMsHistView={S.setMsHistView} msHistYear={S.msHistYear} setMsHistYear={S.setMsHistYear} setViewingMs={S.setViewingMs} setRestoreConfirm={S.setRestoreConfirm} />
+        )}
+        {S.tab === "budget" && S.budgetSubtab === "milestones" && S.viewingMs !== null && S.milestones[S.viewingMs] && (
+          <MilestoneViewTab mob={S.mob} viewingMs={S.viewingMs} setViewingMs={S.setViewingMs} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} msVisCols={S.msVisCols} setMsVisCols={S.setMsVisCols} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} allTaxDB={S.allTaxDB} fil={S.fil} cats={S.cats} savCats={S.savCats} setRestoreConfirm={S.setRestoreConfirm} />
+        )}
 
-        {/* ═══ CHARTS ═══ */}
-        {S.tab === "charts" && <ChartsTab mob={S.mob} C={S.C} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} milestones={S.milestones} setMilestones={S.setMilestones} msDate={S.msDate} setMsDate={S.setMsDate} msLabel={S.msLabel} setMsLabel={S.setMsLabel} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} exp={S.exp} sav={S.sav} cats={S.cats} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} transactions={S.transactions} ewk={S.ewk} savSorted={S.savSorted} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} savRateBase={S.savRateBase} setSavRateBase={S.setSavRateBase} includeEaip={S.includeEaip} setIncludeEaip={S.setIncludeEaip} chartWeeks={S.chartWeeks} setChartWeeks={S.setChartWeeks} chartTimeWindow={S.chartTimeWindow} setChartTimeWindow={S.setChartTimeWindow} catTot={S.catTot} typTot={S.typTot} PieTooltip={S.PieTooltip} dragWrapRender={S.dragWrapRender} chartOrder={S.chartOrder} necDisMode={S.necDisMode} setNecDisMode={S.setNecDisMode} catHistMode={S.catHistMode} setCatHistMode={S.setCatHistMode} itemHistMode={S.itemHistMode} setItemHistMode={S.setItemHistMode} catHistoryName={S.catHistoryName} setCatHistoryName={S.setCatHistoryName} itemHistoryName={S.itemHistoryName} setItemHistoryName={S.setItemHistoryName} msHistView={S.msHistView} setMsHistView={S.setMsHistView} msHistYear={S.msHistYear} setMsHistYear={S.setMsHistYear} setViewingMs={S.setViewingMs} setTab={S.setTab} restoreConfirm={S.restoreConfirm} setRestoreConfirm={S.setRestoreConfirm} restoreFullState={S.restoreFullState} st={S.st} restoreLiveState={S.restoreLiveState} />}
+        {/* Restore confirm modal — lives at the budget tab level so it can be triggered
+             from both the milestone list and from inside MilestoneViewTab. */}
+        {S.tab === "budget" && S.budgetSubtab === "milestones" && S.restoreConfirm !== null && S.milestones[S.restoreConfirm] && (
+          <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => S.setRestoreConfirm(null)}>
+            <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 32, maxWidth: 440, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+              <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Restore Milestone?</h3>
+              <p style={{ fontSize: 14, color: "var(--tx2,#555)", margin: "0 0 8px" }}>This will replace your <strong>entire current budget</strong> with:</p>
+              <div style={{ padding: "10px 14px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, marginBottom: 16 }}>
+                <div style={{ fontWeight: 700, color: "var(--tx,#333)" }}>{S.milestones[S.restoreConfirm]?.label}</div>
+                <div style={{ fontSize: 12, color: "var(--tx3,#888)" }}>{S.milestones[S.restoreConfirm]?.date}</div>
+              </div>
+              <p style={{ fontSize: 13, color: "#E8573A", margin: "0 0 20px" }}>Consider saving a milestone of your current budget first.</p>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button onClick={() => S.setRestoreConfirm(null)} style={{ padding: "9px 20px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
+                <button onClick={() => { S.restoreFullState(S.restoreConfirm); S.setRestoreConfirm(null); S.setViewingMs(null); S.setBudgetSubtab("live"); }} style={{ padding: "9px 20px", background: "#E8573A", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Restore</button>
+              </div>
+            </div>
+          </div>
+        )}
 
-        {/* ═══ FORECAST ═══ */}
-        {S.tab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} />}
+        {/* ═══ CHARTS — Trends subtab (default) ═══ */}
+        {S.tab === "charts" && S.chartsSubtab === "trends" && <ChartsTab mob={S.mob} C={S.C} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} milestones={S.milestones} setMilestones={S.setMilestones} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} exp={S.exp} sav={S.sav} cats={S.cats} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} transactions={S.transactions} ewk={S.ewk} savSorted={S.savSorted} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} savRateBase={S.savRateBase} setSavRateBase={S.setSavRateBase} includeEaip={S.includeEaip} setIncludeEaip={S.setIncludeEaip} chartWeeks={S.chartWeeks} setChartWeeks={S.setChartWeeks} chartTimeWindow={S.chartTimeWindow} setChartTimeWindow={S.setChartTimeWindow} catTot={S.catTot} typTot={S.typTot} PieTooltip={S.PieTooltip} dragWrapRender={S.dragWrapRender} chartOrder={S.chartOrder} necDisMode={S.necDisMode} setNecDisMode={S.setNecDisMode} catHistMode={S.catHistMode} setCatHistMode={S.setCatHistMode} itemHistMode={S.itemHistMode} setItemHistMode={S.setItemHistMode} catHistoryName={S.catHistoryName} setCatHistoryName={S.setCatHistoryName} itemHistoryName={S.itemHistoryName} setItemHistoryName={S.setItemHistoryName} st={S.st} restoreLiveState={S.restoreLiveState} />}
+
+        {/* ═══ CHARTS — Forecast subtab (was top-level Forecast tab pre-restructure) ═══ */}
+        {S.tab === "charts" && S.chartsSubtab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} />}
 
         {/* ═══ TRANSACTIONS ═══ */}
         {S.tab === "transactions" && <TransactionsTab

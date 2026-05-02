@@ -1,7 +1,39 @@
+import { useState } from "react";
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 
-export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, NI: _ni }) {
+export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
+  // Save Milestone modal — moved from ChartsTab. Opens when 📸 button is clicked.
+  const [showSaveMs, setShowSaveMs] = useState(false);
+  const _Cf = C_full || C;
+  const saveMilestone = () => {
+    const itemMs = {};
+    (ewk || []).forEach(e => { itemMs[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
+    (savSorted || []).forEach(s => { itemMs[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
+    setMilestones(prev => [...prev, {
+      id: Date.now(), date: msDate || new Date().toISOString().slice(0, 10), label: msLabel || "Milestone",
+      grossW: _Cf.cw + _Cf.kw, netW: _Cf.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW_full,
+      remW, savRate: _Cf.net > 0 ? (totalSavPlusRemW / _Cf.net * 100) : 0,
+      savRateGross: (_Cf.cw + _Cf.kw) > 0 ? (totalSavPlusRemW / (_Cf.cw + _Cf.kw) * 100) : 0,
+      cNetW: _Cf.cNet, kNetW: _Cf.kNet, cGrossW: _Cf.cw, kGrossW: _Cf.kw,
+      cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
+      eaipNet: _Cf.eaipNet, eaipGross: _Cf.eaipGross, cEaipNet: _Cf.cEaipNet, kEaipNet: _Cf.kEaipNet,
+      cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
+      items: itemMs,
+      fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats, transferCats, incomeCats, tax },
+    }]);
+    setMsLabel(""); setMsDate("");
+    // Pair every saved milestone with a backup-history row. Wait out the 600ms
+    // auto-save debounce so the backup captures the freshly-saved state.
+    setTimeout(() => {
+      fetch("/api/history/snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "manual+pre-milestone" }),
+      }).catch(() => {});
+    }, 800);
+    setShowSaveMs(false);
+  };
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "4px 12px 2px", background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", borderTop: `1px solid ${dk ? "#333" : waf ? "#c0bbb5" : "#ddd"}` }}>
       <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
@@ -62,7 +94,31 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
         <button onClick={() => { setBulkTargets({ current: true }); setBulkName(""); setBulkVal(""); setBulkCat(cats[0]); setShowBulkAdd(true); }} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #9B59B6", borderRadius: 6, background: "#F3E8FF", color: "#9B59B6", cursor: "pointer" }}>
           + Add to Multiple
         </button>
+        <button onClick={() => { setMsDate(new Date().toISOString().slice(0, 10)); setMsLabel("Milestone"); setShowSaveMs(true); }} style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: "#EEF1FA", color: "#556FB5", cursor: "pointer" }}>
+          📸 Save Milestone
+        </button>
       </div>}
+      {showSaveMs && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setShowSaveMs(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 24, maxWidth: 440, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800, color: "var(--tx,#333)" }}>Save Milestone</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#999)" }}>Date</label>
+                <input type="date" value={msDate || new Date().toISOString().slice(0, 10)} onChange={e => setMsDate(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#999)" }}>Label</label>
+                <input value={msLabel} onChange={e => setMsLabel(e.target.value)} placeholder="What changed?" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+                <button onClick={() => setShowSaveMs(false)} style={{ padding: "9px 18px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
+                <button onClick={saveMilestone} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📸 Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

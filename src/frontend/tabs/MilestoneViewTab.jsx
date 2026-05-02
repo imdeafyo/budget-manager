@@ -3,7 +3,7 @@ import { Card, SH, NI, EditTxt, VisColsCtx, Row } from "../components/ui.jsx";
 import { evalF, calcFed, calcStateTax, getMarg, fmt, fp, p2 } from "../utils/calc.js";
 import { TAX_DB, STATE_ABBR, STATE_PAYROLL, DEF_PRE, DEF_POST } from "../data/taxDB.js";
 
-export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milestones, setMilestones, recalcMilestone, msVisCols, setMsVisCols, msTab, setMsTab, p1Name, p2Name, tax, allTaxDB, fil, cats, savCats }) {
+export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milestones, setMilestones, recalcMilestone, msVisCols, setMsVisCols, p1Name, p2Name, tax, allTaxDB, fil, cats, savCats, setRestoreConfirm }) {
   const m = milestones[viewingMs];
           const items = m.items || {};
           const necItems = Object.entries(items).filter(([, d]) => d.t === "N").sort((a, b) => a[0].localeCompare(b[0]));
@@ -137,19 +137,13 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                   <button disabled={prevMsIdx === null} onClick={() => prevMsIdx !== null && setViewingMs(prevMsIdx)} style={{ padding: "6px 10px", background: prevMsIdx !== null ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.05)", color: prevMsIdx !== null ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 700, cursor: prevMsIdx !== null ? "pointer" : "default" }}>◀</button>
                   <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", minWidth: 40, textAlign: "center" }}>{curPosInSorted + 1}/{sortedMsIdx.length}</span>
                   <button disabled={nextMsIdx === null} onClick={() => nextMsIdx !== null && setViewingMs(nextMsIdx)} style={{ padding: "6px 10px", background: nextMsIdx !== null ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.05)", color: nextMsIdx !== null ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 700, cursor: nextMsIdx !== null ? "pointer" : "default" }}>▶</button>
-                  <button onClick={() => setRestoreConfirm(viewingMs)} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore This</button>
+                  <button onClick={() => setRestoreConfirm && setRestoreConfirm(viewingMs)} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.2)", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Restore This</button>
                   <button onClick={() => { const clone = JSON.parse(JSON.stringify(m)); clone.id = Date.now(); clone.label = (clone.label || "Milestone") + " (copy)"; setMilestones(prev => { const n = [...prev, clone].sort((a, b) => (a.date || "").localeCompare(b.date || "")); const newIdx = n.findIndex(s => s.id === clone.id); setViewingMs(newIdx); return n; }); }} style={{ padding: "6px 14px", background: "rgba(255,255,255,0.2)", color: "#4ECDC4", border: "1px solid #4ECDC4", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>⧉ Clone</button>
-                  <button onClick={() => setViewingMs(null)} style={{ padding: "6px 14px", background: "#fff", color: "#556FB5", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>← Back to Current</button>
+                  <button onClick={() => setViewingMs(null)} style={{ padding: "6px 14px", background: "#fff", color: "#556FB5", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>← Back to milestones</button>
                 </div>
               </div>
-              {/* Milestone sub-tabs */}
-              <div style={{ display: "flex", gap: 2, marginBottom: 16 }}>
-                {[["budget", "Budget"], ["deductions", "Deductions"], ["tax", "Tax"]].map(([k, l]) => (
-                  <button key={k} onClick={() => setMsTab(k)} style={{ padding: "8px 18px", border: msTab === k ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 8, background: msTab === k ? "#EEF1FA" : "transparent", color: msTab === k ? "#556FB5" : "var(--tx3, #888)", fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "'DM Sans',sans-serif" }}>{l}</button>
-                ))}
-              </div>
-              {msTab === "budget" && <>
               <VisColsCtx.Provider value={{ wk: msVisCols.wk, mo: msVisCols.mo, y48: msVisCols.y48, y52: msVisCols.y52 }}>
+              {/* Top summary card — Income + salary + bonus + state inputs (formerly in budget sub-sub-tab) */}
               <Card dark style={{ marginBottom: 20 }}>
                 <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 12, textAlign: "center" }}>
                   {[["Net Income (yr)", fmt(netY), "#4ECDC4"], ["Necessity (yr)", fmt(necT), "#556FB5"], ["Discretionary (yr)", fmt(disT), "#E8573A"], ["Savings (yr)", fmt(savT), "#2ECC71"], ["Remaining (yr)", fmt(remY), remY >= 0 ? "#2ECC71" : "#E74C3C"]].map(([l, v, c]) => (
@@ -184,42 +178,93 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                 </div>
                 <div style={{ marginTop: 6, fontSize: 10, color: "#777", textAlign: "center" }}>Taxes auto-calculated from {mYr} rates • Combined gross: {fmt(mCS + mKS)}/yr</div>
               </Card>
-              <Card>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+
+              {/* Single Card mirroring live BudgetTab structure: Income → Pre-Tax → 401(k) → Taxes → Post-Tax → Net → Expenses → Savings → Remaining.
+                  Uses the per-paycheck breakdown variables already computed at the top of this component (scFed, scSS, scMc, scSt, scFL, scPreW/skPreW, scPostW/skPostW, sc4preW/sk4preW, sc4roW/sk4roW, scNet/skNet). */}
+              <Card style={{ overflowX: "auto", marginBottom: 20 }}>
+                {(() => { const cols = ["1.8fr", msVisCols.wk && "1fr", msVisCols.mo && "1fr", msVisCols.y48 && "1fr", msVisCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (msVisCols.wk) hdrs.push("Weekly"); if (msVisCols.mo) hdrs.push("Monthly"); if (msVisCols.y48) hdrs.push("Yr (48)"); if (msVisCols.y52) hdrs.push("Yr (52)"); return (
+                <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
+                  {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
+                </div>); })()}
+
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 0 4px" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "#999" }}>Columns:</span>
                   {[["wk", "Wk"], ["mo", "Mo"], ["y48", "Y×48"], ["y52", "Y×52"]].map(([k, l]) => (
                     <button key={k} onClick={() => setMsVisCols(p => ({ ...p, [k]: !p[k] }))} style={{ padding: "3px 10px", fontSize: 10, fontWeight: 600, border: msVisCols[k] ? "2px solid #556FB5" : "2px solid var(--bdr, #ddd)", borderRadius: 5, background: msVisCols[k] ? "#EEF1FA" : "transparent", color: msVisCols[k] ? "#556FB5" : "var(--tx3, #888)", cursor: "pointer" }}>{l}</button>
                   ))}
                 </div>
+
+                <SH>Income</SH>
+                <Row label={p1Name + " Salary"} wk={scw} mo={scw * 52 / 12} y48={scw * 48} y52={scw * 52} bold />
+                <Row label={p2Name + " Salary"} wk={skw} mo={skw * 52 / 12} y48={skw * 48} y52={skw * 52} bold />
+                <Row label="Combined Gross" wk={scw + skw} mo={(scw + skw) * 52 / 12} y48={(scw + skw) * 48} y52={(scw + skw) * 52} bold border />
+
+                {(scPreW + skPreW > 0) && <>
+                  <SH color="var(--c-pretax, #c0392b)">Pre-Tax Deductions</SH>
+                  <Row label="Pre-Tax Deductions" wk={-(scPreW + skPreW)} mo={-(scPreW + skPreW) * 52 / 12} y48={-(scPreW + skPreW) * 48} y52={-(scPreW + skPreW) * 52} color="var(--c-pretax, #c0392b)" />
+                </>}
+
+                {(sc4preW + sk4preW > 0 || sc4roW + sk4roW > 0) && <>
+                  <SH color="var(--c-presav, #1ABC9C)">401(k) Contributions</SH>
+                  {sc4preW + sk4preW > 0 && <Row label="💰 401(k) Pre-Tax" wk={sc4preW + sk4preW} mo={(sc4preW + sk4preW) * 52 / 12} y48={(sc4preW + sk4preW) * 48} y52={(sc4preW + sk4preW) * 52} color="var(--c-presav, #1ABC9C)" />}
+                  {sc4roW + sk4roW > 0 && <Row label="Roth 401(k)" wk={-(sc4roW + sk4roW)} mo={-(sc4roW + sk4roW) * 52 / 12} y48={-(sc4roW + sk4roW) * 48} y52={-(sc4roW + sk4roW) * 52} color="var(--c-posttax, #9B59B6)" />}
+                </>}
+
+                <SH color="var(--c-taxable, #556FB5)">Taxable Pay</SH>
+                <Row label="Combined Taxable" wk={scTxW + skTxW} mo={(scTxW + skTxW) * 52 / 12} y48={(scTxW + skTxW) * 48} y52={(scTxW + skTxW) * 52} bold color="var(--c-taxable, #556FB5)" />
+
+                <SH color="var(--c-fedtax, #1a5276)">Federal Taxes</SH>
+                <Row label="Fed Withholding" wk={-(scFed + skFed)} mo={-(scFed + skFed) * 52 / 12} y48={-(scFed + skFed) * 48} y52={-(scFed + skFed) * 52} color="var(--c-fedtax, #1a5276)" />
+                <Row label="OASDI (SS)" wk={-(scSS + skSS)} mo={-(scSS + skSS) * 52 / 12} y48={-(scSS + skSS) * 48} y52={-(scSS + skSS) * 52} color="var(--c-fedtax, #1a5276)" />
+                <Row label="Medicare" wk={-(scMc + skMc)} mo={-(scMc + skMc) * 52 / 12} y48={-(scMc + skMc) * 48} y52={-(scMc + skMc) * 52} color="var(--c-fedtax, #1a5276)" />
+
+                <SH color="var(--c-sttax, #8B4513)">State Taxes ({mP1s.abbr || "ST"}{mP2s.abbr && mP2s.abbr !== mP1s.abbr ? `/${mP2s.abbr}` : ""})</SH>
+                <Row label={`${mP1s.abbr || "ST"} State Tax`} wk={-(scSt + skSt)} mo={-(scSt + skSt) * 52 / 12} y48={-(scSt + skSt) * 48} y52={-(scSt + skSt) * 52} color="var(--c-sttax, #8B4513)" />
+                <Row label={`${mP1s.abbr || "ST"} Payroll Tax`} wk={-(scFL + skFL)} mo={-(scFL + skFL) * 52 / 12} y48={-(scFL + skFL) * 48} y52={-(scFL + skFL) * 52} color="var(--c-sttax, #8B4513)" />
+
+                <Row label="Total Taxes" wk={-(scFed + skFed + scSS + skSS + scMc + skMc + scSt + skSt + scFL + skFL)} mo={-(scFed + skFed + scSS + skSS + scMc + skMc + scSt + skSt + scFL + skFL) * 52 / 12} y48={-(scFed + skFed + scSS + skSS + scMc + skMc + scSt + skSt + scFL + skFL) * 48} y52={-(scFed + skFed + scSS + skSS + scMc + skMc + scSt + skSt + scFL + skFL) * 52} bold border color="var(--c-totaltax, #E8573A)" />
+
+                {(scPostW + skPostW > 0) && <>
+                  <SH color="var(--c-posttax, #9B59B6)">Post-Tax Deductions</SH>
+                  <Row label="Post-Tax Deductions" wk={-(scPostW + skPostW)} mo={-(scPostW + skPostW) * 52 / 12} y48={-(scPostW + skPostW) * 48} y52={-(scPostW + skPostW) * 52} color="var(--c-posttax, #9B59B6)" />
+                </>}
+
+                <div style={{ marginTop: 8, padding: "10px 0", borderTop: "3px solid #1a1a1a", borderBottom: "3px solid #1a1a1a" }}>
+                  <Row label="✦ Combined Net Paycheck" wk={mNetW} mo={mNetW * 52 / 12} y48={mNetW * 48} y52={mNetW * 52} bold />
+                  <div style={{ padding: "4px 0", fontSize: 12, color: "var(--tx3,#888)" }}>{p1Name}: {fmt(scNet)}/wk ({fmt(scNet * 52)}/yr) • {p2Name}: {fmt(skNet)}/wk ({fmt(skNet * 52)}/yr)</div>
+                </div>
+
                 {(() => {
                   const svc = msVisCols;
                   const mCols = ["50px", "1.6fr", "90px", svc.wk && "1fr", svc.mo && "1fr", svc.y48 && "1fr", svc.y52 && "1fr", "20px"].filter(Boolean).join(" ");
                   return <>
-                <div style={{ display: "grid", gridTemplateColumns: mCols, gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
-                  <span>Type</span><span>Name</span><span>Category</span>{svc.wk && <span style={{ textAlign: "right" }}>Weekly</span>}{svc.mo && <span style={{ textAlign: "right" }}>Monthly</span>}{svc.y48 && <span style={{ textAlign: "right" }}>Yearly (48)</span>}{svc.y52 && <span style={{ textAlign: "right" }}>Yearly (52)</span>}<span />
-                </div>
-                {necItems.length > 0 && <SH color="var(--c-taxable, #556FB5)">Necessity</SH>}
-                {necItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
-                {necItems.length > 0 && <Row label="Subtotal — Necessity" wk={necT / 48} mo={necT / 12} y48={necT} y52={necT} bold border color="var(--c-taxable, #556FB5)" />}
-                <button onClick={() => addMsItem("N")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Necessity</button>
-                {disItems.length > 0 && <SH color="var(--c-totaltax, #E8573A)">Discretionary</SH>}
-                {disItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
-                {disItems.length > 0 && <Row label="Subtotal — Discretionary" wk={disT / 48} mo={disT / 12} y48={disT} y52={disT} bold border color="var(--c-totaltax, #E8573A)" />}
-                <button onClick={() => addMsItem("D")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Discretionary</button>
-                <Row label="Total Expenses" wk={expT / 48} mo={expT / 12} y48={expT} y52={expT} bold border />
-                {savItems.length > 0 && <SH color="#2ECC71">Savings</SH>}
-                {savItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
-                {savItems.length > 0 && <Row label="Total Savings" wk={savW} mo={savT / 12} y48={savT} y52={savW * 52} bold border color="#2ECC71" />}
-                <button onClick={() => addMsItem("S")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Savings</button>
-                <div style={{ marginTop: 8, padding: "10px 8px", background: remY >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-                  <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY52} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
-                </div>
-              </>; })()}
+                  <div style={{ display: "grid", gridTemplateColumns: mCols, gap: 4, padding: "6px 0", borderBottom: "2px solid #d0cdc8", fontSize: 9, fontWeight: 700, color: "#999", textTransform: "uppercase", marginTop: 12 }}>
+                    <span>Type</span><span>Name</span><span>Category</span>{svc.wk && <span style={{ textAlign: "right" }}>Weekly</span>}{svc.mo && <span style={{ textAlign: "right" }}>Monthly</span>}{svc.y48 && <span style={{ textAlign: "right" }}>Yearly (48)</span>}{svc.y52 && <span style={{ textAlign: "right" }}>Yearly (52)</span>}<span />
+                  </div>
+                  {necItems.length > 0 && <SH color="var(--c-taxable, #556FB5)">Necessity</SH>}
+                  {necItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
+                  {necItems.length > 0 && <Row label="Subtotal — Necessity" wk={necT / 48} mo={necT / 12} y48={necT} y52={necT} bold border color="var(--c-taxable, #556FB5)" />}
+                  <button onClick={() => addMsItem("N")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Necessity</button>
+                  {disItems.length > 0 && <SH color="var(--c-totaltax, #E8573A)">Discretionary</SH>}
+                  {disItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
+                  {disItems.length > 0 && <Row label="Subtotal — Discretionary" wk={disT / 48} mo={disT / 12} y48={disT} y52={disT} bold border color="var(--c-totaltax, #E8573A)" />}
+                  <button onClick={() => addMsItem("D")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Discretionary</button>
+                  <Row label="Total Expenses" wk={expT / 48} mo={expT / 12} y48={expT} y52={expT} bold border />
+                  {savItems.length > 0 && <SH color="#2ECC71">Savings</SH>}
+                  {savItems.map(([name, data]) => <MsItemRow key={name} name={name} data={data} />)}
+                  {savItems.length > 0 && <Row label="Total Savings" wk={savW} mo={savT / 12} y48={savT} y52={savW * 52} bold border color="#2ECC71" />}
+                  <button onClick={() => addMsItem("S")} style={{ marginTop: 4, marginBottom: 8, padding: "4px 12px", fontSize: 11, border: "1px dashed var(--bdr, #ccc)", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Savings</button>
+                  <div style={{ marginTop: 8, padding: "10px 8px", background: remY >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
+                    <Row label="Remaining" wk={remY / 48} mo={remY / 12} y48={remY} y52={remY52} bold color={remY >= 0 ? "#2ECC71" : "#E74C3C"} />
+                  </div>
+                </>; })()}
               </Card>
               </VisColsCtx.Provider>
-              </>}
-              {/* Milestone Deductions Tab */}
-              {msTab === "deductions" && (() => {
+
+              {/* Editable deduction lists — kept as standalone editor cards below the main flow.
+                  These let the user adjust the milestone's pre-tax / post-tax deduction line items
+                  individually; the totals roll up into the per-paycheck breakdown above via recalcMilestone. */}
+              {(() => {
                 const fs = m.fullState || {};
                 const mPreDed = fs.preDed || DEF_PRE;
                 const mPostDed = fs.postDed || DEF_POST;
@@ -235,20 +280,9 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                 const mC4ro = fs.c4ro !== undefined ? fs.c4ro : "0";
                 const mK4pre = fs.k4pre !== undefined ? fs.k4pre : "0";
                 const mK4ro = fs.k4ro !== undefined ? fs.k4ro : "0";
-                // Calculate dollar amounts from percentages
-                const c4preAnn = mCS * evalF(mC4pre) / 100;
-                const c4roAnn = mCS * evalF(mC4ro) / 100;
-                const k4preAnn = mKS * evalF(mK4pre) / 100;
-                const k4roAnn = mKS * evalF(mK4ro) / 100;
-                const cPreTotal = mPreDed.reduce((s, d) => s + evalF(d.c), 0);
-                const kPreTotal = mPreDed.reduce((s, d) => s + evalF(d.k), 0);
-                const cPostTotal = mPostDed.reduce((s, d) => s + evalF(d.c), 0);
-                const kPostTotal = mPostDed.reduce((s, d) => s + evalF(d.k), 0);
-                const cTotalDed = cPreTotal * 52 + c4preAnn + c4roAnn + cPostTotal * 52;
-                const kTotalDed = kPreTotal * 52 + k4preAnn + k4roAnn + kPostTotal * 52;
                 return <>
                   <Card style={{ marginBottom: 20 }}>
-                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions</h3>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions <span style={{ fontSize: 11, fontWeight: 500, color: "#999" }}>(% of salary)</span></h3>
                     <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr", gap: 8, alignItems: "center" }}>
                       <div />
                       <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p1Name}</div>
@@ -256,18 +290,9 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Pre-Tax %</div>
                       <NI value={String(mC4pre)} onChange={v => updateMsFS("c4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} />
                       <NI value={String(mK4pre)} onChange={v => updateMsFS("k4pre", v)} onBlurResolve prefix="" style={{ height: 32 }} />
-                      <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>Pre-Tax $/yr</div>
-                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-presav, #1ABC9C)", fontWeight: 600, padding: "4px 8px" }}>{fmt(c4preAnn)}</div>
-                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-presav, #1ABC9C)", fontWeight: 600, padding: "4px 8px" }}>{fmt(k4preAnn)}</div>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Roth %</div>
                       <NI value={String(mC4ro)} onChange={v => updateMsFS("c4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
                       <NI value={String(mK4ro)} onChange={v => updateMsFS("k4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
-                      <div style={{ fontSize: 11, color: "var(--tx3, #999)" }}>Roth $/yr</div>
-                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-posttax, #9B59B6)", fontWeight: 600, padding: "4px 8px" }}>{fmt(c4roAnn)}</div>
-                      <div style={{ fontSize: 12, textAlign: "right", color: "var(--c-posttax, #9B59B6)", fontWeight: 600, padding: "4px 8px" }}>{fmt(k4roAnn)}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>Total 401k/yr</div>
-                      <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(c4preAnn + c4roAnn)}</div>
-                      <div style={{ fontSize: 12, textAlign: "right", fontWeight: 700, color: "var(--tx, #333)", borderTop: "2px solid var(--bdr2, #d0cdc8)", paddingTop: 6 }}>{fmt(k4preAnn + k4roAnn)}</div>
                     </div>
                   </Card>
                   <Card style={{ marginBottom: 20 }}>
@@ -285,7 +310,7 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                     </div>
                     <button onClick={() => updateMsFS("preDed", [...mPreDed, { n: "New Item", c: "0", k: "0" }])} style={{ marginTop: 8, padding: "5px 14px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Row</button>
                   </Card>
-                  <Card>
+                  <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Post-Tax Deductions <span style={{ fontSize: 12, fontWeight: 500, color: "#999" }}>(weekly $)</span></h3>
                     <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr 1fr 20px" : "1fr 1fr 1fr 24px", gap: "6px 8px", alignItems: "center" }}>
                       <div style={{ fontWeight: 700, fontSize: 11, color: "#999" }}>Name</div>
@@ -300,37 +325,14 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                     </div>
                     <button onClick={() => updateMsFS("postDed", [...mPostDed, { n: "New Item", c: "0", k: "0" }])} style={{ marginTop: 8, padding: "5px 14px", fontSize: 11, border: "1px dashed #ccc", borderRadius: 6, background: "none", cursor: "pointer", color: "var(--tx3,#888)" }}>+ Add Row</button>
                   </Card>
-                  <Card dark style={{ marginTop: 20 }}>
-                    <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Deductions Summary (Annual)</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, fontSize: 11 }}>
-                      <div style={{ fontWeight: 700, color: "#888" }}>Category</div>
-                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>{p1Name}</div>
-                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>{p2Name}</div>
-                      <div style={{ fontWeight: 700, color: "#888", textAlign: "right" }}>Total</div>
-                      {[
-                        ["401k Pre-Tax", c4preAnn, k4preAnn, "#1ABC9C"],
-                        ["401k Roth", c4roAnn, k4roAnn, "#9B59B6"],
-                        ["Pre-Tax Deductions", cPreTotal * 52, kPreTotal * 52, "#c0392b"],
-                        ["Post-Tax Deductions", cPostTotal * 52, kPostTotal * 52, "#9B59B6"],
-                      ].map(([label, v1, v2, color]) => [
-                        <div key={label + "l"} style={{ color, padding: "3px 0" }}>{label}</div>,
-                        <div key={label + "1"} style={{ textAlign: "right", color: "#ccc", padding: "3px 0" }}>{fmt(v1)}</div>,
-                        <div key={label + "2"} style={{ textAlign: "right", color: "#ccc", padding: "3px 0" }}>{fmt(v2)}</div>,
-                        <div key={label + "t"} style={{ textAlign: "right", color: "#fff", fontWeight: 600, padding: "3px 0" }}>{fmt(v1 + v2)}</div>,
-                      ])}
-                      <div style={{ fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>Total Deductions</div>
-                      <div style={{ textAlign: "right", fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(cTotalDed)}</div>
-                      <div style={{ textAlign: "right", fontWeight: 700, color: "#fff", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(kTotalDed)}</div>
-                      <div style={{ textAlign: "right", fontWeight: 700, color: "#4ECDC4", borderTop: "1px solid #555", paddingTop: 6 }}>{fmt(cTotalDed + kTotalDed)}</div>
-                    </div>
-                  </Card>
                 </>;
               })()}
-              {/* Milestone Tax Tab */}
-              {msTab === "tax" && (() => {
+
+              {/* Tax settings + match tier reference. Year/filing/state are part of the milestone's
+                  fullState; changing them re-runs recalcMilestone so the breakdown above stays consistent. */}
+              {(() => {
                 const fs = m.fullState || {};
                 const mTax = fs.tax || tax;
-                // Auto-match tax year to milestone date
                 const mDateYr = m.date ? m.date.slice(0, 4) : tax.year;
                 const effectiveTaxYr = mTax.year || mDateYr;
                 const effectiveTD = allTaxDB[effectiveTaxYr] || allTaxDB[mDateYr] || allTaxDB[tax.year] || TAX_DB["2026"];
@@ -345,27 +347,6 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                 const mP1 = mTax.p1State || m.p1State || (tax.p1State || {});
                 const mP2 = mTax.p2State || m.p2State || (tax.p2State || {});
                 const mFiling = m.fil || fs.fil || fil;
-                // Calculate per-person taxes for display
-                const p1Sal = mCS, p2Sal = mKS;
-                const p1w = p1Sal / 52, p2w = p2Sal / 52;
-                const eTD = effectiveTD;
-                const eBr = mFiling === "mfj" ? eTD.fedMFJ : eTD.fedSingle;
-                const eSd = mFiling === "mfj" ? eTD.stdMFJ : eTD.stdSingle;
-                const combTax = (p1w + p2w) * 52;
-                const fedTax = mFiling === "mfj" ? calcFed(Math.max(0, combTax - eSd), eBr) : calcFed(Math.max(0, p1Sal - eTD.stdSingle), eTD.fedSingle) + calcFed(Math.max(0, p2Sal - eTD.stdSingle), eTD.fedSingle);
-                const fedTaxP1 = mFiling === "mfj" ? fedTax * (combTax > 0 ? p1Sal / combTax : 0.5) : calcFed(Math.max(0, p1Sal - eTD.stdSingle), eTD.fedSingle);
-                const fedTaxP2 = mFiling === "mfj" ? fedTax - fedTaxP1 : calcFed(Math.max(0, p2Sal - eTD.stdSingle), eTD.fedSingle);
-                const ssR = eTD.ssRate / 100, mcR = eTD.medRate / 100;
-                const p1SS = Math.min(p1Sal, eTD.ssCap) * ssR, p2SS = Math.min(p2Sal, eTD.ssCap) * ssR;
-                const p1Mc = p1Sal * mcR, p2Mc = p2Sal * mcR;
-                const p1St = calcStateTax(p1Sal, mP1.abbr || "", mFiling);
-                const p2St = calcStateTax(p2Sal, mP2.abbr || "", mFiling);
-                const p1FL = p1Sal * (mP1.famli || 0) / 100, p2FL = p2Sal * (mP2.famli || 0) / 100;
-                const p1Total = fedTaxP1 + p1SS + p1Mc + p1St + p1FL;
-                const p2Total = fedTaxP2 + p2SS + p2Mc + p2St + p2FL;
-                const grandTotal = p1Total + p2Total;
-                const p1EffRate = p1Sal > 0 ? (p1Total / p1Sal * 100).toFixed(1) : "0.0";
-                const p2EffRate = p2Sal > 0 ? (p2Total / p2Sal * 100).toFixed(1) : "0.0";
                 return <>
                   <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Tax Settings</h3>
@@ -385,59 +366,19 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                       <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} State</label>
                         <input list="m-tax-states-2" value={mP2.name || ""} onChange={e => { const abbr = STATE_ABBR[e.target.value]; const payroll = abbr ? STATE_PAYROLL[abbr] : undefined; updateMsTax("p2State", { ...mP2, name: e.target.value, ...(abbr ? { abbr } : {}), ...(payroll !== undefined ? { famli: payroll } : {}) }); }} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /><datalist id="m-tax-states-2">{Object.keys(STATE_ABBR).map(s => <option key={s} value={s} />)}</datalist></div>
                     </div>
-                  </Card>
-                  {/* Per-person tax breakdown */}
-                  <Card style={{ marginBottom: 20 }}>
-                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Tax Breakdown — {effectiveTaxYr}</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", fontSize: 10, fontWeight: 700, color: "#999", textTransform: "uppercase" }}>
-                      <span>Tax</span><span style={{ textAlign: "right" }}>{p1Name}</span><span style={{ textAlign: "right" }}>{p2Name}</span><span style={{ textAlign: "right" }}>Total</span>
-                    </div>
-                    {[
-                      ["Gross Salary", p1Sal, p2Sal, p1Sal + p2Sal, "var(--tx, #333)"],
-                      ["Federal Income Tax", -fedTaxP1, -fedTaxP2, -fedTax, "var(--c-fedtax, #1a5276)"],
-                      [`OASDI (${p2(eTD.ssRate)})`, -p1SS, -p2SS, -(p1SS + p2SS), "var(--c-fedtax, #1a5276)"],
-                      [`Medicare (${p2(eTD.medRate)})`, -p1Mc, -p2Mc, -(p1Mc + p2Mc), "var(--c-fedtax, #1a5276)"],
-                      [`${mP1.abbr || "ST"} State Tax`, -p1St, -p2St, -(p1St + p2St), "var(--c-sttax, #8B4513)"],
-                      ["State Payroll", -p1FL, -p2FL, -(p1FL + p2FL), "var(--c-sttax, #8B4513)"],
-                    ].map(([label, v1, v2, vt, color]) => (
-                      <div key={label} style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, padding: "5px 0", alignItems: "center", fontSize: 12 }}>
-                        <span style={{ color }}>{label}</span>
-                        <span style={{ textAlign: "right", color }}>{fmt(v1)}</span>
-                        <span style={{ textAlign: "right", color }}>{fmt(v2)}</span>
-                        <span style={{ textAlign: "right", color, fontWeight: 600 }}>{fmt(vt)}</span>
-                      </div>
-                    ))}
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, padding: "8px 0", alignItems: "center", fontSize: 12, borderTop: "2px solid var(--bdr2, #d0cdc8)", fontWeight: 700 }}>
-                      <span style={{ color: "var(--c-totaltax, #E8573A)" }}>Total Taxes</span>
-                      <span style={{ textAlign: "right", color: "var(--c-totaltax, #E8573A)" }}>{fmt(-p1Total)}</span>
-                      <span style={{ textAlign: "right", color: "var(--c-totaltax, #E8573A)" }}>{fmt(-p2Total)}</span>
-                      <span style={{ textAlign: "right", color: "var(--c-totaltax, #E8573A)" }}>{fmt(-grandTotal)}</span>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, padding: "5px 0", alignItems: "center", fontSize: 12 }}>
-                      <span style={{ color: "var(--tx3, #999)" }}>Effective Rate</span>
-                      <span style={{ textAlign: "right", color: "var(--tx3, #999)" }}>{p1EffRate}%</span>
-                      <span style={{ textAlign: "right", color: "var(--tx3, #999)" }}>{p2EffRate}%</span>
-                      <span style={{ textAlign: "right", color: "var(--tx3, #999)", fontWeight: 600 }}>{(p1Sal + p2Sal) > 0 ? (grandTotal / (p1Sal + p2Sal) * 100).toFixed(1) : "0.0"}%</span>
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr 1fr", gap: 4, padding: "5px 0", alignItems: "center", fontSize: 12, fontWeight: 700, color: "#4ECDC4" }}>
-                      <span>Net After Tax</span>
-                      <span style={{ textAlign: "right" }}>{fmt(p1Sal - p1Total)}</span>
-                      <span style={{ textAlign: "right" }}>{fmt(p2Sal - p2Total)}</span>
-                      <span style={{ textAlign: "right" }}>{fmt(p1Sal + p2Sal - grandTotal)}</span>
-                    </div>
-                    <div style={{ marginTop: 12, padding: "8px 12px", background: "var(--input-bg, #f4f4f4)", borderRadius: 8, fontSize: 11, color: "var(--tx2, #555)" }}>
+                    <div style={{ marginTop: 10, padding: "8px 12px", background: "var(--input-bg, #f4f4f4)", borderRadius: 8, fontSize: 11, color: "var(--tx2, #555)" }}>
                       <div style={{ fontWeight: 700, marginBottom: 4 }}>Rate Details ({effectiveTaxYr})</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                        <div>Std Ded ({mFiling === "mfj" ? "MFJ" : "Single"}): <strong>{fmt(eSd)}</strong></div>
-                        <div>Fed Marginal: <strong>{fp(getMarg(Math.max(0, combTax - eSd), eBr))}</strong></div>
-                        <div>SS Cap: <strong>{fmt(eTD.ssCap)}</strong></div>
-                        <div>401k Limit: <strong>{fmt(eTD.k401Lim)}</strong></div>
+                        <div>Std Ded ({mFiling === "mfj" ? "MFJ" : "Single"}): <strong>{fmt(mFiling === "mfj" ? effectiveTD.stdMFJ : effectiveTD.stdSingle)}</strong></div>
+                        <div>SS Cap: <strong>{fmt(effectiveTD.ssCap)}</strong></div>
+                        <div>SS Rate: <strong>{p2(effectiveTD.ssRate)}</strong></div>
+                        <div>Medicare Rate: <strong>{p2(effectiveTD.medRate)}</strong></div>
+                        <div>401k Limit: <strong>{fmt(effectiveTD.k401Lim)}</strong></div>
                         <div>{p1Name} ({mP1.abbr || "ST"}) Payroll: <strong>{p2(mP1.famli || 0)}</strong></div>
-                        <div>{p2Name} ({mP2.abbr || "ST"}) Payroll: <strong>{p2(mP2.famli || 0)}</strong></div>
                       </div>
                     </div>
                   </Card>
-                  <Card>
+                  <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Employer Match Tiers</h3>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
                       <div>

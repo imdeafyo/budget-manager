@@ -4,53 +4,19 @@ import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 import { buildMonthlyIncomeSeries, incomeCategories, windowRange } from "../utils/income.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], incomeCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, msHistView, setMsHistView, msHistYear, setMsHistYear, setViewingMs, setTab, restoreConfirm, setRestoreConfirm, restoreFullState, st, restoreLiveState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], incomeCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, st, restoreLiveState }) {
   // Local UI state for the income history chart's category-type toggle.
   // "all" = Total line only; any other value = just that single category line.
   const [incomeTypeSel, setIncomeTypeSel] = useState("all");
   return (
     <div>
+            {/* Import / Export toolbar — milestone save form, history list, and restore-confirm
+                modal moved to the Budget→Milestones subtab as part of the nav restructure. */}
             <Card style={{ marginBottom: 20, overflow: "hidden" }}>
-              <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Save Milestone</h3>
-              <div style={{ display: "flex", gap: 8, alignItems: mob ? "stretch" : "flex-end", flexDirection: mob ? "column" : "row", flexWrap: mob ? "nowrap" : "wrap" }}>
-                <div style={{ flex: mob ? "none" : "0 0 auto", width: mob ? "100%" : 150 }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Date</label>
-                  <input type="date" value={msDate || new Date().toISOString().slice(0, 10)} onChange={e => setMsDate(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: "8px 6px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box", maxWidth: "100%" }} /></div>
-                <div style={{ flex: mob ? "none" : "1 1 120px", minWidth: 0, width: mob ? "100%" : "auto" }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Label</label>
-                  <input value={msLabel} onChange={e => setMsLabel(e.target.value)} placeholder="What changed?" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", boxSizing: "border-box" }} /></div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button onClick={() => {
-                  // Build per-item milestone data
-                  const itemMs = {};
-                  ewk.forEach(e => { itemMs[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
-                  savSorted.forEach(s => { itemMs[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
-                  setMilestones(prev => [...prev, {
-                    id: Date.now(), date: msDate || new Date().toISOString().slice(0, 10), label: msLabel || "Milestone",
-                    grossW: C.cw + C.kw, netW: C.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW,
-                    remW, savRate: C.net > 0 ? (totalSavPlusRemW / C.net * 100) : 0,
-                    savRateGross: (C.cw + C.kw) > 0 ? (totalSavPlusRemW / (C.cw + C.kw) * 100) : 0,
-                    cNetW: C.cNet, kNetW: C.kNet, cGrossW: C.cw, kGrossW: C.kw,
-                    cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
-                    eaipNet: C.eaipNet, eaipGross: C.eaipGross, cEaipNet: C.cEaipNet, kEaipNet: C.kEaipNet,
-                    cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
-                    items: itemMs,
-                    fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats, transferCats, incomeCats, tax },
-                  }]);
-                  setMsLabel(""); setMsDate("");
-                  // Pair every saved milestone with a backup-history row so the user has a recovery
-                  // point alongside every meaningful waypoint. Wait out the 600ms auto-save debounce
-                  // before firing so the backup captures the freshly-saved state, not the pre-save one.
-                  // Best-effort: ignore errors (e.g. running in generic mode where the endpoint 404s).
-                  setTimeout(() => {
-                    fetch("/api/history/snapshot", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ label: "manual+pre-milestone" }),
-                    }).catch(() => {});
-                  }, 800);
-                }} style={{ padding: "9px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📸 Save</button>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800, marginRight: "auto" }}>Backup</h3>
                 <label style={{ padding: "9px 16px", background: "#2ECC71", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📥 Import<input type="file" accept=".json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (!f) return; const r = new FileReader(); r.onload = ev => { try { const d = JSON.parse(ev.target.result); const msgs = []; if (d.liveState) { restoreLiveState(d.liveState); msgs.push("Live state restored"); } /* snapshots→milestones rename shim: pre-rename exports used `snapshots`. Read either; export writes only `milestones`. */ const incoming = d.milestones || d.snapshots || (Array.isArray(d) ? d : null); if (incoming && Array.isArray(incoming)) { setMilestones(prev => { const byId = new Map(prev.map(s => [s.id, s])); let updated = 0, added = 0; for (const s of incoming) { if (byId.has(s.id)) { byId.set(s.id, { ...byId.get(s.id), ...s }); updated++; } else { byId.set(s.id, s); added++; } } msgs.push(`${added} new milestones, ${updated} updated`); return Array.from(byId.values()).sort((a, b) => (a.date || "").localeCompare(b.date || "")); }); } if (msgs.length === 0) msgs.push("No data found to import"); setTimeout(() => alert(msgs.join("\n")), 100); } catch(err) { alert("Invalid JSON: " + err.message); } }; r.readAsText(f); e.target.value = ""; }} /></label>
                 <button onClick={() => { const data = { liveState: { ...st, milestones: undefined }, milestones }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `budget-export-${new Date().toISOString().slice(0, 10)}.json`; a.click(); URL.revokeObjectURL(url); }} style={{ padding: "9px 16px", background: "#F2A93B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📤 Export</button>
-                </div>
               </div>
             </Card>
 
@@ -228,92 +194,6 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, set
               );
             })()}
 
-            {milestones.length > 0 && (
-              <Card>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-                  <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Milestone History</h3>
-                  <button onClick={() => setMsHistView(p => p === "years" ? "all" : "years")} style={{ padding: "5px 14px", fontSize: 11, fontWeight: 600, border: "2px solid #556FB5", borderRadius: 6, background: msHistView === "all" ? "#EEF1FA" : "transparent", color: "#556FB5", cursor: "pointer" }}>
-                    {msHistView === "years" ? "Show All" : "Group by Year"}
-                  </button>
-                </div>
-                <div style={{ overflowX: "auto" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, fontSize: 9, fontWeight: 700, color: "#999", marginBottom: 6, minWidth: 850 }}>
-                    <span>Date</span><span>Label</span><span style={{ textAlign: "right" }}>Net Income</span><span style={{ textAlign: "right" }}>Expenses</span><span style={{ textAlign: "right" }}>Savings</span><span style={{ textAlign: "right" }}>Bonus</span><span style={{ textAlign: "right" }}>Sav. Rate</span><span style={{ textAlign: "right" }}>Remaining</span><span />
-                  </div>
-                  {(() => {
-                    const sorted = [...milestones].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-                    // Group by year
-                    const years = {};
-                    sorted.forEach(s => { const yr = (s.date || "").slice(0, 4) || "Unknown"; if (!years[yr]) years[yr] = []; years[yr].push(s); });
-                    const yearKeys = Object.keys(years).sort((a, b) => b.localeCompare(a));
-                    // Auto-select first year if none selected
-                    const activeYear = msHistYear || yearKeys[0];
-                    const renderRow = (s) => {
-                      const ri = milestones.findIndex(x => x.id === s.id);
-                      const dateStr = s.date || "";
-                      const dateObj = dateStr ? new Date(dateStr + "T00:00:00") : null;
-                      const formattedDate = dateObj ? dateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : dateStr;
-                      return (
-                        <div key={s.id} style={{ display: "grid", gridTemplateColumns: "100px 1.3fr 1fr 1fr 1fr 1fr 1fr 1fr 100px", gap: 4, padding: "6px 0", alignItems: "center", borderTop: "1px solid var(--bdr,#f0f0f0)", fontSize: 11, minWidth: 850 }}>
-                          <div style={{ display: "flex", flexDirection: "column" }}>
-                            <span style={{ fontSize: 12, fontWeight: 700, color: "var(--tx, #333)" }}>{formattedDate}</span>
-                            <input type="date" value={s.date} onChange={e => { const n = [...milestones]; n[ri] = { ...n[ri], date: e.target.value }; setMilestones(n); }} style={{ fontSize: 9, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "1px 3px", color: "var(--tx3,#888)", background: "transparent", marginTop: 2 }} />
-                          </div>
-                          <input value={s.label} onChange={e => { const n = [...milestones]; n[ri] = { ...n[ri], label: e.target.value }; setMilestones(n); }} style={{ fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#e0e0e0)", borderRadius: 4, padding: "2px 4px", color: "var(--tx,#333)", background: "transparent" }} />
-                          <span style={{ textAlign: "right", color: "#4ECDC4" }}>{fmt((s.netW || 0) * 48)}</span>
-                          <span style={{ textAlign: "right", color: "#E8573A" }}>{fmt((s.expW || 0) * 48)}</span>
-                          <span style={{ textAlign: "right", color: "#2ECC71" }}>{fmt((s.savW || 0) * 48)}</span>
-                          <span style={{ textAlign: "right", color: "#9B59B6" }}>{fmt(s.eaipNet || 0)}</span>
-                          <span style={{ textAlign: "right", color: "#556FB5" }}>{(s.savRate || 0).toFixed(1)}%</span>
-                          <span style={{ textAlign: "right", color: (s.remW || 0) >= 0 ? "#2ECC71" : "#E74C3C" }}>{fmt((s.remW || 0) * 48)}</span>
-                          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                            <button onClick={() => { setViewingMs(ri); setTab("budget"); }} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
-                            {(s.fullState || s.items) && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }} title={s.fullState ? "Full restore" : "Restores items only"}>↩</button>}
-                            <button onClick={() => setMilestones(milestones.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid var(--input-border, #ddd)", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
-                          </div>
-                        </div>
-                      );
-                    };
-                    if (msHistView === "all") {
-                      return sorted.map(renderRow);
-                    }
-                    return yearKeys.map(yr => (
-                      <div key={yr}>
-                        <div onClick={() => setMsHistYear(p => p === yr ? null : yr)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", cursor: "pointer", borderTop: "2px solid var(--bdr2, #d0cdc8)", userSelect: "none" }}>
-                          <span style={{ fontSize: 14, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "var(--tx, #333)" }}>{yr}</span>
-                          <span style={{ fontSize: 11, color: "var(--tx3, #999)" }}>({years[yr].length} milestone{years[yr].length !== 1 ? "s" : ""})</span>
-                          <span style={{ fontSize: 12, color: "var(--tx3, #999)", marginLeft: "auto" }}>{activeYear === yr ? "▾" : "▸"}</span>
-                        </div>
-                        {activeYear === yr && years[yr].map(renderRow)}
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </Card>
-            )}
-
-            {restoreConfirm !== null && (
-              <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }} onClick={() => setRestoreConfirm(null)}>
-                <div onClick={e => e.stopPropagation()} style={{ background: "var(--card-bg, #fff)", borderRadius: 16, padding: 32, maxWidth: 440, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-                  <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Restore Milestone?</h3>
-                  <p style={{ fontSize: 14, color: "var(--tx2,#555)", margin: "0 0 8px" }}>This will replace your <strong>entire current budget</strong> with:</p>
-                  <div style={{ padding: "10px 14px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, marginBottom: 16 }}>
-                    <div style={{ fontWeight: 700, color: "var(--tx,#333)" }}>{milestones[restoreConfirm]?.label}</div>
-                    <div style={{ fontSize: 12, color: "var(--tx3,#888)" }}>{milestones[restoreConfirm]?.date}</div>
-                  </div>
-                  <p style={{ fontSize: 13, color: "#E8573A", margin: "0 0 20px" }}>Consider saving a milestone of your current budget first.</p>
-                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                    <button onClick={() => setRestoreConfirm(null)} style={{ padding: "9px 20px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
-                    <button onClick={() => {
-                      restoreFullState(restoreConfirm);
-                      setRestoreConfirm(null); setTab("budget");
-                    }} style={{ padding: "9px 20px", background: "#E8573A", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Restore</button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {milestones.length === 0 && <Card style={{ textAlign: "center", padding: 40 }}><div style={{ fontSize: 14, color: "#999" }}>No milestones yet. Save your first above to start tracking trends.</div></Card>}
     </div>
   );
 }

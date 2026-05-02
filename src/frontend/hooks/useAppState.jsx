@@ -13,41 +13,129 @@ const MODE = "deploy";
 /* ══════════════════════════ useAppState ══════════════════════════ */
 export default function useAppState() {
   const mob = useM();
-  const VALID_TABS = ["budget","taxes","settings","charts","cats","forecast","transactions","prefs"];
-  const parseHash = () => { const h = location.hash.replace("#","").split("/")[0]; return VALID_TABS.includes(h) ? h : "budget"; };
-  const [tab, setTabRaw] = useState(parseHash);
+  const VALID_TABS = ["budget","taxes","settings","charts","cats","transactions","prefs"];
+  // Subtabs per top-level tab. Only Budget and Charts have subtabs; others are ignored.
+  // Defaults: budget→live, charts→trends. Forecast is now charts/forecast (no longer top-level).
+  // Hash format:
+  //   #<tab>                           — default subtab
+  //   #<tab>/<sub>                     — non-default subtab
+  //   #budget/milestones/<idx>         — viewing a milestone in the milestones subtab
+  // Back-compat: pre-restructure used #budget/ms/N and bare #budget for the live view; both still parse.
+  // Pre-restructure top-level #forecast redirects to #charts/forecast.
+  const VALID_SUBTABS = { budget: ["live", "milestones"], charts: ["trends", "forecast"] };
+  const DEFAULT_SUBTAB = { budget: "live", charts: "trends" };
+  const parseHash = () => {
+    const h = location.hash.replace("#","");
+    const parts = h.split("/");
+    let t = parts[0];
+    if (t === "forecast") return { tab: "charts", sub: "forecast", ms: null };
+    if (!VALID_TABS.includes(t)) return { tab: "budget", sub: DEFAULT_SUBTAB.budget, ms: null };
+    let sub = DEFAULT_SUBTAB[t];
+    let ms = null;
+    if (t === "budget") {
+      // #budget/ms/N (legacy) or #budget/milestones/N → milestones subtab, viewing N
+      if (parts[1] === "ms" || parts[1] === "milestones") {
+        sub = "milestones";
+        if (parts[2] !== undefined && parts[2] !== "") {
+          const n = parseInt(parts[2], 10);
+          if (!isNaN(n)) ms = n;
+        }
+      } else if (parts[1] && VALID_SUBTABS.budget.includes(parts[1])) {
+        sub = parts[1];
+      }
+    } else if (t === "charts") {
+      if (parts[1] && VALID_SUBTABS.charts.includes(parts[1])) sub = parts[1];
+    }
+    return { tab: t, sub, ms };
+  };
+  const initialHash = parseHash();
+  const [tab, setTabRaw] = useState(initialHash.tab);
+  const [budgetSubtab, setBudgetSubtabRaw] = useState(initialHash.tab === "budget" ? initialHash.sub : "live");
+  const [chartsSubtab, setChartsSubtabRaw] = useState(initialHash.tab === "charts" ? initialHash.sub : "trends");
   const skipPush = useRef(false);
-  const [viewingMs, setViewingMsRaw] = useState(null);
+  const [viewingMs, setViewingMsRaw] = useState(initialHash.ms);
+  const buildHash = (t, bSub, cSub, ms) => {
+    if (t === "budget") {
+      if (bSub === "milestones") {
+        return ms !== null && ms !== undefined ? `#budget/milestones/${ms}` : "#budget/milestones";
+      }
+      return "#budget";
+    }
+    if (t === "charts") return cSub === "trends" ? "#charts" : `#charts/${cSub}`;
+    return "#" + t;
+  };
   const setTab = useCallback((t) => {
     setTabRaw(t);
     if (!skipPush.current) {
-      history.pushState({ tab: t, ms: null }, "", "#" + t);
+      // Reset subtabs to default and clear ms when switching tabs.
+      const bSub = t === "budget" ? budgetSubtab : "live";
+      const cSub = t === "charts" ? chartsSubtab : "trends";
+      // When switching away from budget, drop viewingMs.
+      const ms = t === "budget" && bSub === "milestones" ? viewingMs : null;
+      if (t !== "budget") setViewingMsRaw(null);
+      history.pushState({ tab: t, sub: t === "budget" ? bSub : cSub, ms }, "", buildHash(t, bSub, cSub, ms));
     }
     skipPush.current = false;
-  }, []);
+  }, [budgetSubtab, chartsSubtab, viewingMs]);
+  const setBudgetSubtab = useCallback((sub) => {
+    setBudgetSubtabRaw(sub);
+    // Leaving the milestones subtab clears any milestone detail view.
+    const ms = sub === "milestones" ? viewingMs : null;
+    if (sub !== "milestones") setViewingMsRaw(null);
+    if (!skipPush.current) {
+      history.pushState({ tab: "budget", sub, ms }, "", buildHash("budget", sub, chartsSubtab, ms));
+    }
+    skipPush.current = false;
+  }, [chartsSubtab, viewingMs]);
+  const setChartsSubtab = useCallback((sub) => {
+    setChartsSubtabRaw(sub);
+    if (!skipPush.current) {
+      history.pushState({ tab: "charts", sub, ms: null }, "", buildHash("charts", budgetSubtab, sub, null));
+    }
+    skipPush.current = false;
+  }, [budgetSubtab]);
   const setViewingMs = useCallback((v) => {
     setViewingMsRaw(v);
+    // Viewing a milestone implies budget→milestones subtab.
+    if (v !== null) setBudgetSubtabRaw("milestones");
     if (!skipPush.current) {
-      const t = v !== null ? "budget" : (parseHash() || "budget");
-      history.pushState({ tab: t, ms: v }, "", "#" + t + (v !== null ? "/ms/" + v : ""));
+      const t = v !== null ? "budget" : tab;
+      const bSub = v !== null ? "milestones" : budgetSubtab;
+      history.pushState({ tab: t, sub: t === "budget" ? bSub : chartsSubtab, ms: v }, "", buildHash(t, bSub, chartsSubtab, v));
     }
     skipPush.current = false;
-  }, []);
+  }, [tab, budgetSubtab, chartsSubtab]);
   useEffect(() => {
     // set initial history entry so first back works
-    if (!location.hash) history.replaceState({ tab: "budget", ms: null }, "", "#budget");
-    else history.replaceState({ tab: parseHash(), ms: null }, "", location.hash);
+    const init = parseHash();
+    if (!location.hash) {
+      history.replaceState({ tab: "budget", sub: "live", ms: null }, "", "#budget");
+    } else {
+      history.replaceState({ tab: init.tab, sub: init.sub, ms: init.ms }, "", buildHash(init.tab, init.tab === "budget" ? init.sub : "live", init.tab === "charts" ? init.sub : "trends", init.ms));
+    }
     const onPop = (e) => {
       const s = e.state;
       skipPush.current = true;
       if (s && VALID_TABS.includes(s.tab)) {
         setTabRaw(s.tab);
-        // Back-compat: pre-rename pushStates used `snap`; new ones use `ms`.
+        // Back-compat: pre-rename pushStates used `snap`; pre-restructure used flat ms.
         const msVal = s.ms !== undefined ? s.ms : s.snap;
         setViewingMsRaw(msVal !== null && msVal !== undefined ? msVal : null);
+        // Restore subtabs from popstate
+        if (s.tab === "budget") {
+          const bSub = s.sub && VALID_SUBTABS.budget.includes(s.sub) ? s.sub
+            : (msVal !== null && msVal !== undefined ? "milestones" : "live");
+          setBudgetSubtabRaw(bSub);
+        } else if (s.tab === "charts") {
+          setChartsSubtabRaw(s.sub && VALID_SUBTABS.charts.includes(s.sub) ? s.sub : "trends");
+        }
       } else {
-        setTabRaw(parseHash());
-        setViewingMsRaw(null);
+        // Fallback: re-parse from URL
+        const p = parseHash();
+        setTabRaw(p.tab);
+        setViewingMsRaw(p.ms);
+        if (p.tab === "budget") setBudgetSubtabRaw(p.sub);
+        else if (p.tab === "charts") setChartsSubtabRaw(p.sub);
       }
       skipPush.current = false;
     };
@@ -118,7 +206,6 @@ export default function useAppState() {
   const [editMsIdx, setEditMsIdx] = useState(null);
   const [restoreConfirm, setRestoreConfirm] = useState(null);
   const [itemHistoryName, setItemHistoryName] = useState("");
-  const [msTab, setMsTab] = useState("budget");
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   const [bulkName, setBulkName] = useState("");
   const [bulkVal, setBulkVal] = useState("");
@@ -516,13 +603,6 @@ export default function useAppState() {
 
   // Scroll to top on tab/ms change
   useEffect(() => { window.scrollTo(0, 0); }, [tab, viewingMs]);
-  const prevViewingMs = useRef(viewingMs);
-  useEffect(() => {
-    const wasNull = prevViewingMs.current === null;
-    const isNull = viewingMs === null;
-    if (wasNull !== isNull) setMsTab("budget");
-    prevViewingMs.current = viewingMs;
-  }, [viewingMs]);
 
   // CSS custom properties for theme
   useEffect(() => {
@@ -584,6 +664,7 @@ export default function useAppState() {
     mob,
     // tabs
     tab, setTab,
+    budgetSubtab, setBudgetSubtab, chartsSubtab, setChartsSubtab,
     // theme
     darkMode, setDarkMode, dk, waf, cycleTheme, bg, headerBg, tx, tabAccent, ts,
     // title
@@ -613,7 +694,7 @@ export default function useAppState() {
     // milestones
     milestones, setMilestones, msLabel, setMsLabel, msDate, setMsDate,
     editMsIdx, setEditMsIdx, restoreConfirm, setRestoreConfirm,
-    viewingMs, setViewingMs, msTab, setMsTab,
+    viewingMs, setViewingMs,
     msVisCols, setMsVisCols,
     recalcMilestone, restoreFullState, restoreLiveState, st,
     // bulk add
