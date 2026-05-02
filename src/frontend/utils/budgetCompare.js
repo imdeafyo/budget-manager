@@ -189,13 +189,24 @@ export function weeklyToPeriod(weeklyBudget, days, basis = 48) {
 }
 
 /* Aggregate a budget array (exp or sav) into a Map<category, periodBudget>.
-   Line items sharing a category are summed. */
-export function budgetByCategory(items, days, basis = 48) {
+   Line items sharing a category are summed. When `allowedCats` is provided
+   (a Set), line items whose category isn't in the set are dropped — this
+   protects the chart from "ghost" categories: budget items left over from
+   a category that's been deleted from the live cats list, or milestone-era
+   items reconstructed from a legacy items dict whose category no longer
+   exists. Without this, the bar chart would render a budget bar with no
+   actuals (and no way to filter to it, since the filter dropdown is built
+   from live cats). */
+export function budgetByCategory(items, days, basis = 48, allowedCats = null) {
   const out = new Map();
   if (!Array.isArray(items)) return out;
   for (const it of items) {
     const cat = (it?.c || "").trim();
     if (!cat) continue;
+    // An empty allowedCats Set means "no filter" — matches the line-chart's
+    // expSet.size > 0 check, so a brand-new install with no cats configured
+    // doesn't render an empty chart.
+    if (allowedCats && allowedCats.size > 0 && !allowedCats.has(cat)) continue;
     const wk = itemWeeklyBudget(it);
     const periodAmt = weeklyToPeriod(wk, days, basis);
     out.set(cat, (out.get(cat) || 0) + periodAmt);
@@ -332,8 +343,14 @@ export function compareBudgetToActual(opts) {
   // so we accumulate each era's contribution separately and sum per category.
   // When no milestones are supplied, this reduces to the original single-era
   // budgetByCategory(exp, days, basis) call.
-  const expBudget = eraAwareBudget(exp, milestones, fromIso, toIso, basis, todayIso);
-  const savBudget = budgetByCategory(sav, days, basis);
+  // expSet/savSet are threaded through so milestone-era budgets — and live
+  // budget items left over from a deleted category — are filtered to
+  // categories that still exist. Without this, ghost categories (e.g. a
+  // "Student Loans" line item whose category was deleted, or a milestone
+  // from a year when the categories looked different) render as bars on
+  // the chart with no actuals and no way to filter to them.
+  const expBudget = eraAwareBudget(exp, milestones, fromIso, toIso, basis, todayIso, expSet);
+  const savBudget = budgetByCategory(sav, days, basis, savSet);
 
   // Filter transactions to range + drop transfer-category rows up front (belt
   // and suspenders with the refunds module's own exclusion). Income-category
@@ -610,7 +627,7 @@ export function monthlyBuckets(opts) {
    carry-backward for pre-earliest). When no milestones are supplied (or none
    are eligible), this reduces to one call to budgetByCategory over the full
    range. */
-function eraAwareBudget(liveExp, milestones, fromIso, toIso, basis, todayIso) {
+function eraAwareBudget(liveExp, milestones, fromIso, toIso, basis, todayIso, allowedCats = null) {
   const totalDays = daysInRange(fromIso, toIso);
   if (!totalDays) return new Map();
 
@@ -634,7 +651,7 @@ function eraAwareBudget(liveExp, milestones, fromIso, toIso, basis, todayIso) {
 
   // No eligible milestones → single era, full range, live budget.
   if (eligibleDates.length === 0) {
-    return budgetByCategory(liveExp, totalDays, basis);
+    return budgetByCategory(liveExp, totalDays, basis, allowedCats);
   }
 
   // Determine era boundaries inside [fromIso, toIso]. A new era starts on each
@@ -661,7 +678,7 @@ function eraAwareBudget(liveExp, milestones, fromIso, toIso, basis, todayIso) {
     const eraDays = daysInRange(era.startIso, era.endIso);
     if (!eraDays) continue;
     const eraExp = pickBudgetForDate(liveExp, milestones, era.startIso, todayIso);
-    const partial = budgetByCategory(eraExp, eraDays, basis);
+    const partial = budgetByCategory(eraExp, eraDays, basis, allowedCats);
     for (const [c, v] of partial) {
       out.set(c, (out.get(c) || 0) + v);
     }

@@ -474,6 +474,67 @@ describe("compareBudgetToActual", () => {
     // Expense totals didn't inflate from the income deposits
     expect(r.expense.totalActual).toBeCloseTo(baselineExpTotalActual, 2);
   });
+
+  /* ── Ghost-category guard ──
+     If a budget line item references a category that's no longer in the
+     live cats list (e.g. user deleted "Student Loans" without removing the
+     line items), the bar chart used to render a phantom bar with a budget
+     value but no actuals — and the user couldn't filter to it because the
+     filter dropdown is built from live cats. Assert the guard now drops
+     these on the floor. */
+  it("budget line items with deleted categories are NOT charted (ghost-cat guard)", () => {
+    const opts = baseOpts();
+    // Add a budget item referencing a category that's NOT in cats
+    opts.exp = [
+      ...opts.exp,
+      { n: "Student Loans", c: "Student Loans", v: "300", p: "m" },
+    ];
+    // cats list deliberately doesn't include "Student Loans"
+    const r = compareBudgetToActual(opts);
+    const ghosts = r.expense.rows.filter(x => x.category === "Student Loans");
+    expect(ghosts).toHaveLength(0);
+  });
+
+  it("ghost-cat guard also fires for milestone-era budgets", () => {
+    const opts = baseOpts();
+    // Live budget has only Food/Auto; milestone has a "Student Loans"
+    // category that's been since deleted. Range falls inside milestone's era
+    // (i.e. in the past relative to todayIso so live-override doesn't kick in).
+    opts.fromIso = "2025-08-01";
+    opts.toIso   = "2025-08-31";
+    opts.todayIso = "2026-04-15";
+    opts.transactions = []; // no actuals; only budget should be checked
+    opts.milestones = [
+      {
+        date: "2025-07-15",
+        fullState: {
+          exp: [
+            { n: "Groceries",     c: "Food",          v: "600", p: "m" },
+            { n: "Student Loans", c: "Student Loans", v: "400", p: "m" },
+          ],
+        },
+      },
+    ];
+    const r = compareBudgetToActual(opts);
+    const ghosts = r.expense.rows.filter(x => x.category === "Student Loans");
+    expect(ghosts).toHaveLength(0);
+    // Sanity: Food is still there
+    const food = r.expense.rows.find(x => x.category === "Food");
+    expect(food).toBeDefined();
+    expect(food.budgeted).toBeGreaterThan(0);
+  });
+
+  it("empty cats list disables the guard (brand-new install)", () => {
+    // If cats is empty (e.g. fresh install), don't filter to nothing —
+    // matches monthlyBuckets' expSet.size > 0 behavior.
+    const opts = baseOpts();
+    opts.cats = [];
+    const r = compareBudgetToActual(opts);
+    // Both Food and Auto should still appear
+    const cats = r.expense.rows.map(x => x.category).sort();
+    expect(cats).toContain("Food");
+    expect(cats).toContain("Auto");
+  });
 });
 
 /* ── Monthly buckets for the line chart ─────────────────────────────────── */
