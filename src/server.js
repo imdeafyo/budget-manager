@@ -62,7 +62,7 @@ pool.query(`
 // API routes
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
-app.get('/api/state/:userId?', async (req, res) => {
+app.get('/api/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const r = await pool.query('SELECT state, updated_at FROM budget_state WHERE user_id = $1', [userId]);
@@ -70,7 +70,7 @@ app.get('/api/state/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/state/:userId?', async (req, res) => {
+app.put('/api/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const r = await pool.query(
@@ -82,7 +82,7 @@ app.put('/api/state/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/tax-years/:userId?', async (req, res) => {
+app.get('/api/tax-years{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const r = await pool.query('SELECT year, data FROM custom_tax_years WHERE user_id = $1 ORDER BY year', [userId]);
@@ -92,7 +92,7 @@ app.get('/api/tax-years/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/tax-years/:year/:userId?', async (req, res) => {
+app.put('/api/tax-years/:year{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     await pool.query(
@@ -104,7 +104,7 @@ app.put('/api/tax-years/:year/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/export/:userId?', async (req, res) => {
+app.get('/api/export{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const state = await pool.query('SELECT state FROM budget_state WHERE user_id = $1', [userId]);
@@ -122,7 +122,7 @@ app.get('/api/export/:userId?', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/import/:userId?', async (req, res) => {
+app.post('/api/import{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const { budgetState, customTaxYears, transactions } = req.body;
   try {
@@ -196,7 +196,7 @@ function rowToTx(r) {
 }
 
 // GET all transactions for a user (Phase 4a: load-all model)
-app.get('/api/transactions/:userId?', async (req, res) => {
+app.get('/api/transactions{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const r = await pool.query(
@@ -208,7 +208,7 @@ app.get('/api/transactions/:userId?', async (req, res) => {
 });
 
 // POST — bulk insert (used by CSV import in Phase 4b; also manual add for single row)
-app.post('/api/transactions/:userId?', async (req, res) => {
+app.post('/api/transactions{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const { transactions } = req.body;
   if (!Array.isArray(transactions)) {
@@ -247,7 +247,7 @@ app.post('/api/transactions/:userId?', async (req, res) => {
 });
 
 // PUT — update single transaction
-app.put('/api/transactions/:id/:userId?', async (req, res) => {
+app.put('/api/transactions/:id{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const id = req.params.id;
   const tx = req.body.transaction;
@@ -259,7 +259,7 @@ app.put('/api/transactions/:id/:userId?', async (req, res) => {
 });
 
 // DELETE — one, or a batch, or all (via ?batch=id or ?all=1)
-app.delete('/api/transactions/:userId?', async (req, res) => {
+app.delete('/api/transactions{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const { ids, batch_id } = req.body || {};
   try {
@@ -282,7 +282,7 @@ app.delete('/api/transactions/:userId?', async (req, res) => {
 });
 
 // Query builder endpoint — Phase 4c. Stub returns a helpful error for now.
-app.post('/api/transactions/query/:userId?', (req, res) => {
+app.post('/api/transactions/query{/:userId}', (req, res) => {
   res.status(501).json({ error: 'Query builder lands in Phase 4c.' });
 });
 
@@ -470,7 +470,7 @@ function startHistoryCron() {
 /* ── History API endpoints ── */
 
 // List with pagination. Returns row metadata only (no state JSONB), keeps response small.
-app.get('/api/history/:userId?', async (req, res) => {
+app.get('/api/history{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const offset = parseInt(req.query.offset, 10) || 0;
@@ -490,7 +490,7 @@ app.get('/api/history/:userId?', async (req, res) => {
 });
 
 // Fetch a single history row's full state (for preview).
-app.get('/api/history/:id/state/:userId?', async (req, res) => {
+app.get('/api/history/:id/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const id = parseInt(req.params.id, 10);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
@@ -507,7 +507,7 @@ app.get('/api/history/:id/state/:userId?', async (req, res) => {
 // Manual snapshot. Optional body: { label: "..." } overrides the default "manual" label.
 // Used by the milestone-save flow to label backups as "pre-milestone" so they're
 // distinguishable in the backup history list.
-app.post('/api/history/snapshot/:userId?', async (req, res) => {
+app.post('/api/history/snapshot{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const labelOverride = (req.body && typeof req.body.label === 'string') ? req.body.label.slice(0, 200) : 'manual';
   try {
@@ -517,7 +517,7 @@ app.post('/api/history/snapshot/:userId?', async (req, res) => {
 });
 
 // Restore. Takes a "pre-restore" labeled snapshot first so the restore is itself reversible.
-app.post('/api/history/:id/restore/:userId?', async (req, res) => {
+app.post('/api/history/:id/restore{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const id = parseInt(req.params.id, 10);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
@@ -541,7 +541,7 @@ app.post('/api/history/:id/restore/:userId?', async (req, res) => {
 });
 
 // Delete a history row (lets the user clear out a manual snapshot they don't want).
-app.delete('/api/history/:id/:userId?', async (req, res) => {
+app.delete('/api/history/:id{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   const id = parseInt(req.params.id, 10);
   if (Number.isNaN(id)) return res.status(400).json({ error: 'invalid id' });
@@ -557,7 +557,7 @@ app.delete('/api/history/:id/:userId?', async (req, res) => {
 
 // Serve static frontend
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/*splat', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
