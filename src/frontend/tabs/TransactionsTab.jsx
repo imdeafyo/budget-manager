@@ -1886,7 +1886,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             <LegendSwatch color="var(--bdr, #ccc)" label="Budgeted" />
             <LegendSwatch color="#2ECC71" label="Under budget" />
             <LegendSwatch color="#E8573A" label="Over budget" />
-            <LegendSwatch color="#F2A93B" label="Uncategorized" />
+            {chartMode === "bars" && <LegendSwatch color="#F2A93B" label="Uncategorized" />}
           </div>
         </>
       )}
@@ -1968,6 +1968,7 @@ function LineTooltip({ active, payload, label, category }) {
   const row = payload[0].payload;
   const actual = row?.actual || 0;
   const budgeted = row?.budgeted || 0;
+  const uncat = row?.uncategorized || 0;
   const delta = actual - budgeted;
   return (
     <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 180 }}>
@@ -1980,6 +1981,12 @@ function LineTooltip({ active, payload, label, category }) {
       <div style={{ color: delta > 0.005 ? "#E8573A" : delta < -0.005 ? "#2ECC71" : "var(--tx3, #888)", marginTop: 2 }}>
         {delta > 0.005 ? `Over by ${fmt(delta)}` : delta < -0.005 ? `Under by ${fmt(-delta)}` : "On target"}
       </div>
+      {uncat > 0.005 && !category && (
+        <div style={{ fontSize: 11, color: "#F2A93B", marginTop: 4 }}
+          title="Rows whose category isn't in your budget — e.g. unconfirmed transfer pairs, deleted categories, or categories you haven't assigned to expense/savings/transfer. Excluded from Actual.">
+          {fmt(uncat)} uncategorized (not counted)
+        </div>
+      )}
       {row?.days != null && (
         <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.days} day{row.days === 1 ? "" : "s"} in bucket</div>
       )}

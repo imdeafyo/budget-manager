@@ -582,6 +582,54 @@ describe("monthlyBuckets", () => {
     const b52 = monthlyBuckets({ ...baseOpts(), basis: 52 });
     expect(b52[0].budgeted).toEqual(b48[0].budgeted);
   });
+
+  // Regression: line chart used to fold uncategorized rows into `actual`,
+  // which meant unconfirmed transfer pairs (no _is_transfer flag yet) and
+  // rows whose category wasn't in cats/savCats/transferCats inflated the
+  // spend line. Bar chart's "Spent" stat excludes uncategorized — line chart
+  // now matches that behavior, and exposes uncategorized as its own field.
+  describe("uncategorized handling matches bar chart", () => {
+    const optsWithStrays = () => ({
+      transactions: [
+        { id: "f1", date: "2026-04-05", amount: -200, category: "Food" },
+        // unconfirmed pair — looks like a transfer but isn't flagged or in transferCats
+        { id: "p1", date: "2026-04-10", amount: -500, account: "Checking" },
+        { id: "p2", date: "2026-04-10", amount:  500, account: "Savings" },
+        // category not in cats/savCats/transferCats — user thinks of it as transfer
+        { id: "c1", date: "2026-04-12", amount: -600, category: "Credit Card Payment" },
+      ],
+      exp: [{ n: "Groceries", c: "Food", v: "600", p: "m" }],
+      sav: [],
+      cats: ["Food"],
+      savCats: [],
+      transferCats: ["Transfer"],
+      incomeCats: [],
+      fromIso: "2026-04-01",
+      toIso:   "2026-04-30",
+      basis: 48,
+    });
+
+    it("line chart actual excludes uncategorized (matches bar chart Spent)", () => {
+      const opts = optsWithStrays();
+      const bar = compareBudgetToActual(opts);
+      const buckets = monthlyBuckets(opts);
+      expect(bar.expense.totalActual).toBeCloseTo(200, 2);
+      expect(buckets).toHaveLength(1);
+      expect(buckets[0].actual).toBeCloseTo(200, 2);
+    });
+
+    it("uncategorized total is reported on each bucket as its own field", () => {
+      const buckets = monthlyBuckets(optsWithStrays());
+      // Two stray sources: pair (500 + 500 abs = 1000) + Credit Card Payment (600) = 1600
+      expect(buckets[0].uncategorized).toBeCloseTo(1600, 2);
+    });
+
+    it("uncategorized is zero when a specific category is picked", () => {
+      const buckets = monthlyBuckets({ ...optsWithStrays(), category: "Food" });
+      expect(buckets[0].actual).toBeCloseTo(200, 2);
+      expect(buckets[0].uncategorized).toBe(0);
+    });
+  });
 });
 
 /* ── Milestone-aware budget selection ────────────────────────────────────── */

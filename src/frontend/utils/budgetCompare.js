@@ -538,12 +538,16 @@ export function monthlyBuckets(opts) {
     });
 
     // Sum across whichever categories are in scope (one or all).
+    // Uncategorized is reported alongside but NOT folded into `actual`, so the
+    // line chart matches the bar chart's "Spent" total (which excludes the
+    // standalone uncategorized bar). This also prevents pair-shape transfers
+    // awaiting user confirmation — and rows whose category isn't in cats /
+    // savCats / transferCats — from inflating the spend line.
     let actual = 0;
     for (const [, amt] of actuals.expense) actual += amt;
-    // If category is null, we also want uncategorized rolled in for the "all"
-    // view since they're real spend that didn't make it into a named bucket.
-    // When a specific category is picked, uncategorized doesn't apply.
-    if (!category && actuals.uncategorized) actual += actuals.uncategorized.total;
+    const uncategorized = (!category && actuals.uncategorized)
+      ? round2(actuals.uncategorized.total)
+      : 0;
 
     // Budget for this bucket: the monthly value of whichever exp was in effect,
     // matching the Budget tab's "monthly" view exactly (weekly × 48 / 12).
@@ -586,6 +590,7 @@ export function monthlyBuckets(opts) {
       days,
       actual: round2(actual),
       budgeted: round2(budgeted),
+      uncategorized,
     });
 
     // advance to next month
