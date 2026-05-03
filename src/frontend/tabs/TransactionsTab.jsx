@@ -686,8 +686,18 @@ export default function TransactionsTab(props) {
           <span><strong style={{ color: "var(--tx, #333)" }}>Money out:</strong> {fmt(filteredOut)}</span>
           <span><strong style={{ color: "var(--tx, #333)" }}>Net:</strong> {fmt(filteredTotal)}</span>
         </div>
-        <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginBottom: 8 }}>
-          {visibleRows.length.toLocaleString()} of {transactions.length.toLocaleString()} rows
+        <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginBottom: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span>{visibleRows.length.toLocaleString()} of {transactions.length.toLocaleString()} rows</span>
+          {/* Inline clear-filters link — visible whenever any filter narrows the
+              view. Especially important after a line-chart click, since that
+              filters by date but doesn't open the Filters drawer, so without
+              this link the user can't undo the filter without opening Filters. */}
+          {(preset || dateFrom || dateTo || search || catSel.length || acctSel.length || amtMin !== "" || amtMax !== "") && (
+            <button onClick={clearFilters}
+              style={{ background: "none", border: "none", color: "#556FB5", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+              ✕ Clear filters
+            </button>
+          )}
         </div>
 
         {selected.size > 0 && (
