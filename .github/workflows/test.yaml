@@ -9,13 +9,12 @@ on:
 
 jobs:
   test:
-    # Skip on bot commits and merge commits to avoid duplicate test runs.
-    # Tests still run on every PR and on workflow_dispatch.
+    # Skip the bot's auto-build commits ([skip ci]) — same loop-prevention
+    # logic as the other workflows. Merges are NOT skipped because the
+    # commit being merged in often contains real changes that need testing.
     if: >-
       ${{ github.event_name != 'push'
-          || (!contains(github.event.head_commit.message, '[skip ci]')
-              && !startsWith(github.event.head_commit.message, 'Merge ')
-              && github.event.head_commit.author.username != 'github-actions[bot]') }}
+          || !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

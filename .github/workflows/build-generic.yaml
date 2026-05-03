@@ -10,16 +10,11 @@ on:
 
 jobs:
   build-generic:
-    # Skip on:
-    #   - The bot's own auto-build commits ([skip ci]).
-    #   - Merge commits, which appear when a local push races a bot push.
-    #     Without this guard, every "git pull --rebase && git push" sequence
-    #     triggers another generic-HTML rebuild even though the source hasn't
-    #     changed beyond what the bot already built.
-    if: >-
-      ${{ !contains(github.event.head_commit.message, '[skip ci]')
-          && !startsWith(github.event.head_commit.message, 'Merge ')
-          && github.event.head_commit.author.username != 'github-actions[bot]' }}
+    # Skip the bot's own auto-build commits ([skip ci]) — without this guard
+    # the bot would trigger itself in a loop. Merge commits are NOT skipped:
+    # if you don't rebase, a merge commit is the only commit pushed and it
+    # contains your real source changes that need rebuilding.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

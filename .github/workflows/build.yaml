@@ -11,23 +11,19 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # Skip builds triggered by:
-  #   1. The auto-generated-HTML commits ([skip ci] in subject) — bot pushes
-  #      to main from build-generic.yaml. Without this we'd loop.
-  #   2. Merge commits — when a local push crosses a bot push, `git pull`
-  #      creates a "Merge remote-tracking branch 'origin/main'" commit whose
-  #      subject doesn't contain [skip ci]. Without this filter, every push
-  #      that races a bot push triggers TWO builds (one for the human commit,
-  #      one for the resulting merge commit).
-  #   3. Bot-authored commits — defense in depth in case [skip ci] is dropped.
-  # All three checks are on github.event.head_commit, which represents the
-  # tip commit pushed.
+  # Skip builds triggered by the auto-generated-HTML commits ([skip ci] in
+  # subject). Those are bot pushes from build-generic.yaml — without this
+  # guard we'd loop forever (bot push → build → bot push → ...).
+  #
+  # We deliberately do NOT skip merge commits. When you `git pull` (without
+  # --rebase) and your local push races a bot push, git creates a merge
+  # commit whose second parent contains your real work — that work has to
+  # build and deploy. The version counter below uses `git log --no-merges`
+  # to avoid double-bumping the patch number; that's the correct place to
+  # handle merges, not here.
   # ─────────────────────────────────────────────────────────────────────────
   build:
-    if: >-
-      ${{ !contains(github.event.head_commit.message, '[skip ci]')
-          && !startsWith(github.event.head_commit.message, 'Merge ')
-          && github.event.head_commit.author.username != 'github-actions[bot]' }}
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
