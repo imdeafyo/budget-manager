@@ -2,18 +2,25 @@ import { useMemo, useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { forecastGrowth, yearsToTarget, fmt, evalF } from "../utils/calc.js";
+import { actualAnnualContribution } from "../utils/forecastActuals.js";
 
 /* Forecast tab: projects compound growth of savings over time.
-   Uses current savings rate from the main C calculation + remaining budget.
-   Annual contribution = (savings + remaining budget) * 48 paychecks/yr + optional bonus.
+   Two sources for annual contribution:
+   - "budget" (default): (savings + remaining budget) × 48 paychecks/yr + optional bonus
+   - "actuals" (3/6/12mo): (income − expenses) over the window, annualized
+   The actuals path replaces the budget-based contribution with what's actually
+   happening per the transaction log — useful when actual spending diverges
+   from the planned budget. Choice persists per-device to localStorage.
 */
-export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip }) {
+export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [] }) {
   const [returnPct, setReturnPct] = useState(() => { try { return localStorage.getItem("forecast-return") || "7"; } catch { return "7"; } });
   const [inflationPct, setInflationPct] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
   const [initialBalance, setInitialBalance] = useState(() => { try { return localStorage.getItem("forecast-initial") || "0"; } catch { return "0"; } });
   const [horizon, setHorizon] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
   const [valueMode, setValueMode] = useState(() => { try { return localStorage.getItem("forecast-value-mode") || "both"; } catch { return "both"; } }); // both | nominal | real
   const [targetMonths, setTargetMonths] = useState(() => { try { return localStorage.getItem("forecast-target-months") || "12"; } catch { return "12"; } });
+  // Phase 7: contribution source — "budget" | "actual3" | "actual6" | "actual12"
+  const [contribSource, setContribSource] = useState(() => { try { return localStorage.getItem("forecast-contrib-source") || "budget"; } catch { return "budget"; } });
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
@@ -21,17 +28,40 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   useEffect(() => { try { localStorage.setItem("forecast-horizon", String(horizon)); } catch {} }, [horizon]);
   useEffect(() => { try { localStorage.setItem("forecast-value-mode", valueMode); } catch {} }, [valueMode]);
   useEffect(() => { try { localStorage.setItem("forecast-target-months", targetMonths); } catch {} }, [targetMonths]);
+  useEffect(() => { try { localStorage.setItem("forecast-contrib-source", contribSource); } catch {} }, [contribSource]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
   const init = evalF(initialBalance);
 
-  /* Annual contribution: savings + positive remaining, times 48 paychecks. Optionally add bonus. */
-  const annualContribution = useMemo(() => {
+  /* Budget-based annual contribution: savings + positive remaining, times 48
+     paychecks. Optionally add bonus. This is the default source. */
+  const budgetAnnualContribution = useMemo(() => {
     const base = totalSavPlusRemW * 48;
     const bonus = includeEaip ? (C.eaipNet || 0) : 0;
     return base + bonus;
   }, [totalSavPlusRemW, includeEaip, C.eaipNet]);
+
+  /* Actuals-based contribution: derived from transactions over a recent
+     window. Returns null if there are no transactions in the window — in
+     that case we fall back to the budget figure. */
+  const actualsResult = useMemo(() => {
+    if (contribSource === "budget") return null;
+    const months = contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6;
+    return actualAnnualContribution({
+      transactions, months, cats, savCats, transferCats, incomeCats,
+    });
+  }, [contribSource, transactions, cats, savCats, transferCats, incomeCats]);
+
+  /* Effective contribution used for the projection.
+     - If actuals source selected and the window has data → use actuals.
+     - Otherwise (budget source, or actuals window empty) → use budget. */
+  const annualContribution = useMemo(() => {
+    if (contribSource !== "budget" && actualsResult) return actualsResult.annual;
+    return budgetAnnualContribution;
+  }, [contribSource, actualsResult, budgetAnnualContribution]);
+
+  const usingActuals = contribSource !== "budget" && !!actualsResult;
 
   /* Monthly expenses for the "time to X months of expenses" calculator.
      tExpW is weekly expense base, so monthly = tExpW * 48 / 12. */
@@ -50,6 +80,9 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   );
   const horizonBtn = (h) => (
     <button key={h} onClick={() => setHorizon(h)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: horizon === h ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: horizon === h ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{h}y</button>
+  );
+  const sourceBtn = (val, label) => (
+    <button key={val} onClick={() => setContribSource(val)} style={{ padding: "5px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: contribSource === val ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: contribSource === val ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{label}</button>
   );
 
   const cs = { background: "var(--card-bg,#fff)", color: "var(--card-color,#222)", border: "none", borderRadius: 8, fontSize: 12, boxShadow: "0 2px 8px rgba(0,0,0,0.1)" };
@@ -79,8 +112,30 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
           </div>
         </div>
         <div style={{ marginTop: 16, padding: 12, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, fontSize: 12, color: "var(--tx2,#555)", lineHeight: 1.6 }}>
-          <div><strong>Annual contribution (from budget):</strong> {fmt(annualContribution)} {includeEaip ? "(includes bonus)" : ""}</div>
-          <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>= (savings + remaining) × 48 paychecks {includeEaip ? "+ net bonus" : ""}. Adjust on the Charts tab to toggle bonus inclusion.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Contribution source:</span>
+            {sourceBtn("budget", "Budget")}
+            {sourceBtn("actual3", "Actuals (3mo)")}
+            {sourceBtn("actual6", "Actuals (6mo)")}
+            {sourceBtn("actual12", "Actuals (12mo)")}
+          </div>
+          <div><strong>Annual contribution:</strong> {fmt(annualContribution)} {includeEaip && contribSource === "budget" ? "(includes bonus)" : ""}</div>
+          {contribSource === "budget" && (
+            <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
+              = (savings + remaining) × 48 paychecks {includeEaip ? "+ net bonus" : ""}. Adjust on the Charts tab to toggle bonus inclusion.
+            </div>
+          )}
+          {contribSource !== "budget" && usingActuals && (
+            <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
+              From {actualsResult.txCount} transaction{actualsResult.txCount === 1 ? "" : "s"} in the last {actualsResult.months} months ({actualsResult.fromIso} → {actualsResult.toIso}):
+              income {fmt(actualsResult.income)} − expenses {fmt(actualsResult.expenses)} = {fmt(actualsResult.monthlyNet)}/mo × 12. Budget figure for comparison: {fmt(budgetAnnualContribution)}.
+            </div>
+          )}
+          {contribSource !== "budget" && !usingActuals && (
+            <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
+              No transactions found in the last {contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6} months — falling back to budget figure.
+            </div>
+          )}
         </div>
       </Card>
 
