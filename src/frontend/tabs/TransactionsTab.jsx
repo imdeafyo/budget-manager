@@ -1708,31 +1708,15 @@ function PairRow({ tx }) {
 function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], milestones = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
   // ── Drill-down handlers ──
   // Recharts 3 removed CategoricalChartState from chart-level onClick payloads,
-  // and the gray Tooltip cursor rect sits above the bars in z-order while
-  // being rendered through Recharts' internal event delegation — meaning
-  // neither the chart-level onClick nor the per-<Bar> onClick reliably
-  // catches clicks that land on the cursor itself.
+  // so the old `data.activePayload[0].payload` path is undefined. Bar.onClick
+  // and Line.onClick still receive the data point directly, so click handlers
+  // live on the data elements themselves.
   //
-  // Solution: track the hovered row index in a ref via BarChart.onMouseMove,
-  // then attach a plain DOM onClick to the wrapping <div>. The wrapper div is
-  // outside the SVG entirely, so it receives every bubbled click event from
-  // anywhere inside the chart — colored bars, the gray cursor rect, plot
-  // background, axis labels, the lot. We use a ref (not state) so the chart
-  // doesn't re-render on every mouse move; the click handler always reads
-  // the latest value via activeIdxRef.current.
-  //
-  // Important: do NOT also put onClick on <Bar> or <Line>. A direct dot/bar
-  // click would fire Bar.onClick AND bubble to the wrapper, double-toggling
-  // the same category and netting to a no-op.
-  const activeIdxRef = useRef(null);
-  const handleChartMove = (state) => {
-    if (state?.isTooltipActive && Number.isFinite(state.activeTooltipIndex)) {
-      activeIdxRef.current = state.activeTooltipIndex;
-    } else {
-      activeIdxRef.current = null;
-    }
-  };
-  const clearActiveIdx = () => { activeIdxRef.current = null; };
+  // The Tooltip cursor (gray hover rect) sits above the bars in z-order and
+  // would normally swallow clicks. We work around that with the global CSS
+  // rule `.recharts-tooltip-cursor { pointer-events: none }` (see App.jsx /
+  // index.html — search for "recharts-tooltip-cursor"). With the cursor made
+  // click-through, direct clicks on the bars/lines fire reliably.
 
   // Bar click: toggle the bar's category in the table's catSel. Clicking an
   // already-filtered category removes it; clicking a new one adds it.
@@ -1944,32 +1928,21 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                 No spending and no budget categories in this period.
               </div>
             ) : (
-              <div
-                style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)), cursor: setFilterCats ? "pointer" : "default" }}
-                onClick={() => {
-                  // Plain DOM onClick on the wrapper div — catches every
-                  // bubbling click inside the SVG, including the gray Tooltip
-                  // cursor rect. Reads the active index from the ref so we
-                  // always see the latest hover position.
-                  const idx = activeIdxRef.current;
-                  if (idx == null) return;
-                  const row = chartData[idx];
-                  if (row) handleBarClick(row);
-                }}
-                onMouseLeave={clearActiveIdx}>
+              <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}
-                    onMouseMove={handleChartMove}>
+                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
                     <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
                     <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
                       stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
                       tick={{ fill: "var(--tx2, #555)" }} />
                     <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
-                    {/* Budgeted — muted gray baseline bar. Click handled by wrapper div. */}
-                    <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
+                    {/* Budgeted — muted gray baseline bar. Click to filter. */}
+                    <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]}
+                      onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }} />
                     {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
-                    <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
+                    <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}
+                      onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }}>
                       {chartData.map((row, i) => (
                         <Cell key={i} fill={
                           row.kind === "uncategorized" ? "#F2A93B"
@@ -1988,36 +1961,26 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                 No months in range — pick a date range that spans at least one calendar month.
               </div>
             ) : (
-              <div
-                style={{ width: "100%", height: 320, cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }}
-                onClick={() => {
-                  // Plain DOM click on the wrapper — same approach as the bar
-                  // chart. Catches clicks anywhere in the active month's
-                  // vertical hover slot (cursor crosshair, plot background,
-                  // between the lines, on a dot, etc) using the ref-tracked
-                  // active index from the chart's onMouseMove.
-                  const idx = activeIdxRef.current;
-                  if (idx == null) return;
-                  const pt = lineData[idx];
-                  if (pt) handleLineClick(pt);
-                }}
-                onMouseLeave={clearActiveIdx}>
+              <div style={{ width: "100%", height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}
-                    onMouseMove={handleChartMove}>
+                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
                     <CartesianGrid stroke="var(--bdr2, #eee)" strokeDasharray="3 3" />
                     <XAxis dataKey="monthLabel" stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <Tooltip content={<LineTooltip category={chartCategory} />} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
-                    {/* Click handled by the wrapper div — no per-Line onClick
-                        so we don't double-fire (Bar/Line onClick + wrapper
-                        onClick would both fire on a direct dot click and
-                        cancel each other out). */}
+                    {/* Click handlers on the data elements themselves — Recharts 3
+                        no longer surfaces activePayload on the chart wrapper. The
+                        gray cursor crosshair is made click-through via global CSS
+                        so dot clicks behind it still register. */}
                     <Line type="monotone" dataKey="budgeted" name="Budgeted" stroke="var(--tx3, #888)"
-                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }} />
+                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }}
+                      onClick={handleLineClick}
+                      style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }} />
                     <Line type="monotone" dataKey="actual" name="Actual" stroke="#556FB5"
-                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }}
+                      onClick={handleLineClick}
+                      style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

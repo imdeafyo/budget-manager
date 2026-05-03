@@ -1,1 +1,20 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Recharts 3 — make the gray Tooltip cursor (the rect that highlights the
+   active row on hover) click-through. Without this, the cursor sits above
+   the bars in z-order and swallows clicks aimed at the colored data shapes,
+   so chart drill-down filtering only works on perfectly-aimed bar clicks.
+   The cursor is purely visual — Recharts handles hover detection at the
+   chart-root SVG level, not via the cursor rect — so disabling pointer
+   events here doesn't break tooltip behavior. */
+.recharts-tooltip-cursor { pointer-events: none; }
+
+/* Recharts 3 added an accessibility layer that puts tabIndex=0 on the chart
+   surface, which makes clicking the chart show the browser's default focus
+   outline (a white/blue dotted ring). Looks broken on click but functions
+   fine. We hide the mouse-induced outline but keep keyboard focus visible
+   via :focus-visible so keyboard users still see where focus is. */
+.recharts-wrapper:focus,
+.recharts-surface:focus { outline: none; }
+.recharts-wrapper:focus-visible,
+.recharts-surface:focus-visible { outline: 2px solid var(--accent, #556FB5); outline-offset: 2px; border-radius: 4px; }
