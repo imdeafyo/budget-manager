@@ -1,9 +1,20 @@
 const express = require('express');
+const compression = require('compression');
 const path = require('path');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const app = express();
+// Disable Express's default ETag generator. Its default mode hashes the full
+// response body, which on the 9 MB transactions endpoint adds latency and
+// also defeats our manual short-circuit ETag below (Express would replace
+// our cheap MAX(updated_at)+COUNT(*) tag with one computed by hashing the
+// entire serialized payload, which only saves bandwidth — not server time).
+app.set('etag', false);
+// gzip responses ≥ 1 KB. Cuts the 9.3 MB transactions payload to ~1 MB on
+// cold loads where the browser doesn't already have a fresh copy. The 304
+// short-circuit below handles the warm path.
+app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 
 const pool = new Pool({
@@ -195,14 +206,47 @@ function rowToTx(r) {
   };
 }
 
-// GET all transactions for a user (Phase 4a: load-all model)
+// GET all transactions for a user (Phase 4a: load-all model).
+//
+// Fast revalidation path: before fetching all rows, compute a cheap ETag from
+// MAX(updated_at) + COUNT(*). Both come from indexed/aggregate queries that
+// run in milliseconds even on 100k+ row tables. If the client's
+// If-None-Match header matches, return 304 immediately without ever
+// touching the row data — turns an 8.5s "nothing changed" response into ~5ms.
+//
+// On a cache miss (or first load) we still do the full SELECT. The ETag
+// is set on the 200 response so the next revalidation can short-circuit.
 app.get('/api/transactions{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
+    // Step 1: cheap freshness check. COUNT(*) + MAX(updated_at) on an indexed
+    // column is fast even at scale.
+    const meta = await pool.query(
+      `SELECT COUNT(*)::int AS n, MAX(updated_at) AS max_updated FROM transactions WHERE user_id = $1`,
+      [userId]
+    );
+    const n = meta.rows[0].n;
+    const maxUpdated = meta.rows[0].max_updated;
+    // ETag format: "<count>-<maxUpdatedMs>". Quoted per HTTP spec.
+    // For empty tables maxUpdated is null — we still produce a stable tag.
+    const tagBody = `${n}-${maxUpdated ? new Date(maxUpdated).getTime() : 0}`;
+    const etag = `"tx-${tagBody}"`;
+
+    // Step 2: short-circuit if client has a fresh copy.
+    if (req.headers['if-none-match'] === etag) {
+      res.set('ETag', etag);
+      res.set('Cache-Control', 'private, must-revalidate');
+      return res.status(304).end();
+    }
+
+    // Step 3: cache miss — do the full fetch. Set ETag on the response so
+    // the *next* request can short-circuit.
     const r = await pool.query(
       `SELECT * FROM transactions WHERE user_id = $1 ORDER BY date DESC, created_at DESC`,
       [userId]
     );
+    res.set('ETag', etag);
+    res.set('Cache-Control', 'private, must-revalidate');
     res.json({ transactions: r.rows.map(rowToTx), count: r.rowCount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
