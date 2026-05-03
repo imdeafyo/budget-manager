@@ -19,6 +19,7 @@ import {
 } from "../utils/transfers.js";
 import { fmt } from "../utils/calc.js";
 import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/budgetCompare.js";
+import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
 import ImportModal from "../components/ImportModal.jsx";
 
@@ -311,6 +312,42 @@ export default function TransactionsTab(props) {
       treatRefundsAsNetting: true,
     });
   }, [compareReady, deferredChartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, milestones, effectiveFrom, effectiveTo, today, basis]);
+
+  // ── Phase 7b Part B: localStorage cache for compare result ──
+  // The cache key is computed from the same inputs the compare uses (but with
+  // the *current* transactions, not the deferred snapshot — we want the key
+  // to reflect the user's actual filter state). On mount or key change we
+  // hydrate from localStorage; after a fresh compute we write back. The
+  // displayed value prefers fresh over cached, so the cache is effectively a
+  // first-paint optimization for tab switches and reloads.
+  const cacheKey = useMemo(() => computeCacheKey({
+    transactions: chartScopedTransactions,
+    exp: chartScopedExp, sav,
+    cats: chartScopedCats, savCats, transferCats, incomeCats,
+    milestones,
+    fromIso: effectiveFrom,
+    toIso: effectiveTo,
+    todayIso: today,
+    basis,
+    treatRefundsAsNetting: true,
+  }), [chartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, milestones, effectiveFrom, effectiveTo, today, basis]);
+
+  const [cachedCompare, setCachedCompare] = useState(() => readCache(cacheKey));
+  // Re-read when key changes — a different key likely means a cache miss,
+  // which clears cachedCompare so we don't display a stale value under new
+  // filters. (We could keep showing the old result while the new one cooks,
+  // but that risks confusing the user with mismatched bars.)
+  useEffect(() => {
+    setCachedCompare(readCache(cacheKey));
+  }, [cacheKey]);
+  // Write fresh results to the cache. Best-effort — writeCache silently
+  // tolerates quota / private-mode / serialization failures.
+  useEffect(() => {
+    if (compare) writeCache(cacheKey, compare);
+  }, [compare, cacheKey]);
+
+  // Prefer fresh; fall back to cached for instant first paint.
+  const displayCompare = compare || cachedCompare;
 
   const visibleColumns = useMemo(() => {
     const all = [
@@ -724,7 +761,7 @@ export default function TransactionsTab(props) {
 
       <BudgetCompareCard
         mob={mob}
-        compare={compare}
+        compare={displayCompare}
         compareReady={compareReady}
         rangeInferred={rangeInferred}
         showCompare={showCompare}
