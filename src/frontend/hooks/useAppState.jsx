@@ -258,16 +258,23 @@ export default function useAppState() {
   const [rowCapWarn, setRowCapWarn] = useState(true);
   const [rowCapThreshold, setRowCapThreshold] = useState(10000);
   const [hiddenColumns, setHiddenColumns] = useState([]);
+  // Default page size for the transactions table. localStorage takes precedence
+  // per device, but this gives users a way to set a sensible cross-device default.
+  const [defaultTxPageSize, setDefaultTxPageSize] = useState(100);
   // Phase 5c — transfer detection + refund handling settings.
   const [transferToleranceAmount, setTransferToleranceAmount] = useState(0.01);
   const [transferToleranceDays, setTransferToleranceDays] = useState(2);
+  // Confidence threshold (0–1): pairs scoring below this are filtered out of
+  // the detection modal. 0 = show every candidate, 1 = perfect match only.
+  // Default 0 keeps existing behavior (review everything).
+  const [transferConfidenceThreshold, setTransferConfidenceThreshold] = useState(0);
   const [treatRefundsAsNetting, setTreatRefundsAsNetting] = useState(true);
   const [txLoaded, setTxLoaded] = useState(false);
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,transferToleranceAmount,transferToleranceDays,treatRefundsAsNetting]);
+  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting]);
   useEffect(() => { if (!loaded) return; const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st, loaded]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -728,8 +735,10 @@ export default function useAppState() {
     rowCapWarn, setRowCapWarn,
     rowCapThreshold, setRowCapThreshold,
     hiddenColumns, setHiddenColumns,
+    defaultTxPageSize, setDefaultTxPageSize,
     transferToleranceAmount, setTransferToleranceAmount,
     transferToleranceDays, setTransferToleranceDays,
+    transferConfidenceThreshold, setTransferConfidenceThreshold,
     treatRefundsAsNetting, setTreatRefundsAsNetting,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,

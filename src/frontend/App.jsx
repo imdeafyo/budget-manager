@@ -171,6 +171,8 @@ export default function App() {
           setTransactionRules={S.setTransactionRules}
           transferToleranceAmount={S.transferToleranceAmount}
           transferToleranceDays={S.transferToleranceDays}
+          transferConfidenceThreshold={S.transferConfidenceThreshold}
+          defaultTxPageSize={S.defaultTxPageSize}
           txLoaded={S.txLoaded}
         />}
 
@@ -185,6 +187,8 @@ export default function App() {
           setRowCapWarn={S.setRowCapWarn}
           rowCapThreshold={S.rowCapThreshold}
           setRowCapThreshold={S.setRowCapThreshold}
+          defaultTxPageSize={S.defaultTxPageSize}
+          setDefaultTxPageSize={S.setDefaultTxPageSize}
           transactions={S.transactions}
           setTransactions={S.setTransactions}
           updateTransaction={S.updateTransaction}
@@ -199,6 +203,8 @@ export default function App() {
           setTransferToleranceAmount={S.setTransferToleranceAmount}
           transferToleranceDays={S.transferToleranceDays}
           setTransferToleranceDays={S.setTransferToleranceDays}
+          transferConfidenceThreshold={S.transferConfidenceThreshold}
+          setTransferConfidenceThreshold={S.setTransferConfidenceThreshold}
           treatRefundsAsNetting={S.treatRefundsAsNetting}
           setTreatRefundsAsNetting={S.setTreatRefundsAsNetting}
           deleteImportBatch={S.deleteImportBatch}

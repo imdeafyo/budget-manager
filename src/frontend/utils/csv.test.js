@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCSV, parseCSVRaw, headerSignature } from "./csv.js";
+import { parseCSV, parseCSVRaw, headerSignature, buildCSV, escapeCsvField } from "./csv.js";
 
 describe("parseCSV — basics", () => {
   it("parses a simple header+row file", () => {
@@ -124,5 +124,63 @@ describe("headerSignature", () => {
     expect(headerSignature([])).toBe("");
     expect(headerSignature(null)).toBe("");
     expect(headerSignature(undefined)).toBe("");
+  });
+});
+
+describe("escapeCsvField", () => {
+  it("returns plain strings unmodified", () => {
+    expect(escapeCsvField("hello")).toBe("hello");
+    expect(escapeCsvField("123.45")).toBe("123.45");
+  });
+  it("returns empty string for null/undefined", () => {
+    expect(escapeCsvField(null)).toBe("");
+    expect(escapeCsvField(undefined)).toBe("");
+  });
+  it("quotes fields with commas", () => {
+    expect(escapeCsvField("a,b")).toBe('"a,b"');
+  });
+  it("quotes fields with double quotes and doubles them", () => {
+    expect(escapeCsvField('she said "hi"')).toBe('"she said ""hi"""');
+  });
+  it("quotes fields with newlines", () => {
+    expect(escapeCsvField("line1\nline2")).toBe('"line1\nline2"');
+    expect(escapeCsvField("line1\r\nline2")).toBe('"line1\r\nline2"');
+  });
+  it("coerces non-strings via String()", () => {
+    expect(escapeCsvField(0)).toBe("0");
+    expect(escapeCsvField(false)).toBe("false");
+  });
+});
+
+describe("buildCSV", () => {
+  it("writes a simple header + rows file", () => {
+    const csv = buildCSV(["date", "amount"], [
+      { date: "2026-01-01", amount: "12.34" },
+      { date: "2026-01-02", amount: "5.00" },
+    ]);
+    expect(csv).toBe("date,amount\r\n2026-01-01,12.34\r\n2026-01-02,5.00\r\n");
+  });
+  it("round-trips through parseCSV", () => {
+    const headers = ["date", "amount", "description"];
+    const rows = [
+      { date: "2026-01-01", amount: "12.34", description: "Coffee, large" },
+      { date: "2026-01-02", amount: "-5.00", description: 'Refund "discount"' },
+      { date: "2026-01-03", amount: "100",   description: "Multi\nline note" },
+    ];
+    const csv = buildCSV(headers, rows);
+    const { headers: h2, rows: r2 } = parseCSV(csv);
+    expect(h2).toEqual(headers);
+    expect(r2).toEqual(rows);
+  });
+  it("treats missing fields as empty string", () => {
+    const csv = buildCSV(["a", "b", "c"], [{ a: "1", c: "3" }]);
+    expect(csv).toBe("a,b,c\r\n1,,3\r\n");
+  });
+  it("returns empty string for invalid input", () => {
+    expect(buildCSV(null, [])).toBe("");
+    expect(buildCSV(["a"], null)).toBe("");
+  });
+  it("handles empty rows array (header-only file)", () => {
+    expect(buildCSV(["a", "b"], [])).toBe("a,b\r\n");
   });
 });

@@ -19,6 +19,7 @@ import {
 } from "../utils/transfers.js";
 import { fmt } from "../utils/calc.js";
 import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/budgetCompare.js";
+import { buildCSV } from "../utils/csv.js";
 import ImportModal from "../components/ImportModal.jsx";
 
 const PRESETS = [
@@ -46,6 +47,7 @@ export default function TransactionsTab(props) {
     transactionRules = [], setTransactionRules,
     transferToleranceAmount = 0.01,
     transferToleranceDays = 2,
+    transferConfidenceThreshold = 0,
     txLoaded,
   } = props;
 
@@ -68,14 +70,22 @@ export default function TransactionsTab(props) {
   const [bulkAcct, setBulkAcct] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(0);
-  // Page size: persisted, defaults to 200. "All" uses Infinity, which bypasses pagination entirely.
+  // Page size: persisted, defaults to 100. "All" uses Infinity, which bypasses pagination entirely.
+  // The default can be overridden by the global setting (st.defaultTxPageSize) — passed in as a prop.
+  // localStorage takes precedence so a user who's manually picked a page size keeps it.
+  // The setting uses 0 as the "All" sentinel because Infinity doesn't JSON-serialize.
   const [pageSize, setPageSize] = useState(() => {
     try {
       const v = localStorage.getItem("tx_page_size");
       if (v === "all") return Infinity;
       const n = Number(v);
-      return [50, 100, 200, 500].includes(n) ? n : 200;
-    } catch { return 200; }
+      if ([25, 50, 100, 200, 500].includes(n)) return n;
+    } catch {}
+    // Fall through to the user's chosen default (set in Settings).
+    const d = Number(props.defaultTxPageSize);
+    if (d === 0) return Infinity;
+    if ([25, 50, 100, 200, 500].includes(d)) return d;
+    return 100;
   });
   useEffect(() => {
     try { localStorage.setItem("tx_page_size", pageSize === Infinity ? "all" : String(pageSize)); } catch {}
@@ -329,6 +339,69 @@ export default function TransactionsTab(props) {
     setCatSel([]); setAcctSel([]); setAmtMin(""); setAmtMax("");
   };
 
+  /* CSV export of the currently-filtered + sorted view.
+     Uses every visible column (built-in + custom, minus hidden) so the export
+     matches what the user sees on screen. Custom-field values are pulled from
+     custom_fields. Splits are flagged via a "splits" column that contains the
+     count when present — we don't try to expand splits to multiple rows
+     because a split is a single underlying transaction; users who want
+     split-level data can copy individual rows. */
+  const exportCsvCurrentView = () => {
+    if (!visibleRows || visibleRows.length === 0) {
+      alert("Nothing to export — no rows match the current filters.");
+      return;
+    }
+    // Column order matches the visible table. Built-ins use their .id; custom
+    // columns use their .name as the CSV header (more spreadsheet-friendly).
+    const cols = visibleColumns.map(col => ({
+      key: col.builtin ? col.id : col.name,
+      header: col.builtin ? (col.label || col.id) : col.name,
+      builtin: !!col.builtin,
+      id: col.id,
+    }));
+    // If splits exist anywhere in the export, add a splits-count column at the
+    // end so power users can spot rows that have allocations.
+    const anySplits = visibleRows.some(t => Array.isArray(t.splits) && t.splits.length > 0);
+    if (anySplits) cols.push({ key: "_splits", header: "Splits", builtin: false, id: "_splits" });
+
+    const headers = cols.map(c => c.header);
+    const rows = visibleRows.map(t => {
+      const out = {};
+      for (const c of cols) {
+        if (c.id === "_splits") {
+          const n = Array.isArray(t.splits) ? t.splits.length : 0;
+          out[c.header] = n > 0 ? String(n) : "";
+        } else if (c.builtin) {
+          // Built-in fields live at the top level. amount comes through as
+          // a number — let CSV writer stringify it; banks generally prefer
+          // decimal-stringified amounts over scientific notation, so guard.
+          let v = t[c.id];
+          if (c.id === "amount" && typeof v === "number") v = v.toFixed(2);
+          out[c.header] = v == null ? "" : v;
+        } else {
+          // Custom columns live in custom_fields keyed by name (deploy) or
+          // directly on the row (some legacy paths). Try both.
+          const cf = t.custom_fields || {};
+          const v = cf[c.id] !== undefined ? cf[c.id] : t[c.id];
+          out[c.header] = v == null ? "" : v;
+        }
+      }
+      return out;
+    });
+
+    const csv = buildCSV(headers, rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const today = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `transactions-${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const bulkApplyCategory = async () => {
     if (!bulkCat) return;
     const ids = new Set(selected);
@@ -441,11 +514,16 @@ export default function TransactionsTab(props) {
           return { ...t, custom_fields: cf };
         })
       : transactions;
-    return findTransferCandidates(rows, {
+    const allPairs = findTransferCandidates(rows, {
       amountTolerance: Number(transferToleranceAmount) || 0.01,
       dayTolerance:    Number(transferToleranceDays)  || 2,
       requireDifferentAccounts: true,
     });
+    // Confidence threshold filter — drops weakly-scored pairs from the modal
+    // entirely so the user doesn't have to manually deselect them. 0 = keep all.
+    const minConf = Math.max(0, Math.min(1, Number(transferConfidenceThreshold) || 0));
+    if (minConf <= 0) return allPairs;
+    return allPairs.filter(p => (p.confidence ?? 0) >= minConf);
   };
 
   const openTransferDetection = () => {
@@ -531,6 +609,9 @@ export default function TransactionsTab(props) {
             )}
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
             <button onClick={() => setShowImport(true)} style={btn("#556FB5", "#fff")}>📥 Import</button>
+            <button onClick={exportCsvCurrentView}
+              title="Download the currently-filtered view as CSV (uses your visible columns)"
+              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 Export</button>
           </div>
         </div>
 
@@ -717,6 +798,7 @@ export default function TransactionsTab(props) {
             <select value={pageSize === Infinity ? "all" : String(pageSize)}
               onChange={e => setPageSize(e.target.value === "all" ? Infinity : Number(e.target.value))}
               style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", cursor: "pointer" }}>
+              <option value="25">25</option>
               <option value="50">50</option>
               <option value="100">100</option>
               <option value="200">200</option>
@@ -1625,16 +1707,21 @@ function PairRow({ tx }) {
    component owns zero business logic — pure rendering of the aggregator output. */
 function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], milestones = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
   // ── Drill-down handlers ──
+  // Recharts 3 removed CategoricalChartState from chart-level onClick payloads,
+  // so the old `data.activePayload[0].payload` path is undefined. Bar.onClick
+  // and Line.onClick still receive the data point directly (Recharts passes the
+  // bucket row as the first arg), so we attach handlers to the data elements
+  // themselves rather than the chart wrapper.
+  //
   // Bar click: toggle the bar's category in the table's catSel. Clicking an
   // already-filtered category removes it; clicking a new one adds it.
   // Uncategorized bars aren't toggleable (no category to filter on).
-  const handleBarClick = (data /* Recharts click payload */) => {
+  const handleBarClick = (row /* the bucket payload, passed by <Bar> */) => {
     if (!setFilterCats) return;
-    // Recharts passes either an event-like obj with .activePayload, or sometimes
-    // the row itself depending on how the Bar fires. Normalize.
-    const row = data?.activePayload?.[0]?.payload || data?.payload || data;
-    const cat = row?.category;
-    const kind = row?.kind;
+    // Belt-and-suspenders: handle either the raw row or a wrapper with .payload.
+    const r = row?.payload || row;
+    const cat = r?.category;
+    const kind = r?.kind;
     if (!cat || kind === "uncategorized") return;
     setFilterCats(prev => {
       if (prev.includes(cat)) return prev.filter(c => c !== cat);
@@ -1643,13 +1730,15 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
   };
 
   // Line click: set the date range to the clicked month's full span. This also
-  // nukes any custom date preset so the dates show as explicit.
-  const handleLineClick = (data) => {
+  // nukes any custom date preset so the dates show as explicit. <Line> passes
+  // the dot-level data point (which carries the same monthStart/monthEnd as
+  // the bucket row).
+  const handleLineClick = (pt) => {
     if (!setDateFrom || !setDateTo) return;
-    const pt = data?.activePayload?.[0]?.payload;
-    if (!pt?.monthStart || !pt?.monthEnd) return;
-    setDateFrom(pt.monthStart);
-    setDateTo(pt.monthEnd);
+    const r = pt?.payload || pt;
+    if (!r?.monthStart || !r?.monthEnd) return;
+    setDateFrom(r.monthStart);
+    setDateTo(r.monthEnd);
     if (setPreset) setPreset("");
   };
   // View-mode toggle: "bars" = the original per-category Actual vs Budgeted bar
@@ -1836,19 +1925,19 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             ) : (
               <div style={{ width: "100%", height: Math.max(220, Math.min(540, chartData.length * 42 + 60)) }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}
-                    onClick={handleBarClick}
-                    style={{ cursor: setFilterCats ? "pointer" : "default" }}>
+                  <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 20, bottom: 4, left: 8 }} barCategoryGap={6}>
                     <CartesianGrid horizontal={false} stroke="var(--bdr2, #eee)" />
                     <XAxis type="number" tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
                       stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
                       tick={{ fill: "var(--tx2, #555)" }} />
                     <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
-                    {/* Budgeted — muted gray baseline bar */}
-                    <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
+                    {/* Budgeted — muted gray baseline bar. Click to filter on category too. */}
+                    <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]}
+                      onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }} />
                     {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
-                    <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
+                    <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}
+                      onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }}>
                       {chartData.map((row, i) => (
                         <Cell key={i} fill={
                           row.kind === "uncategorized" ? "#F2A93B"
@@ -1869,18 +1958,22 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             ) : (
               <div style={{ width: "100%", height: 320 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}
-                    onClick={handleLineClick}
-                    style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }}>
+                  <LineChart data={lineData} margin={{ top: 8, right: 20, bottom: 8, left: 8 }}>
                     <CartesianGrid stroke="var(--bdr2, #eee)" strokeDasharray="3 3" />
                     <XAxis dataKey="monthLabel" stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <Tooltip content={<LineTooltip category={chartCategory} />} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {/* Click handlers on the data elements themselves — Recharts 3
+                        no longer surfaces activePayload on the chart wrapper. */}
                     <Line type="monotone" dataKey="budgeted" name="Budgeted" stroke="var(--tx3, #888)"
-                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }} />
+                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }}
+                      onClick={handleLineClick}
+                      style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }} />
                     <Line type="monotone" dataKey="actual" name="Actual" stroke="#556FB5"
-                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }}
+                      onClick={handleLineClick}
+                      style={{ cursor: (setDateFrom && setDateTo) ? "pointer" : "default" }} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>

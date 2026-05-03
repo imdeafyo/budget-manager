@@ -38,6 +38,8 @@ export default function SettingsTab(props) {
     hiddenColumns, setHiddenColumns,
     rowCapWarn, setRowCapWarn,
     rowCapThreshold, setRowCapThreshold,
+    defaultTxPageSize = 100,
+    setDefaultTxPageSize,
     transactions, setTransactions,
     updateTransaction,
     importProfiles = [], setImportProfiles,
@@ -47,6 +49,8 @@ export default function SettingsTab(props) {
     setTransferToleranceAmount,
     transferToleranceDays = 2,
     setTransferToleranceDays,
+    transferConfidenceThreshold = 0,
+    setTransferConfidenceThreshold,
     treatRefundsAsNetting = true,
     setTreatRefundsAsNetting,
     deleteImportBatch,
@@ -184,6 +188,37 @@ export default function SettingsTab(props) {
       </CollapsibleCard>
 
       <CollapsibleCard
+        id="pagesize"
+        title="Transactions page size"
+        summary={`Default: ${defaultTxPageSize === 0 ? "All" : defaultTxPageSize} per page`}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          How many transactions to show per page when you first open the Transactions tab on a new device.
+          Smaller values render faster — 500 rows with inline editors and dropdowns can take a noticeable
+          moment to mount. The page size dropdown above the table lets you override per-device, and that
+          choice is remembered locally.
+        </p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, color: "var(--tx2, #555)" }}>Default:</label>
+          <select value={String(defaultTxPageSize)}
+            onChange={e => setDefaultTxPageSize && setDefaultTxPageSize(Number(e.target.value))}
+            style={{ padding: "4px 10px", fontSize: 13, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", cursor: "pointer" }}>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+            <option value="0">All</option>
+          </select>
+          <span style={{ fontSize: 12, color: "var(--tx3, #999)" }}>per page</span>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          This is just the cold-start default. Picking a different size from the page size dropdown on the
+          Transactions tab will override it for that device until you clear the browser's site data.
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard
         id="columns"
         title="Transaction columns"
         summary={`${BUILTIN_COLUMNS.length} built-in · ${transactionColumns.length} custom · ${hiddenColumns.length} hidden`}
@@ -282,7 +317,7 @@ export default function SettingsTab(props) {
       <CollapsibleCard
         id="transfers"
         title="Transfer detection"
-        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"}${dismissedCount ? ` · ${dismissedCount} dismissed` : ""}`}
+        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"} · min ${Math.round((Number(transferConfidenceThreshold) || 0) * 100)}% confidence${dismissedCount ? ` · ${dismissedCount} dismissed` : ""}`}
         style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
           Transfers are matching pairs of transactions across different accounts — money you moved between
@@ -314,6 +349,28 @@ export default function SettingsTab(props) {
             </div>
             <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
               How many days apart the two sides of a transfer can post.
+            </div>
+          </div>
+          {/* Confidence threshold — pairs below this score are dropped from the
+              detection modal entirely. The modal already shows scores per pair;
+              this just lets you say "don't even bother me with the weak ones." */}
+          <div>
+            <label style={lbl()}>Min confidence</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="number" min="0" max="100" step="5"
+                value={Math.round((Number(transferConfidenceThreshold) || 0) * 100)}
+                onChange={e => {
+                  const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+                  if (setTransferConfidenceThreshold) setTransferConfidenceThreshold(pct / 100);
+                }}
+                style={inp(70)} />
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>%</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              Each candidate gets a 0–100% score combining how close the amounts and
+              dates are (cross-account pairs score slightly higher than same-account).
+              Pairs below this threshold are hidden from the detection modal. 0% shows
+              every candidate; raise it if your detection results are noisy.
             </div>
           </div>
         </div>

@@ -113,3 +113,34 @@ export function headerSignature(headers) {
     .sort();
   return normalized.join("|");
 }
+
+/* ── CSV writer (RFC 4180) ──
+   Inverse of parseCSV. Quotes any field containing a comma, double-quote,
+   newline, or carriage return; doubles internal quotes. CRLF line endings
+   for max spreadsheet compatibility (Excel on Windows is the common round-trip
+   target — Numbers/Sheets handle both fine). Null/undefined become empty
+   string; non-strings get String()'d.
+
+   `headers` is the column order. `rows` is an array of row objects keyed by
+   header name. Headers missing from a row produce empty cells. Extra fields
+   on rows (not in headers) are ignored. */
+export function escapeCsvField(v) {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+export function buildCSV(headers, rows) {
+  if (!Array.isArray(headers) || !Array.isArray(rows)) return "";
+  const lines = [];
+  lines.push(headers.map(escapeCsvField).join(","));
+  for (const row of rows) {
+    const cells = headers.map(h => escapeCsvField(row?.[h]));
+    lines.push(cells.join(","));
+  }
+  // CRLF — what Excel and most CSV-aware tools expect.
+  return lines.join("\r\n") + "\r\n";
+}
