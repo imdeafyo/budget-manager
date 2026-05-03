@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { BarChart, Bar, LineChart, Line, Legend, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, usePlotArea, ZIndexLayer } from "recharts";
 import { Card, SH, NI } from "../components/ui.jsx";
 import {
@@ -55,6 +55,15 @@ export default function TransactionsTab(props) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
+  // Debounced copy of `search` — used by the heavy filter pipeline so each
+  // keystroke doesn't re-run applyFilters over the full transactions array.
+  // The input itself stays bound to `search` for instant feedback; the table
+  // catches up ~150ms after the user stops typing.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 150);
+    return () => clearTimeout(t);
+  }, [search]);
   const [catSel, setCatSel] = useState([]);
   const [acctSel, setAcctSel] = useState([]);
   const [amtMin, setAmtMin] = useState("");
@@ -136,17 +145,17 @@ export default function TransactionsTab(props) {
   // Sorted + filtered rows
   const visibleRows = useMemo(() => {
     const filtered = applyFilters(transactions, {
-      dateFrom, dateTo, search,
+      dateFrom, dateTo, search: debouncedSearch,
       categories: catSel.length ? catSel : undefined,
       accounts: acctSel.length ? acctSel : undefined,
       amountMin: amtMin !== "" ? Number(amtMin) : undefined,
       amountMax: amtMax !== "" ? Number(amtMax) : undefined,
     });
     return sortTransactions(filtered, sortField, sortDir);
-  }, [transactions, dateFrom, dateTo, search, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
+  }, [transactions, dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
 
   // Reset page on filter changes
-  useEffect(() => { setPage(0); }, [dateFrom, dateTo, search, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
+  useEffect(() => { setPage(0); }, [dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
 
   const pageRows = useMemo(() => {
     if (pageSize === Infinity) return visibleRows;
@@ -270,6 +279,10 @@ export default function TransactionsTab(props) {
       accounts: acctSel.length ? acctSel : undefined,
     });
   }, [transactions, catSel, acctSel]);
+  // Defer the heavy compareBudgetToActual input so the table can mount/update
+  // before the chart aggregation finishes. On big lists this is the difference
+  // between a frozen first paint and a chart that fades in a beat later.
+  const deferredChartScopedTransactions = useDeferredValue(chartScopedTransactions);
 
   // Budget rows and category list narrow to the selected categories too, so a
   // bar for "Gas" doesn't show up with its budget when the user filtered to
@@ -287,7 +300,7 @@ export default function TransactionsTab(props) {
   const compare = useMemo(() => {
     if (!compareReady) return null;
     return compareBudgetToActual({
-      transactions: chartScopedTransactions,
+      transactions: deferredChartScopedTransactions,
       exp: chartScopedExp, sav,
       cats: chartScopedCats, savCats, transferCats, incomeCats,
       milestones,
@@ -297,7 +310,7 @@ export default function TransactionsTab(props) {
       basis,
       treatRefundsAsNetting: true,
     });
-  }, [compareReady, chartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, milestones, effectiveFrom, effectiveTo, today, basis]);
+  }, [compareReady, deferredChartScopedTransactions, chartScopedExp, sav, chartScopedCats, savCats, transferCats, incomeCats, milestones, effectiveFrom, effectiveTo, today, basis]);
 
   const visibleColumns = useMemo(() => {
     const all = [
