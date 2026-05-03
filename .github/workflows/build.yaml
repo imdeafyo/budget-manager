@@ -11,14 +11,23 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # Skip builds triggered by the auto-generated-HTML commits. The
-  # build-generic.yaml workflow pushes a "[skip ci]" commit after every
-  # change, which would otherwise trigger this workflow again and inflate
-  # the version/patch count. Checking the commit message is more reliable
-  # than checking the actor because both are github-actions[bot].
+  # Skip builds triggered by:
+  #   1. The auto-generated-HTML commits ([skip ci] in subject) — bot pushes
+  #      to main from build-generic.yaml. Without this we'd loop.
+  #   2. Merge commits — when a local push crosses a bot push, `git pull`
+  #      creates a "Merge remote-tracking branch 'origin/main'" commit whose
+  #      subject doesn't contain [skip ci]. Without this filter, every push
+  #      that races a bot push triggers TWO builds (one for the human commit,
+  #      one for the resulting merge commit).
+  #   3. Bot-authored commits — defense in depth in case [skip ci] is dropped.
+  # All three checks are on github.event.head_commit, which represents the
+  # tip commit pushed.
   # ─────────────────────────────────────────────────────────────────────────
   build:
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    if: >-
+      ${{ !contains(github.event.head_commit.message, '[skip ci]')
+          && !startsWith(github.event.head_commit.message, 'Merge ')
+          && github.event.head_commit.author.username != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,13 +46,27 @@ jobs:
         MAJOR=$(echo "$LATEST" | cut -d. -f1)
         MINOR=$(echo "$LATEST" | cut -d. -f2)
 
-        # Count commits since the latest semver tag, excluding auto-generated
-        # "[skip ci]" commits from build-generic.yaml. Those are noise and
-        # should not bump the patch version.
+        # Count commits since the latest semver tag — but only ones that
+        # represent real human work. Three filters in order:
+        #   --no-merges           drop merge commits (e.g. "Merge remote-tracking
+        #                         branch 'origin/main'") that show up when local
+        #                         pushes race with the auto-build bot's push.
+        #   grep -v '\[skip ci\]' drop the bot's own auto-build commits.
+        #   grep -v "github-actions"
+        #                         belt-and-suspenders — drop anything authored
+        #                         by the bot even if the message somehow lacks
+        #                         the [skip ci] tag.
+        # Without these, every push that crosses a bot push double-bumps the
+        # patch number (once for the human commit, once for the resulting
+        # merge commit on next push).
         if git rev-parse "$LATEST" >/dev/null 2>&1; then
-          PATCH=$(git log --format=%s ${LATEST}..HEAD | grep -cv '\[skip ci\]' || echo 0)
+          PATCH=$(git log --no-merges --format='%an %s' ${LATEST}..HEAD \
+            | grep -v '\[skip ci\]' \
+            | grep -vc 'github-actions' || echo 0)
         else
-          PATCH=$(git log --format=%s | grep -cv '\[skip ci\]' || echo 0)
+          PATCH=$(git log --no-merges --format='%an %s' \
+            | grep -v '\[skip ci\]' \
+            | grep -vc 'github-actions' || echo 0)
         fi
 
         # Guard: a real build always deserves at least patch=1.

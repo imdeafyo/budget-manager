@@ -1937,11 +1937,19 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                       stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
                       tick={{ fill: "var(--tx2, #555)" }} />
                     <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
-                    {/* Budgeted — muted gray baseline bar. Click to filter. */}
+                    {/* activeBar={false} on both — Recharts 3 renders an "active
+                        bar" overlay at z-index 1000 (above the regular bars at
+                        300) when hovering, and that overlay swallows clicks
+                        because Bar.onClick is attached to the underlying bar,
+                        not the overlay. Disabling the overlay restores reliable
+                        click-anywhere-on-the-bar behavior. The Tooltip cursor
+                        rect (the gray row highlight) is still visible for hover
+                        feedback. */}
                     <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]}
+                      activeBar={false}
                       onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }} />
-                    {/* Actual — colored per row: red if over, green if under, gold for uncategorized */}
                     <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}
+                      activeBar={false}
                       onClick={handleBarClick} style={{ cursor: setFilterCats ? "pointer" : "default" }}>
                       {chartData.map((row, i) => (
                         <Cell key={i} fill={
