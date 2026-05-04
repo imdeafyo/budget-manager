@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS } from "../data/taxDB.js";
+import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS, defaultForecastAccounts } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
@@ -269,12 +269,25 @@ export default function useAppState() {
   // Default 0 keeps existing behavior (review everything).
   const [transferConfidenceThreshold, setTransferConfidenceThreshold] = useState(0);
   const [treatRefundsAsNetting, setTreatRefundsAsNetting] = useState(true);
+
+  /* Forecast advanced-mode state. `accounts` is the user-defined account
+     list (see defaultForecastAccounts in taxDB.js for shape and defaults).
+     `hsaCoverage` is the household-level HSA coverage type used by the
+     pool-limit calc: "family" (default), "self", or "both-self".
+     Simple-mode forecast inputs (return %, horizon, etc.) live in
+     localStorage on the Forecast tab; this state field only carries the
+     account list and coverage type because those are real data worth
+     server-syncing in the deploy build. */
+  const [forecast, setForecast] = useState(() => ({
+    accounts: defaultForecastAccounts(),
+    hsaCoverage: "family",
+  }));
   const [txLoaded, setTxLoaded] = useState(false);
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting]);
+  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,forecast:setForecast }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast]);
   useEffect(() => { if (!loaded) return; const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st, loaded]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -575,6 +588,7 @@ export default function useAppState() {
     if (ls.sortBy) setSortBy(ls.sortBy); if (ls.sortDir) setSortDir(ls.sortDir);
     if (ls.hlThresh !== undefined) setHlThresh(ls.hlThresh); if (ls.hlPeriod) setHlPeriod(ls.hlPeriod);
     if (ls.customTaxDB) setCustomTaxDB(ls.customTaxDB);
+    if (ls.forecast) setForecast(ls.forecast);
   }, []);
   const PieTooltip = ({ active, payload }) => {
     if (!active || !payload?.[0]) return null;
@@ -740,6 +754,7 @@ export default function useAppState() {
     transferToleranceDays, setTransferToleranceDays,
     transferConfidenceThreshold, setTransferConfidenceThreshold,
     treatRefundsAsNetting, setTreatRefundsAsNetting,
+    forecast, setForecast,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,
     MODE,

@@ -32,6 +32,20 @@ export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, c
             <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Salary</label><NI value={kSal} onChange={setKS} prefix="$" /></div>
             <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name} Bonus %</label><PI value={cEaip} onChange={setCE} /></div>
             <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name} Bonus %</label><PI value={kEaip} onChange={setKE} /></div>
+            <div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "#999" }}>
+                {p1Name} Birth Year
+                <span title="Used by Forecast tab for IRS catch-up contribution tier resolution (50+ standard catch-up, 60-63 super catch-up, 55+ HSA catch-up). Empty = no catch-up applied. Year only — no month/day needed." style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "#bbb", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+              </label>
+              <input type="number" value={tax.p1BirthYear || ""} onChange={e => upTax("p1BirthYear", +e.target.value || 0)} placeholder="e.g. 1985" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)", boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, color: "#999" }}>
+                {p2Name} Birth Year
+                <span title="Used by Forecast tab for IRS catch-up contribution tier resolution. Empty = no catch-up applied." style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "#bbb", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+              </label>
+              <input type="number" value={tax.p2BirthYear || ""} onChange={e => upTax("p2BirthYear", +e.target.value || 0)} placeholder="e.g. 1990" style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)", boxSizing: "border-box" }} />
+            </div>
           </div>
           <div style={{ marginTop: 12 }}><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>Filing Status</label>
             <select value={fil} onChange={e => setFil(e.target.value)} style={{ width: "100%", border: "2px solid var(--input-border, #e0e0e0)", borderRadius: 8, padding: 8, fontSize: 13, fontFamily: "'DM Sans',sans-serif", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #222)" }}><option value="mfj">Married Filing Jointly</option><option value="single">Single / MFS</option></select></div>

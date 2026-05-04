@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   evalF, resolveFormula, calcMatch, calcFed, getMarg,
   calcStateTax, getStateMarg, toWk, fromWk, recalcMilestonePure,
-  forecastGrowth, yearsToTarget
+  forecastGrowth, yearsToTarget,
+  forecastGrowthAccounts, yearsToHitPoolLimit
 } from "../utils/calc.js";
-import { TAX_DB, STATE_BRACKETS } from "../data/taxDB.js";
+import { TAX_DB, STATE_BRACKETS, getPoolLimit, ACCOUNT_TYPE_TO_POOL, IRA_LIMITS, HSA_LIMITS_SELF, CATCHUP_401K } from "../data/taxDB.js";
 
 describe("evalF — formula evaluation", () => {
   it("handles plain numbers", () => {
@@ -436,5 +437,276 @@ describe("yearsToTarget — time-to-goal calculator", () => {
     const noGrowth = yearsToTarget(0, 12000, 0, 100000);
     const withGrowth = yearsToTarget(0, 12000, 7, 100000);
     expect(withGrowth).toBeLessThan(noGrowth);
+  });
+});
+
+/* ── Account-based forecast & pool limit tests ─────────────────────── */
+
+describe("getPoolLimit — pool limit resolution by year/age", () => {
+  it("returns 401(k) base limit with no catch-up when age < 50", () => {
+    const lim = getPoolLimit("401k_employee", 2026, 35);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim);
+  });
+  it("adds standard catch-up at age 50", () => {
+    const lim = getPoolLimit("401k_employee", 2026, 50);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim + CATCHUP_401K["2026"].standard);
+  });
+  it("uses super catch-up at age 60", () => {
+    const lim = getPoolLimit("401k_employee", 2026, 60);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim + CATCHUP_401K["2026"].super);
+  });
+  it("uses super catch-up at age 63 (last year of window)", () => {
+    const lim = getPoolLimit("401k_employee", 2026, 63);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim + CATCHUP_401K["2026"].super);
+  });
+  it("drops back to standard catch-up at age 64", () => {
+    const lim = getPoolLimit("401k_employee", 2026, 64);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim + CATCHUP_401K["2026"].standard);
+  });
+  it("ignores catch-up when age is null", () => {
+    const lim = getPoolLimit("401k_employee", 2026, null);
+    expect(lim).toBe(TAX_DB["2026"].k401Lim);
+  });
+  it("returns IRA limit per person + catch-up at 50+", () => {
+    expect(getPoolLimit("ira", 2026, 30)).toBe(IRA_LIMITS["2026"].base);
+    expect(getPoolLimit("ira", 2026, 50)).toBe(IRA_LIMITS["2026"].base + IRA_LIMITS["2026"].catchup50);
+  });
+  it("HSA family is the household pool default", () => {
+    expect(getPoolLimit("hsa", 2026, 30, "family")).toBe(TAX_DB["2026"].hsaLimit);
+  });
+  it("HSA self uses self-only limit", () => {
+    expect(getPoolLimit("hsa", 2026, 30, "self")).toBe(HSA_LIMITS_SELF["2026"].self);
+  });
+  it("HSA both-self doubles the self limit", () => {
+    expect(getPoolLimit("hsa", 2026, 30, "both-self")).toBe(HSA_LIMITS_SELF["2026"].self * 2);
+  });
+  it("HSA catch-up applies at age 55+", () => {
+    const lim55 = getPoolLimit("hsa", 2026, 55, "family");
+    expect(lim55).toBe(TAX_DB["2026"].hsaLimit + HSA_LIMITS_SELF["2026"].catchup55);
+  });
+  it("returns Infinity for taxable / cash / null pool", () => {
+    expect(getPoolLimit(null, 2026, 50)).toBe(Infinity);
+    expect(getPoolLimit("nonexistent", 2026, 50)).toBe(Infinity);
+  });
+  it("future years fall back to most recent known year", () => {
+    const futureLimit = getPoolLimit("ira", 2050, 30);
+    const knownLimit = getPoolLimit("ira", 2026, 30);
+    expect(futureLimit).toBe(knownLimit); // stays at latest known limit
+  });
+});
+
+describe("ACCOUNT_TYPE_TO_POOL — account type to pool mapping", () => {
+  it("maps 401(k) types to 401k_employee", () => {
+    expect(ACCOUNT_TYPE_TO_POOL["401k_pretax"]).toBe("401k_employee");
+    expect(ACCOUNT_TYPE_TO_POOL["401k_roth"]).toBe("401k_employee");
+  });
+  it("maps IRA types to ira pool", () => {
+    expect(ACCOUNT_TYPE_TO_POOL["ira_traditional"]).toBe("ira");
+    expect(ACCOUNT_TYPE_TO_POOL["ira_roth"]).toBe("ira");
+  });
+  it("hsa maps to hsa pool", () => {
+    expect(ACCOUNT_TYPE_TO_POOL["hsa"]).toBe("hsa");
+  });
+  it("taxable / cash / custom have no pool", () => {
+    expect(ACCOUNT_TYPE_TO_POOL["taxable"]).toBeNull();
+    expect(ACCOUNT_TYPE_TO_POOL["cash"]).toBeNull();
+    expect(ACCOUNT_TYPE_TO_POOL["custom"]).toBeNull();
+  });
+});
+
+describe("forecastGrowthAccounts — account-based projection", () => {
+  const baseOpts = {
+    baseYear: 2026,
+    inflationPct: 3,
+    p1BirthYear: 1985, // 41 in 2026, no catch-up
+    p2BirthYear: 1990, // 36 in 2026
+    hsaCoverage: "family",
+    getPoolLimit,
+    accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+  };
+
+  it("returns empty result for empty accounts list", () => {
+    const r = forecastGrowthAccounts([], 10, baseOpts);
+    expect(r.years).toEqual([]);
+    expect(r.accountSeries).toEqual({});
+  });
+
+  it("year-0 row matches starting balances exactly", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 50000, annualReturn: 7, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "b", name: "B", owner: "p2", type: "taxable", startBalance: 25000, annualReturn: 7, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 5, baseOpts);
+    expect(r.years[0].year).toBe(0);
+    expect(r.years[0].totals.nominal).toBe(75000);
+    expect(r.years[0].byAccount.a.nominal).toBe(50000);
+  });
+
+  it("zero contributions, pure growth — single account compounds correctly", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 10000, annualReturn: 7, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 10, baseOpts);
+    // Monthly compounding at 7% annual for 10 years
+    const expected = 10000 * Math.pow(Math.pow(1.07, 1/12), 120);
+    expect(r.years[10].byAccount.a.nominal).toBeCloseTo(expected, 0);
+  });
+
+  it("sum of bucket balances equals total each year (invariant)", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 10000, annualReturn: 5, contribAmount: 1000, annualIncrease: 0, capAtLimit: false },
+      { id: "b", name: "B", owner: "p1", type: "401k_pretax", startBalance: 20000, annualReturn: 8, contribAmount: 5000, annualIncrease: 2, capAtLimit: true },
+      { id: "c", name: "C", owner: "p2", type: "hsa", startBalance: 5000, annualReturn: 6, contribAmount: 3000, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 10, baseOpts);
+    for (const row of r.years) {
+      const sum = Object.values(row.byAccount).reduce((s, v) => s + v.nominal, 0);
+      expect(row.totals.nominal).toBeCloseTo(sum, 6);
+    }
+  });
+
+  it("annual increase compounds the contribution year over year", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1000, annualIncrease: 10, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, baseOpts);
+    // Year 1: 1000, Year 2: 1100, Year 3: 1210; cumulative 3310
+    expect(r.years[1].byAccount.a.contribution).toBeCloseTo(1000, 6);
+    expect(r.years[2].byAccount.a.contribution).toBeCloseTo(1100, 6);
+    expect(r.years[3].byAccount.a.contribution).toBeCloseTo(1210, 6);
+    expect(r.accountSeries.a[3].contribCum).toBeCloseTo(3310, 6);
+  });
+
+  it("caps at IRS limit when capAtLimit=true and over the pool", () => {
+    // Pre-tax + Roth 401(k) for one person, both with capAtLimit, total way over
+    const accounts = [
+      { id: "pre", name: "Pre", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 20000, annualIncrease: 0, capAtLimit: true },
+      { id: "ro",  name: "Roth", owner: "p1", type: "401k_roth",  startBalance: 0, annualReturn: 0, contribAmount: 20000, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    const total = r.years[1].byAccount.pre.contribution + r.years[1].byAccount.ro.contribution;
+    expect(total).toBeCloseTo(TAX_DB["2026"].k401Lim, 6); // capped at 2026 limit
+    expect(r.poolWarnings.length).toBeGreaterThan(0);
+    expect(r.poolWarnings[0].pool).toBe("401k_employee");
+    expect(r.poolWarnings[0].capped).toBeGreaterThan(0);
+  });
+
+  it("does not cap when capAtLimit=false even if over the pool limit", () => {
+    const accounts = [
+      { id: "pre", name: "Pre", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 50000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    expect(r.years[1].byAccount.pre.contribution).toBeCloseTo(50000, 6);
+  });
+
+  it("per-person pools are independent (P1 and P2 each get own 401k limit)", () => {
+    const accounts = [
+      { id: "p1k", name: "P1 401k", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: TAX_DB["2026"].k401Lim, annualIncrease: 0, capAtLimit: true },
+      { id: "p2k", name: "P2 401k", owner: "p2", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: TAX_DB["2026"].k401Lim, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    // Both should be fully honored — neither pool is over individually
+    expect(r.years[1].byAccount.p1k.contribution).toBeCloseTo(TAX_DB["2026"].k401Lim, 6);
+    expect(r.years[1].byAccount.p2k.contribution).toBeCloseTo(TAX_DB["2026"].k401Lim, 6);
+    expect(r.poolWarnings.length).toBe(0);
+  });
+
+  it("HSA pool aggregates household accounts under family limit", () => {
+    const accounts = [
+      { id: "h1", name: "P1 HSA", owner: "p1", type: "hsa", startBalance: 0, annualReturn: 0, contribAmount: 6000, annualIncrease: 0, capAtLimit: true },
+      { id: "h2", name: "P2 HSA", owner: "p2", type: "hsa", startBalance: 0, annualReturn: 0, contribAmount: 6000, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    const total = r.years[1].byAccount.h1.contribution + r.years[1].byAccount.h2.contribution;
+    expect(total).toBeCloseTo(TAX_DB["2026"].hsaLimit, 6); // family limit, not 12000
+  });
+
+  it("custom / taxable accounts have no limit (no warning)", () => {
+    const accounts = [
+      { id: "tx", name: "Brokerage", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1000000, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    expect(r.years[1].byAccount.tx.contribution).toBeCloseTo(1000000, 6);
+    expect(r.poolWarnings.length).toBe(0);
+  });
+
+  it("catch-up tier transitions: contribution raised mid-projection at age 50", () => {
+    // P1 is 49 in 2026 (born 1977), turns 50 in 2027 → year-1 limit is base, year-2 is base+catchup
+    const accounts = [
+      { id: "k", name: "401k", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 999999, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, p1BirthYear: 1977 });
+    // Year 1 (calendarYear 2027, age 50): standard catch-up applies
+    expect(r.years[1].byAccount.k.contribution).toBe(getPoolLimit("401k_employee", 2027, 50));
+    // Year 2 (2028, age 51): same standard catch-up
+    expect(r.years[2].byAccount.k.contribution).toBe(getPoolLimit("401k_employee", 2028, 51));
+  });
+
+  it("super catch-up window 60-63 increases limit then drops back at 64", () => {
+    // Born 1965: age 61 in 2026 → super, ... age 64 in 2029 → standard
+    const accounts = [
+      { id: "k", name: "401k", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 999999, annualIncrease: 0, capAtLimit: true },
+    ];
+    const r = forecastGrowthAccounts(accounts, 5, { ...baseOpts, p1BirthYear: 1965 });
+    // Year 1 (2027, age 62): super
+    expect(r.years[1].byAccount.k.contribution).toBe(getPoolLimit("401k_employee", 2027, 62));
+    // Year 3 (2029, age 64): drops to standard — should be lower
+    expect(r.years[3].byAccount.k.contribution).toBe(getPoolLimit("401k_employee", 2029, 64));
+    expect(r.years[3].byAccount.k.contribution).toBeLessThan(r.years[1].byAccount.k.contribution);
+  });
+
+  it("real (inflation-adjusted) values are deflated correctly", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 100000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 10, { ...baseOpts, inflationPct: 3 });
+    // 100k flat, deflated by 3% for 10 years
+    const expectedReal = 100000 / Math.pow(1.03, 10);
+    expect(r.years[10].byAccount.a.real).toBeCloseTo(expectedReal, 0);
+  });
+
+  it("mixed capped + uncapped in same pool: uncapped honored, capped scaled", () => {
+    // P1 401k pre-tax (capped) + Roth (NOT capped) — uncapped Roth honored,
+    // pre-tax scaled to fit remainder
+    const limit = TAX_DB["2026"].k401Lim;
+    const accounts = [
+      { id: "pre", name: "Pre", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 30000, annualIncrease: 0, capAtLimit: true },
+      { id: "ro",  name: "Roth", owner: "p1", type: "401k_roth",  startBalance: 0, annualReturn: 0, contribAmount: 10000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    expect(r.years[1].byAccount.ro.contribution).toBeCloseTo(10000, 6); // honored
+    // Pre is scaled so total is at limit. Total = limit ⇒ pre = limit - 10000
+    expect(r.years[1].byAccount.pre.contribution).toBeCloseTo(limit - 10000, 6);
+  });
+
+  it("fully maxed-out pool: capped accounts get zero when uncapped already exceeds limit", () => {
+    const limit = TAX_DB["2026"].k401Lim;
+    const accounts = [
+      { id: "pre", name: "Pre", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 5000, annualIncrease: 0, capAtLimit: true },
+      { id: "ro",  name: "Roth", owner: "p1", type: "401k_roth",  startBalance: 0, annualReturn: 0, contribAmount: limit + 5000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, baseOpts);
+    expect(r.years[1].byAccount.ro.contribution).toBeCloseTo(limit + 5000, 6); // honored as-is
+    expect(r.years[1].byAccount.pre.contribution).toBeCloseTo(0, 6); // no remaining budget
+  });
+});
+
+describe("yearsToHitPoolLimit — when does ramping contribution hit the cap", () => {
+  it("returns 0 if base already at limit", () => {
+    expect(yearsToHitPoolLimit(20000, 5, 20000)).toBe(0);
+  });
+  it("returns null when base is 0", () => {
+    expect(yearsToHitPoolLimit(0, 5, 20000)).toBeNull();
+  });
+  it("returns null when increase is 0 and base below limit", () => {
+    expect(yearsToHitPoolLimit(10000, 0, 20000)).toBeNull();
+  });
+  it("returns null when limit is Infinity (no pool)", () => {
+    expect(yearsToHitPoolLimit(10000, 5, Infinity)).toBeNull();
+  });
+  it("computes the correct year for a ramp", () => {
+    // 10000 * 1.10^(y-1) = 20000 → y-1 = log(2)/log(1.10) ≈ 7.27 → year 9
+    const y = yearsToHitPoolLimit(10000, 10, 20000);
+    expect(y).toBe(9); // first integer year at or above 20000
   });
 });

@@ -219,3 +219,250 @@ export function yearsToTarget(initialBalance, annualContribution, returnPct, tar
   }
   return null;
 }
+
+/* ── Account-based forecast (advanced mode) ──
+   Projects per-account compound growth with per-pool IRS limit enforcement.
+
+   Each account has its own startBalance, annualReturn, annual contribution,
+   and annual contribution increase (compounding). Contributions are checked
+   against per-person/per-pool IRS limits each year — when capAtLimit is
+   true on an account, that account's contribution is reduced to fit within
+   the remaining pool budget.
+
+   Pool grouping rules (see ACCOUNT_TYPE_TO_POOL in taxDB.js):
+     - 401k_pretax + 401k_roth share a per-person pool (401k_employee)
+     - ira_traditional + ira_roth share a per-person pool (ira)
+     - hsa accounts share a household pool
+     - taxable / cash / custom: no pool, no limit
+
+   Capping algorithm per pool per year:
+     1. Compute each account's desired contribution (base × (1+increase)^(y-1))
+     2. Sum desired contributions in the pool
+     3. If total ≤ pool limit, no cap needed
+     4. Else: sort accounts in pool by desired (descending). For each
+        account with capAtLimit=true, reduce proportionally so the pool
+        total fits. Accounts with capAtLimit=false are honored as-is and
+        the remaining cap budget is distributed across the rest.
+        (If non-capped accounts already exceed the limit, capped accounts
+        contribute zero — we don't go negative.)
+
+   Pool resolution requires the year (limits change), the owner's age
+   (catch-up tiers), and HSA coverage type. Owner ages are derived from
+   `tax.p1BirthYear` / `tax.p2BirthYear` + the projection year. Joint-owner
+   accounts use the older of the two ages for catch-up purposes (more
+   generous; matches how IRS treats household HSAs).
+
+   Inputs:
+     accounts          — array of account objects (see defaultForecastAccounts)
+     years             — projection horizon (integer)
+     opts              — {
+       baseYear,           // calendar year of year-0 (e.g. 2026)
+       inflationPct,       // annual % for real-dollar conversion
+       p1BirthYear,        // for catch-up tier resolution; null = no catch-up
+       p2BirthYear,
+       hsaCoverage,        // "family" | "self" | "both-self"
+       getPoolLimit,       // injected from taxDB to keep calc.js dependency-free
+     }
+
+   Returns:
+     {
+       years: [{ year, calendarYear, byAccount, byPool, totals }],
+       accountSeries: { [acctId]: [{ year, balance, real, contribution, contribCum, capped }] },
+       poolWarnings: [{ year, pool, owner, requested, limit, capped }],
+     }
+   `byAccount`, `byPool`, `totals` each contain { nominal, real, contributions }
+   (real contributions are deflated to today's dollars). */
+export function forecastGrowthAccounts(accounts, years, opts) {
+  const {
+    baseYear = new Date().getFullYear(),
+    inflationPct = 0,
+    p1BirthYear = null,
+    p2BirthYear = null,
+    hsaCoverage = "family",
+    getPoolLimit, // function(pool, year, age, hsaCoverage) -> limit
+    accountTypeToPool, // map: type -> pool name | null
+  } = opts || {};
+
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return { years: [], accountSeries: {}, poolWarnings: [] };
+  }
+  if (typeof getPoolLimit !== "function" || !accountTypeToPool) {
+    throw new Error("forecastGrowthAccounts requires getPoolLimit and accountTypeToPool in opts");
+  }
+
+  const i = inflationPct / 100;
+  const ageOf = (owner, calendarYear) => {
+    if (owner === "p1" && p1BirthYear) return calendarYear - p1BirthYear;
+    if (owner === "p2" && p2BirthYear) return calendarYear - p2BirthYear;
+    if (owner === "joint") {
+      // For HSA / shared accounts, use the older participant for the most
+      // generous catch-up (matches IRS rule: HSA catch-up is per-account-holder).
+      if (p1BirthYear && p2BirthYear) return calendarYear - Math.min(p1BirthYear, p2BirthYear);
+      if (p1BirthYear) return calendarYear - p1BirthYear;
+      if (p2BirthYear) return calendarYear - p2BirthYear;
+    }
+    return null;
+  };
+
+  // Initialize per-account balances and series
+  const balances = {};
+  const cumContribs = {};
+  const accountSeries = {};
+  for (const a of accounts) {
+    balances[a.id] = Number(a.startBalance) || 0;
+    cumContribs[a.id] = 0;
+    accountSeries[a.id] = [{ year: 0, balance: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0, capped: false }];
+  }
+
+  const yearRows = [{
+    year: 0,
+    calendarYear: baseYear,
+    byAccount: Object.fromEntries(accounts.map(a => [a.id, { nominal: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0 }])),
+    byPool: {},
+    totals: {
+      nominal: accounts.reduce((s, a) => s + balances[a.id], 0),
+      real: accounts.reduce((s, a) => s + balances[a.id], 0),
+      contributions: 0,
+    },
+  }];
+  const poolWarnings = [];
+
+  for (let y = 1; y <= years; y++) {
+    const calendarYear = baseYear + y;
+
+    // 1. Compute desired contribution for each account this year.
+    const desired = {}; // acctId -> desired contribution
+    for (const a of accounts) {
+      const base = Number(a.contribAmount) || 0;
+      const incr = (Number(a.annualIncrease) || 0) / 100;
+      // Year-y increase compounds from year 1 (year 1 uses base unchanged).
+      desired[a.id] = base * Math.pow(1 + incr, y - 1);
+    }
+
+    // 2. Group by pool key. Pool key = pool + owner (for per-person pools)
+    //    or just pool (for household pools like HSA).
+    const poolKey = (a) => {
+      const pool = accountTypeToPool[a.type];
+      if (!pool) return null;
+      if (pool === "hsa") return "hsa"; // household
+      return `${pool}::${a.owner}`;
+    };
+
+    const poolGroups = {}; // poolKey -> { pool, owner, accounts: [] }
+    for (const a of accounts) {
+      const k = poolKey(a);
+      if (!k) continue;
+      const pool = accountTypeToPool[a.type];
+      if (!poolGroups[k]) poolGroups[k] = { pool, owner: a.owner, accounts: [] };
+      poolGroups[k].accounts.push(a);
+    }
+
+    // 3. Apply caps per pool.
+    const finalContrib = { ...desired };
+    for (const [k, group] of Object.entries(poolGroups)) {
+      const age = ageOf(group.accounts[0].owner === "joint" ? "joint" : group.owner, calendarYear);
+      const limit = getPoolLimit(group.pool, calendarYear, age, hsaCoverage);
+      const total = group.accounts.reduce((s, a) => s + desired[a.id], 0);
+      if (!isFinite(limit) || total <= limit) continue;
+
+      // Some accounts in the pool requested more than the limit. Honor
+      // un-capped accounts first, then proportionally scale capped ones to
+      // fit the remainder.
+      const uncapped = group.accounts.filter(a => !a.capAtLimit);
+      const capped = group.accounts.filter(a => a.capAtLimit);
+      const uncappedTotal = uncapped.reduce((s, a) => s + desired[a.id], 0);
+      const remaining = Math.max(0, limit - uncappedTotal);
+      const cappedTotal = capped.reduce((s, a) => s + desired[a.id], 0);
+
+      if (cappedTotal > 0) {
+        const scale = Math.min(1, remaining / cappedTotal);
+        for (const a of capped) {
+          finalContrib[a.id] = desired[a.id] * scale;
+        }
+      }
+
+      poolWarnings.push({
+        year: y,
+        calendarYear,
+        pool: group.pool,
+        owner: group.accounts[0].owner === "joint" ? "joint" : group.owner,
+        requested: total,
+        limit,
+        capped: total - group.accounts.reduce((s, a) => s + finalContrib[a.id], 0),
+      });
+    }
+
+    // 4. Apply growth + contributions per account (monthly compounding).
+    const byAccount = {};
+    const byPool = {};
+    let totalNominal = 0;
+    let totalReal = 0;
+    let totalContrib = 0;
+
+    for (const a of accounts) {
+      const r = (Number(a.annualReturn) || 0) / 100;
+      const monthlyR = Math.pow(1 + r, 1 / 12) - 1;
+      const yearAnnual = finalContrib[a.id];
+      const monthlyC = yearAnnual / 12;
+      let bal = balances[a.id];
+      for (let m = 0; m < 12; m++) {
+        bal = bal * (1 + monthlyR) + monthlyC;
+      }
+      balances[a.id] = bal;
+      cumContribs[a.id] += yearAnnual;
+      const real = bal / Math.pow(1 + i, y);
+      const wasCapped = (desired[a.id] - finalContrib[a.id]) > 0.01;
+      accountSeries[a.id].push({
+        year: y,
+        balance: bal,
+        real,
+        contribution: yearAnnual,
+        contribCum: cumContribs[a.id],
+        capped: wasCapped,
+        desiredContribution: desired[a.id],
+      });
+      byAccount[a.id] = { nominal: bal, real, contribution: yearAnnual, contribCum: cumContribs[a.id] };
+
+      const poolName = accountTypeToPool[a.type] || "taxable";
+      if (!byPool[poolName]) byPool[poolName] = { nominal: 0, real: 0, contribution: 0 };
+      byPool[poolName].nominal += bal;
+      byPool[poolName].real += real;
+      byPool[poolName].contribution += yearAnnual;
+
+      totalNominal += bal;
+      totalReal += real;
+      totalContrib += yearAnnual;
+    }
+
+    yearRows.push({
+      year: y,
+      calendarYear,
+      byAccount,
+      byPool,
+      totals: { nominal: totalNominal, real: totalReal, contributions: totalContrib },
+    });
+  }
+
+  return { years: yearRows, accountSeries, poolWarnings };
+}
+
+/* ── How many years until annual contribution hits the pool limit? ──
+   Given a base contribution, an annual % increase, and a pool/age, returns
+   the year (integer) in which `base × (1+incr)^(year-1)` first equals or
+   exceeds the limit. Returns null if the base is already at/over, or if it
+   never reaches within `maxYears` (no growth or growth too slow).
+
+   Used for the "you'll hit the limit in year N" UI hint next to each
+   account's contribution input. */
+export function yearsToHitPoolLimit(base, annualIncreasePct, limit, maxYears = 100) {
+  if (!isFinite(limit)) return null;
+  if (base <= 0) return null;
+  if (base >= limit) return 0;
+  const incr = annualIncreasePct / 100;
+  if (incr <= 0) return null; // flat contribution can never reach a higher limit
+  for (let y = 1; y <= maxYears; y++) {
+    const v = base * Math.pow(1 + incr, y - 1);
+    if (v >= limit) return y;
+  }
+  return null;
+}

@@ -45,6 +45,11 @@ export const DEF_TAX = {
   cMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], cMatchBase: 6,
   kMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], kMatchBase: 6,
   hsaLimit: 8300, hsaEmployerMatch: 0,
+  /* Birth years (4-digit) for catch-up tier resolution in the forecast.
+     Empty/0 = no catch-up applied (graceful default for the generic build
+     where personal data is zeroed). User opts in via Income tab. */
+  p1BirthYear: 0,
+  p2BirthYear: 0,
 };
 
 export const STATE_ABBR = {"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY","District of Columbia":"DC"};
@@ -139,3 +144,152 @@ export const DEF_SAV_CATS = ["Emergency","Short-Term","Long-Term","Retirement","
 export const DEF_TRANSFER_CATS = ["Transfer","Credit Card Payment","Internal Transfer"];
 export const DEF_INCOME_CATS = ["Paycheck","Bonus","Interest","Dividend","Refund","Gift","Other Income"];
 export const DEF_SAV = [{n:"House Fund",v:"0",p:"m",c:"Home"},{n:"Emergency Fund",v:"0",p:"m",c:"Emergency"},{n:"Washing Machine",v:"0",p:"m",c:"Home"},{n:"Destination Unknown",v:"0",p:"m",c:"Travel"},{n:"Temporary",v:"0",p:"m",c:"Other"}];
+
+/* ── Forecast contribution limits (account-based forecast) ──
+   Per-year IRS limits used by the Forecast tab's advanced (account-based)
+   mode. The TAX_DB above carries `k401Lim` (401(k) employee deferral) and
+   `hsaLimit` (HSA family) per year for the live tax calc — those values are
+   the source of truth when present. The tables below add what TAX_DB doesn't
+   carry: IRA limits, HSA self-only limits, and catch-up tier amounts.
+
+   Catch-up tiers (current law):
+     - Standard catch-up (50+): adds to 401(k), IRA, HSA
+     - Super catch-up (60-63, 401(k) only, SECURE 2.0): replaces standard
+     - HSA catch-up (55+): separate amount, smaller than 401(k) catch-up
+   At age 64+ the 401(k) super catch-up drops back to standard.
+
+   Years before 2024 either had no super catch-up (didn't exist yet) or
+   pre-date HSAs entirely. For projection purposes (which always look forward
+   from today) only recent and future years matter; older years are kept
+   minimal to avoid bogus historical projections. */
+export const IRA_LIMITS = {
+  /* IRA contribution limits per person. Catch-up at 50+. */
+  "2018": { base: 5500, catchup50: 1000 },
+  "2019": { base: 6000, catchup50: 1000 },
+  "2020": { base: 6000, catchup50: 1000 },
+  "2021": { base: 6000, catchup50: 1000 },
+  "2022": { base: 6000, catchup50: 1000 },
+  "2023": { base: 6500, catchup50: 1000 },
+  "2024": { base: 7000, catchup50: 1000 },
+  "2025": { base: 7000, catchup50: 1000 },
+  "2026": { base: 7500, catchup50: 1000 },
+};
+
+export const HSA_LIMITS_SELF = {
+  /* HSA self-only limits per person. Family limit lives in TAX_DB.hsaLimit.
+     HSA catch-up is age 55+ and is a separate amount per person. */
+  "2018": { self: 3450, catchup55: 1000 },
+  "2019": { self: 3500, catchup55: 1000 },
+  "2020": { self: 3550, catchup55: 1000 },
+  "2021": { self: 3600, catchup55: 1000 },
+  "2022": { self: 3650, catchup55: 1000 },
+  "2023": { self: 3850, catchup55: 1000 },
+  "2024": { self: 4150, catchup55: 1000 },
+  "2025": { self: 4300, catchup55: 1000 },
+  "2026": { self: 4400, catchup55: 1000 },
+};
+
+export const CATCHUP_401K = {
+  /* 401(k) catch-up amounts per year. `standard` is age 50+ baseline.
+     `super` is the SECURE 2.0 enhanced catch-up for ages 60-63 (drops back
+     to standard at 64+). Pre-2025 have no super tier. Catch-up applies on
+     top of the base k401Lim from TAX_DB. */
+  "2018": { standard: 6000, super: 0 },
+  "2019": { standard: 6000, super: 0 },
+  "2020": { standard: 6500, super: 0 },
+  "2021": { standard: 6500, super: 0 },
+  "2022": { standard: 6500, super: 0 },
+  "2023": { standard: 7500, super: 0 },
+  "2024": { standard: 7500, super: 0 },
+  "2025": { standard: 7500, super: 11250 },
+  "2026": { standard: 8000, super: 11250 },
+};
+
+/* ── Limit pool resolution ──
+   Returns the IRS limit for a given pool, year, and age. Pools are how
+   contributions group across accounts that share a tax treatment:
+
+     401k_employee  — pre-tax 401k + Roth 401k (per person)
+     ira            — traditional IRA + Roth IRA (per person)
+     hsa            — household pool, self-or-family driven by `hsaCoverage`
+
+   `age` is optional; if provided, catch-up amounts are added per the
+   age-tier rules above. `hsaCoverage` is "family" | "self" | "both-self"
+   (latter doubles the self limit since each person gets their own).
+
+   Returns the numeric annual limit, or Infinity if the pool has no IRS
+   limit (taxable accounts, custom accounts).
+
+   The function intentionally falls back to the most recent year in the
+   table when asked for a future year — projection horizons run 30+ years
+   into the future and IRS limits aren't published that far ahead. Better
+   to project today's limit forward than to hallucinate growth. */
+export function getPoolLimit(pool, year, age, hsaCoverage = "family") {
+  const yr = String(year);
+  // Find the closest year ≤ requested, then fall back to highest if none.
+  const yearsList = (db) => Object.keys(db).sort();
+  const resolve = (db) => {
+    if (db[yr]) return db[yr];
+    const keys = yearsList(db);
+    const earlier = keys.filter(k => k <= yr).pop();
+    if (earlier) return db[earlier];
+    return db[keys[keys.length - 1]]; // future-year: use latest known
+  };
+  const tierFor401k = (a) => {
+    if (a == null) return "none";
+    if (a >= 64) return "standard";
+    if (a >= 60) return "super";
+    if (a >= 50) return "standard";
+    return "none";
+  };
+  const tierForIRA = (a) => (a != null && a >= 50) ? "standard" : "none";
+  const tierForHSA = (a) => (a != null && a >= 55) ? "standard" : "none";
+
+  if (pool === "401k_employee") {
+    const taxRow = TAX_DB[yr] || TAX_DB[yearsList(TAX_DB).filter(k => k <= yr).pop() || Object.keys(TAX_DB).sort().slice(-1)[0]];
+    const base = taxRow ? taxRow.k401Lim : 24500;
+    const catchupRow = resolve(CATCHUP_401K);
+    const tier = tierFor401k(age);
+    const catchup = tier === "super" ? catchupRow.super : tier === "standard" ? catchupRow.standard : 0;
+    return base + catchup;
+  }
+  if (pool === "ira") {
+    const row = resolve(IRA_LIMITS);
+    return row.base + (tierForIRA(age) === "standard" ? row.catchup50 : 0);
+  }
+  if (pool === "hsa") {
+    const taxRow = TAX_DB[yr] || TAX_DB[Object.keys(TAX_DB).sort().filter(k => k <= yr).pop() || Object.keys(TAX_DB).sort().slice(-1)[0]];
+    const familyLim = taxRow ? taxRow.hsaLimit : 8300;
+    const selfRow = resolve(HSA_LIMITS_SELF);
+    const catchup = tierForHSA(age) === "standard" ? selfRow.catchup55 : 0;
+    if (hsaCoverage === "self") return selfRow.self + catchup;
+    if (hsaCoverage === "both-self") return (selfRow.self + catchup) * 2;
+    return familyLim + catchup; // family default
+  }
+  return Infinity; // taxable, cash, custom
+}
+
+/* Map of account `type` → limit pool. Used by forecast math to bucket
+   account-level contributions into pools for limit checking. */
+export const ACCOUNT_TYPE_TO_POOL = {
+  "401k_pretax": "401k_employee",
+  "401k_roth":   "401k_employee",
+  "ira_traditional": "ira",
+  "ira_roth":        "ira",
+  "hsa":     "hsa",
+  "taxable": null,
+  "cash":    null,
+  "custom":  null,
+};
+
+/* Default account list for first-time advanced-mode users. */
+export function defaultForecastAccounts() {
+  return [
+    { id: "acc_p1_401k_pretax", name: "P1 401(k) — Pre-tax", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    { id: "acc_p1_401k_roth",   name: "P1 401(k) — Roth",    owner: "p1", type: "401k_roth",   startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    { id: "acc_p2_401k_pretax", name: "P2 401(k) — Pre-tax", owner: "p2", type: "401k_pretax", startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    { id: "acc_p2_401k_roth",   name: "P2 401(k) — Roth",    owner: "p2", type: "401k_roth",   startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    { id: "acc_hsa_family",     name: "HSA — Family",        owner: "joint", type: "hsa",      startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    { id: "acc_cash_joint",     name: "Cash / Taxable",      owner: "joint", type: "taxable",  startBalance: 0, annualReturn: 4, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+  ];
+}
