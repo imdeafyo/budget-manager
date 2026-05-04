@@ -12,7 +12,7 @@ import { actualAnnualContribution } from "../utils/forecastActuals.js";
    happening per the transaction log — useful when actual spending diverges
    from the planned budget. Choice persists per-device to localStorage.
 */
-export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [] }) {
+export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0 }) {
   const [returnPct, setReturnPct] = useState(() => { try { return localStorage.getItem("forecast-return") || "7"; } catch { return "7"; } });
   const [inflationPct, setInflationPct] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
   const [initialBalance, setInitialBalance] = useState(() => { try { return localStorage.getItem("forecast-initial") || "0"; } catch { return "0"; } });
@@ -37,6 +37,27 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const [forecastBonus, setForecastBonus] = useState(() => {
     try { return localStorage.getItem("forecast-bonus") === "1"; } catch { return false; }
   });
+  // Phase 7: retirement-contribution toggles. The base `C.net` excludes 401(k)
+  // elective contributions (they're stripped pre-net), HSA (also pre-tax/pre-net),
+  // and obviously employer match (never touched the paycheck). For a retirement
+  // forecast you almost certainly want these IN — but they're per-toggle so the
+  // user can model either "all savings" or just "after-tax savings."
+  // 401(k) elective + HSA default ON (likely intent for a retirement forecast).
+  // Employer match defaults ON only if a match is actually configured.
+  const [include401k, setInclude401k] = useState(() => {
+    try { return localStorage.getItem("forecast-include-401k") !== "0"; } catch { return true; }
+  });
+  const [includeMatch, setIncludeMatch] = useState(() => {
+    try {
+      const v = localStorage.getItem("forecast-include-match");
+      if (v === "0") return false;
+      if (v === "1") return true;
+      return true; // default on
+    } catch { return true; }
+  });
+  const [includeHSA, setIncludeHSA] = useState(() => {
+    try { return localStorage.getItem("forecast-include-hsa") !== "0"; } catch { return true; }
+  });
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
@@ -48,28 +69,69 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   useEffect(() => { try { localStorage.setItem("forecast-actual-mode", actualMode); } catch {} }, [actualMode]);
   useEffect(() => { try { localStorage.setItem("forecast-weeks", String(forecastWeeks)); } catch {} }, [forecastWeeks]);
   useEffect(() => { try { localStorage.setItem("forecast-bonus", forecastBonus ? "1" : "0"); } catch {} }, [forecastBonus]);
+  useEffect(() => { try { localStorage.setItem("forecast-include-401k", include401k ? "1" : "0"); } catch {} }, [include401k]);
+  useEffect(() => { try { localStorage.setItem("forecast-include-match", includeMatch ? "1" : "0"); } catch {} }, [includeMatch]);
+  useEffect(() => { try { localStorage.setItem("forecast-include-hsa", includeHSA ? "1" : "0"); } catch {} }, [includeHSA]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
   const init = evalF(initialBalance);
 
+  /* Weekly HSA contributions: HSA lives inside preDed (pre-tax deductions),
+     identified by name match — same convention as BudgetTab. Sum c+k across
+     all "hsa"-named rows. The rest of preDed is non-savings (insurance,
+     parking, etc.) and stays out of the contribution figure. */
+  const hsaWeekly = useMemo(() => {
+    if (!Array.isArray(preDed)) return 0;
+    return preDed
+      .filter(d => d && typeof d.n === "string" && d.n.toLowerCase().includes("hsa"))
+      .reduce((s, d) => s + evalF(d.c) + evalF(d.k), 0);
+  }, [preDed]);
+
+  /* Retirement-side adders. These represent dollars going to retirement that
+     don't flow through `C.net` or appear in the user's checking-account
+     transaction log:
+       - 401(k) elective (pre-tax + Roth, both persons) — already deducted
+         from gross before C.net
+       - Employer 401(k) match — never touched the paycheck
+       - HSA (employee contributions via preDed + employer annual match)
+     We add them as a flat annual figure to whichever base contribution
+     number we computed (budget OR actuals). This avoids the semantic
+     awkwardness of folding them into "income" — they're not income, they're
+     savings flows the user wants the forecast to count. */
+  const retirementAnnual = useMemo(() => {
+    let weekly = 0;
+    let annual = 0;
+    if (include401k) weekly += (C.c4w || 0) + (C.k4w || 0);
+    if (includeMatch) weekly += (C.cMP || 0) + (C.kMP || 0);
+    if (includeHSA) {
+      weekly += hsaWeekly;
+      annual += Number(hsaEmployerMatchAnnual) || 0;
+    }
+    return weekly * forecastWeeks + annual;
+  }, [include401k, includeMatch, includeHSA, C.c4w, C.k4w, C.cMP, C.kMP, hsaWeekly, hsaEmployerMatchAnnual, forecastWeeks]);
+
   /* Budget-based annual contribution.
      Income scales with weeks (52 calendar / 48 paycheck cadence). Expenses
      are fixed costs that don't scale with the toggle (per app convention —
      see budget tab's Y48/Y52 logic). Bonus follows this tab's local toggle.
-     Algebra: at 48 weeks this reduces to (savings + remaining) × 48 + bonus,
-     matching the prior implementation. */
+     Retirement adders are tacked on at the end (see retirementAnnual note).
+     Algebra: at 48 weeks with all retirement off, this reduces to
+     (savings + remaining) × 48 + bonus, matching the prior implementation. */
   const budgetAnnualContribution = useMemo(() => {
     const incomeAnnual = (C.net || 0) * forecastWeeks;
     const expensesAnnual = tExpW * 48;
     const bonus = forecastBonus ? (C.eaipNet || 0) : 0;
-    return incomeAnnual - expensesAnnual + bonus;
-  }, [C.net, C.eaipNet, tExpW, forecastWeeks, forecastBonus]);
+    return incomeAnnual - expensesAnnual + bonus + retirementAnnual;
+  }, [C.net, C.eaipNet, tExpW, forecastWeeks, forecastBonus, retirementAnnual]);
 
   /* Budgeted annual NET income — used by the "expenses" actuals mode as a
      stable income baseline so a one-off bonus paycheck in the window doesn't
      inflate the projection. Scales with the local weeks toggle. Bonus
-     follows the local forecast bonus toggle. */
+     follows the local forecast bonus toggle. Retirement adders are NOT
+     folded in here — they're applied to the final actuals result downstream
+     (otherwise we'd double-count or distort the income figure shown in the
+     explainer). */
   const budgetedAnnualIncome = useMemo(() => {
     const base = (C.net || 0) * forecastWeeks;
     const bonus = forecastBonus ? (C.eaipNet || 0) : 0;
@@ -89,12 +151,17 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   }, [contribSource, actualMode, transactions, cats, savCats, transferCats, incomeCats, budgetedAnnualIncome]);
 
   /* Effective contribution used for the projection.
-     - If actuals source selected and the window has data → use actuals.
-     - Otherwise (budget source, or actuals window empty) → use budget. */
+     - If actuals source selected and the window has data → use actuals
+       PLUS retirement adders (the actuals computation only sees what's in
+       the transaction log, which typically excludes 401(k)/HSA payroll
+       deductions and employer match — those flow direct to retirement
+       accounts and never appear in checking transactions).
+     - Otherwise (budget source, or actuals window empty) → use budget
+       (already retirement-aware via budgetAnnualContribution). */
   const annualContribution = useMemo(() => {
-    if (contribSource !== "budget" && actualsResult) return actualsResult.annual;
+    if (contribSource !== "budget" && actualsResult) return actualsResult.annual + retirementAnnual;
     return budgetAnnualContribution;
-  }, [contribSource, actualsResult, budgetAnnualContribution]);
+  }, [contribSource, actualsResult, budgetAnnualContribution, retirementAnnual]);
 
   const usingActuals = contribSource !== "budget" && !!actualsResult;
 
@@ -161,6 +228,12 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
             <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
             <button onClick={() => setForecastBonus(!forecastBonus)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastBonus ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastBonus ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Include net annual bonus in the projection. Independent from the Trends tab toggle.">Bonus: {forecastBonus ? "ON" : "OFF"}</button>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Retirement:</span>
+            <button onClick={() => setInclude401k(!include401k)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: include401k ? "#2ECC71" : "var(--input-bg,#f5f5f5)", color: include401k ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Include both persons' 401(k) elective contributions (pre-tax + Roth). These are stripped from net pay, so the budget formula won't otherwise capture them.">401(k): {include401k ? "ON" : "OFF"}</button>
+            <button onClick={() => setIncludeMatch(!includeMatch)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: includeMatch ? "#2ECC71" : "var(--input-bg,#f5f5f5)", color: includeMatch ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Include employer 401(k) match. Free money that never touches your paycheck.">Match: {includeMatch ? "ON" : "OFF"}</button>
+            <button onClick={() => setIncludeHSA(!includeHSA)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: includeHSA ? "#2ECC71" : "var(--input-bg,#f5f5f5)", color: includeHSA ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Include HSA contributions (pre-tax deductions named 'HSA') plus any configured HSA employer match.">HSA: {includeHSA ? "ON" : "OFF"}</button>
+          </div>
           {contribSource !== "budget" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Actuals formula:</span>
@@ -168,22 +241,22 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               <button onClick={() => setActualMode("expenses")} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: actualMode === "expenses" ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: actualMode === "expenses" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Budgeted income − actual expenses. Isolates spending discipline from income volatility (bonus paychecks won't inflate the figure).">vs Budgeted Income</button>
             </div>
           )}
-          <div><strong>Annual contribution:</strong> {fmt(annualContribution)} {forecastBonus && contribSource === "budget" ? "(includes bonus)" : ""}</div>
+          <div><strong>Annual contribution:</strong> {fmt(annualContribution)}{retirementAnnual > 0 ? ` (includes ${fmt(retirementAnnual)} retirement)` : ""}{forecastBonus && contribSource === "budget" ? " (+ bonus)" : ""}</div>
           {contribSource === "budget" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
-              = (net income × {forecastWeeks} wk) − (expenses × 48) {forecastBonus ? "+ net bonus" : ""}. Expenses use 48 because budgeted expenses are fixed costs that don't scale with the weeks toggle.
+              = (net income × {forecastWeeks} wk) − (expenses × 48){forecastBonus ? " + net bonus" : ""}{retirementAnnual > 0 ? ` + retirement ${fmt(retirementAnnual)}` : ""}. Expenses use 48 because budgeted expenses are fixed costs that don't scale with the weeks toggle.
             </div>
           )}
           {contribSource !== "budget" && usingActuals && actualMode === "net" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
               From {actualsResult.txCount} transaction{actualsResult.txCount === 1 ? "" : "s"} in the last {actualsResult.months} months ({actualsResult.fromIso} → {actualsResult.toIso}):
-              income {fmt(actualsResult.income)} − expenses {fmt(actualsResult.expenses)} = {fmt(actualsResult.monthlyNet)}/mo × 12. Budget figure for comparison: {fmt(budgetAnnualContribution)}.
+              income {fmt(actualsResult.income)} − expenses {fmt(actualsResult.expenses)} = {fmt(actualsResult.monthlyNet)}/mo × 12 = {fmt(actualsResult.annual)}{retirementAnnual > 0 ? ` + retirement ${fmt(retirementAnnual)}` : ""}. Budget figure for comparison: {fmt(budgetAnnualContribution)}.
             </div>
           )}
           {contribSource !== "budget" && usingActuals && actualMode === "expenses" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
               From {actualsResult.txCount} transaction{actualsResult.txCount === 1 ? "" : "s"} in the last {actualsResult.months} months ({actualsResult.fromIso} → {actualsResult.toIso}):
-              budgeted income {fmt(budgetedAnnualIncome)} − annualized actual expenses {fmt(actualsResult.expenses * 12 / actualsResult.months)} = {fmt(actualsResult.annual)}/yr. Net-formula figure for comparison: {fmt((actualsResult.income - actualsResult.expenses) * 12 / actualsResult.months)}.
+              budgeted income {fmt(budgetedAnnualIncome)} − annualized actual expenses {fmt(actualsResult.expenses * 12 / actualsResult.months)} = {fmt(actualsResult.annual)}{retirementAnnual > 0 ? ` + retirement ${fmt(retirementAnnual)}` : ""}/yr. Net-formula figure for comparison: {fmt((actualsResult.income - actualsResult.expenses) * 12 / actualsResult.months + retirementAnnual)}.
             </div>
           )}
           {contribSource !== "budget" && !usingActuals && (
