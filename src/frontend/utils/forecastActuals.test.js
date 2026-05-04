@@ -277,3 +277,89 @@ describe("actualAnnualContribution", () => {
     expect(result.fromIso).toMatch(/^2026-0[12]-\d{2}$/);
   });
 });
+
+describe("actualAnnualContribution — mode: 'expenses' (budgeted income − actual expenses)", () => {
+  it("annual = budgetedAnnualIncome − annualized actual expenses", () => {
+    // 6mo window. Actual expenses: 6× $2,000 = $12,000. Annualized: $24,000.
+    // Budgeted income: $90,000. Expected annual: 90,000 − 24,000 = $66,000.
+    const transactions = [
+      tx("2026-04-01", 5000, "Paycheck"),  // income — ignored in this mode's annual figure
+      tx("2026-04-15", -2000, "Food"),
+      tx("2026-03-15", -2000, "Food"),
+      tx("2026-02-15", -2000, "Food"),
+      tx("2026-01-15", -2000, "Food"),
+      tx("2025-12-15", -2000, "Food"),
+      tx("2025-11-15", -2000, "Food"),
+    ];
+    const result = actualAnnualContribution({
+      transactions, months: 6, todayIso: "2026-05-01",
+      cats: ["Food"], savCats: [],
+      mode: "expenses", budgetedAnnualIncome: 90000,
+    });
+    expect(result.mode).toBe("expenses");
+    expect(result.budgetedAnnualIncome).toBe(90000);
+    expect(result.annual).toBe(66000);
+    expect(result.monthlyNet).toBe(5500); // 66000 / 12
+    expect(result.expenses).toBe(12000); // raw window total, not annualized
+  });
+
+  it("ignores actual income in expenses mode (immune to bonus-paycheck noise)", () => {
+    // Same expenses as above ($12k → $24k annualized). Add a one-off $20k
+    // bonus paycheck. In "net" mode this would inflate annual contribution
+    // by $40k (20k × 12/6). In "expenses" mode it must not.
+    const transactions = [
+      tx("2026-04-01", 25000, "Bonus"),  // surprise! large one-off income
+      tx("2026-04-15", -2000, "Food"),
+      tx("2026-03-15", -2000, "Food"),
+      tx("2026-02-15", -2000, "Food"),
+      tx("2026-01-15", -2000, "Food"),
+      tx("2025-12-15", -2000, "Food"),
+      tx("2025-11-15", -2000, "Food"),
+    ];
+    const result = actualAnnualContribution({
+      transactions, months: 6, todayIso: "2026-05-01",
+      cats: ["Food"], savCats: [],
+      mode: "expenses", budgetedAnnualIncome: 90000,
+    });
+    expect(result.annual).toBe(66000); // identical to prior test — bonus ignored
+  });
+
+  it("treats missing budgetedAnnualIncome as 0", () => {
+    const transactions = [
+      tx("2026-04-15", -2000, "Food"),
+      tx("2026-03-15", -2000, "Food"),
+      tx("2026-02-15", -2000, "Food"),
+    ];
+    const result = actualAnnualContribution({
+      transactions, months: 3, todayIso: "2026-05-01",
+      cats: ["Food"], savCats: [],
+      mode: "expenses",
+      // budgetedAnnualIncome omitted
+    });
+    // 3mo expenses: $6,000. Annualized: $24,000. Annual: 0 − 24,000 = -24,000.
+    expect(result.annual).toBe(-24000);
+    expect(result.budgetedAnnualIncome).toBe(0);
+  });
+
+  it("net mode unchanged by adding budgetedAnnualIncome (back-compat)", () => {
+    const transactions = [
+      tx("2026-04-01", 5000, "Paycheck"),
+      tx("2026-04-15", -2000, "Food"),
+    ];
+    const a = actualAnnualContribution({
+      transactions, months: 3, todayIso: "2026-05-01",
+      cats: ["Food"], savCats: [],
+      // mode defaults to "net"
+    });
+    const b = actualAnnualContribution({
+      transactions, months: 3, todayIso: "2026-05-01",
+      cats: ["Food"], savCats: [],
+      mode: "net",
+      budgetedAnnualIncome: 999999,  // ignored
+    });
+    expect(a.annual).toBe(b.annual);
+    expect(a.mode).toBe("net");       // default
+    expect(b.mode).toBe("net");
+    expect(b.budgetedAnnualIncome).toBeNull();
+  });
+});

@@ -21,6 +21,9 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const [targetMonths, setTargetMonths] = useState(() => { try { return localStorage.getItem("forecast-target-months") || "12"; } catch { return "12"; } });
   // Phase 7: contribution source — "budget" | "actual3" | "actual6" | "actual12"
   const [contribSource, setContribSource] = useState(() => { try { return localStorage.getItem("forecast-contrib-source") || "budget"; } catch { return "budget"; } });
+  // Phase 7: actuals mode — "net" (income − expenses) | "expenses" (budgeted income − expenses)
+  // Only meaningful when contribSource !== "budget".
+  const [actualMode, setActualMode] = useState(() => { try { return localStorage.getItem("forecast-actual-mode") || "net"; } catch { return "net"; } });
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
@@ -29,6 +32,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   useEffect(() => { try { localStorage.setItem("forecast-value-mode", valueMode); } catch {} }, [valueMode]);
   useEffect(() => { try { localStorage.setItem("forecast-target-months", targetMonths); } catch {} }, [targetMonths]);
   useEffect(() => { try { localStorage.setItem("forecast-contrib-source", contribSource); } catch {} }, [contribSource]);
+  useEffect(() => { try { localStorage.setItem("forecast-actual-mode", actualMode); } catch {} }, [actualMode]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
@@ -42,6 +46,17 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
     return base + bonus;
   }, [totalSavPlusRemW, includeEaip, C.eaipNet]);
 
+  /* Budgeted annual NET income — used by the "expenses" actuals mode as a
+     stable income baseline so a one-off bonus paycheck in the window doesn't
+     inflate the projection. C.net is weekly net paycheck total; × 48 to
+     match the budget's paycheck cadence. Bonus follows the same toggle as
+     the budget contribution path. */
+  const budgetedAnnualIncome = useMemo(() => {
+    const base = (C.net || 0) * 48;
+    const bonus = includeEaip ? (C.eaipNet || 0) : 0;
+    return base + bonus;
+  }, [C.net, includeEaip, C.eaipNet]);
+
   /* Actuals-based contribution: derived from transactions over a recent
      window. Returns null if there are no transactions in the window — in
      that case we fall back to the budget figure. */
@@ -50,8 +65,9 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
     const months = contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6;
     return actualAnnualContribution({
       transactions, months, cats, savCats, transferCats, incomeCats,
+      mode: actualMode, budgetedAnnualIncome,
     });
-  }, [contribSource, transactions, cats, savCats, transferCats, incomeCats]);
+  }, [contribSource, actualMode, transactions, cats, savCats, transferCats, incomeCats, budgetedAnnualIncome]);
 
   /* Effective contribution used for the projection.
      - If actuals source selected and the window has data → use actuals.
@@ -119,16 +135,29 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
             {sourceBtn("actual6", "Actuals (6mo)")}
             {sourceBtn("actual12", "Actuals (12mo)")}
           </div>
+          {contribSource !== "budget" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Actuals formula:</span>
+              <button onClick={() => setActualMode("net")} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: actualMode === "net" ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: actualMode === "net" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Actual income − actual expenses. Pairs realized income with realized spending.">Net (income − expenses)</button>
+              <button onClick={() => setActualMode("expenses")} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: actualMode === "expenses" ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: actualMode === "expenses" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Budgeted income − actual expenses. Isolates spending discipline from income volatility (bonus paychecks won't inflate the figure).">vs Budgeted Income</button>
+            </div>
+          )}
           <div><strong>Annual contribution:</strong> {fmt(annualContribution)} {includeEaip && contribSource === "budget" ? "(includes bonus)" : ""}</div>
           {contribSource === "budget" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
               = (savings + remaining) × 48 paychecks {includeEaip ? "+ net bonus" : ""}. Adjust on the Charts tab to toggle bonus inclusion.
             </div>
           )}
-          {contribSource !== "budget" && usingActuals && (
+          {contribSource !== "budget" && usingActuals && actualMode === "net" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
               From {actualsResult.txCount} transaction{actualsResult.txCount === 1 ? "" : "s"} in the last {actualsResult.months} months ({actualsResult.fromIso} → {actualsResult.toIso}):
               income {fmt(actualsResult.income)} − expenses {fmt(actualsResult.expenses)} = {fmt(actualsResult.monthlyNet)}/mo × 12. Budget figure for comparison: {fmt(budgetAnnualContribution)}.
+            </div>
+          )}
+          {contribSource !== "budget" && usingActuals && actualMode === "expenses" && (
+            <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
+              From {actualsResult.txCount} transaction{actualsResult.txCount === 1 ? "" : "s"} in the last {actualsResult.months} months ({actualsResult.fromIso} → {actualsResult.toIso}):
+              budgeted income {fmt(budgetedAnnualIncome)} − annualized actual expenses {fmt(actualsResult.expenses * 12 / actualsResult.months)} = {fmt(actualsResult.annual)}/yr. Net-formula figure for comparison: {fmt((actualsResult.income - actualsResult.expenses) * 12 / actualsResult.months)}.
             </div>
           )}
           {contribSource !== "budget" && !usingActuals && (

@@ -133,6 +133,19 @@ function sumNonSavingsExpenses(transactions, opts) {
                    isIncomeTx detects income via positive-amount + non-
                    expense/savings, so this list is reserved for future use
                    when we want stricter income detection)
+     mode:         "net"      — actual income − actual expenses (default;
+                                what shipped originally; pairs realized
+                                income with realized spending, captures
+                                income volatility)
+                   "expenses" — budgeted annual income − actual expenses,
+                                annualized. Isolates spending discipline
+                                from income volatility (a one-off bonus
+                                paycheck won't inflate the figure).
+                                Requires `budgetedAnnualIncome`.
+     budgetedAnnualIncome:
+                   Required when mode === "expenses". Caller-supplied
+                   annual budgeted net income (typically C.net × 48 +
+                   bonus). Ignored in "net" mode.
 */
 export function actualAnnualContribution(opts) {
   const {
@@ -142,6 +155,8 @@ export function actualAnnualContribution(opts) {
     cats = [],
     savCats = [],
     transferCats = [],
+    mode = "net",
+    budgetedAnnualIncome = 0,
     // incomeCats reserved (see note above)
   } = opts || {};
 
@@ -165,8 +180,19 @@ export function actualAnnualContribution(opts) {
   const income   = sumIncome(inWindow, { transferCatSet, expenseCatSet, savingsCatSet });
   const expenses = sumNonSavingsExpenses(inWindow, { expenseCatSet });
 
-  const monthlyNet = (income - expenses) / m;
-  const annual = monthlyNet * 12;
+  let monthlyNet;
+  let annual;
+  if (mode === "expenses") {
+    // Budgeted income (annual) − actual expenses (annualized from window).
+    // We don't average budgeted income — it's already annual, by definition.
+    const annualExpenses = (expenses / m) * 12;
+    annual = (Number(budgetedAnnualIncome) || 0) - annualExpenses;
+    monthlyNet = annual / 12;
+  } else {
+    // "net" — original behavior: actual income − actual expenses, annualized.
+    monthlyNet = (income - expenses) / m;
+    annual = monthlyNet * 12;
+  }
 
   return {
     annual: Math.round(annual * 100) / 100,
@@ -177,5 +203,7 @@ export function actualAnnualContribution(opts) {
     fromIso,
     toIso: todayIso,
     txCount: inWindow.length,
+    mode,
+    budgetedAnnualIncome: mode === "expenses" ? (Number(budgetedAnnualIncome) || 0) : null,
   };
 }
