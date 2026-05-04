@@ -166,27 +166,39 @@ export const recalcSnapPure = recalcMilestonePure;
 
    `annualContribution` is total saved per year, `initialBalance` is starting
    principal (treated as already in today's dollars at year 0), `returnPct`
-   and `inflationPct` are annual percentages (e.g. 7 for 7%). */
-export function forecastGrowth(initialBalance, annualContribution, returnPct, inflationPct, horizonYears) {
+   and `inflationPct` are annual percentages (e.g. 7 for 7%).
+
+   `contributionGrowthPct` (optional, default 0) is the annual nominal growth
+   of contributions — modeling raises and salary-tied savings (401k%, HSA,
+   bonus%, employer match all scale with salary). Year-y annual contribution
+   becomes `annualContribution × (1+g)^y`. To model "real contribution flat"
+   set g equal to inflation. To model real career growth, set g above
+   inflation. */
+export function forecastGrowth(initialBalance, annualContribution, returnPct, inflationPct, horizonYears, contributionGrowthPct = 0) {
   const r = returnPct / 100;
   const i = inflationPct / 100;
+  const g = contributionGrowthPct / 100;
   const monthlyR = Math.pow(1 + r, 1 / 12) - 1;
-  const monthlyC = annualContribution / 12;
   const out = [];
   let bal = initialBalance;
   let contribTotal = initialBalance;
   let realContribTotal = initialBalance; // year-0 dollars are today's dollars
   out.push({ year: 0, nominal: bal, real: bal, contributions: contribTotal, realContributions: realContribTotal });
   for (let y = 1; y <= horizonYears; y++) {
+    // Year-y annual contribution scales by (1+g)^(y-1) so year 1 uses the
+    // base amount unchanged. Pick the index convention that makes "no
+    // growth" (g=0) a no-op — and that puts the first raise at year 2.
+    const yearAnnual = annualContribution * Math.pow(1 + g, y - 1);
+    const monthlyC = yearAnnual / 12;
     for (let m = 0; m < 12; m++) {
       bal = bal * (1 + monthlyR) + monthlyC;
     }
-    contribTotal += annualContribution;
-    // Year-y contribution deflated to today's purchasing power. We treat the
-    // full annual amount as occurring at year-end for symmetry with the way
-    // `real` is computed (end-of-year balance ÷ (1+i)^y). Sub-yearly precision
-    // doesn't change the comparison meaningfully.
-    realContribTotal += annualContribution / Math.pow(1 + i, y);
+    contribTotal += yearAnnual;
+    // Deflate this year's contribution to today's purchasing power. We treat
+    // the full annual amount as occurring at year-end for symmetry with the
+    // way `real` is computed (end-of-year balance ÷ (1+i)^y). Sub-yearly
+    // precision doesn't change the comparison meaningfully.
+    realContribTotal += yearAnnual / Math.pow(1 + i, y);
     const real = bal / Math.pow(1 + i, y);
     out.push({ year: y, nominal: bal, real, contributions: contribTotal, realContributions: realContribTotal });
   }

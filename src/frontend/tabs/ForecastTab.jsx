@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { forecastGrowth, yearsToTarget, fmt, evalF } from "../utils/calc.js";
+import { forecastGrowth, fmt, evalF } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 
 /* Forecast tab: projects compound growth of savings over time.
@@ -15,6 +15,14 @@ import { actualAnnualContribution } from "../utils/forecastActuals.js";
 export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0 }) {
   const [returnPct, setReturnPct] = useState(() => { try { return localStorage.getItem("forecast-return") || "7"; } catch { return "7"; } });
   const [inflationPct, setInflationPct] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
+  // Phase 7: nominal income growth rate. Default 3% to match inflation default —
+  // at defaults this means real contributions roughly flat (matches old
+  // behavior). Setting above inflation models real career growth (raises that
+  // beat cost-of-living); setting below models stagnation. Applied to total
+  // annual contribution, which approximates well — most savings flows scale
+  // with salary (take-home, 401k%, HSA, bonus%, employer match). The flat
+  // HSA employer match is technically over-credited but the error is tiny.
+  const [incomeGrowthPct, setIncomeGrowthPct] = useState(() => { try { return localStorage.getItem("forecast-income-growth") || "3"; } catch { return "3"; } });
   const [initialBalance, setInitialBalance] = useState(() => { try { return localStorage.getItem("forecast-initial") || "0"; } catch { return "0"; } });
   const [horizon, setHorizon] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
   const [valueMode, setValueMode] = useState(() => { try { return localStorage.getItem("forecast-value-mode") || "both"; } catch { return "both"; } }); // both | nominal | real
@@ -70,6 +78,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
+  useEffect(() => { try { localStorage.setItem("forecast-income-growth", incomeGrowthPct); } catch {} }, [incomeGrowthPct]);
   useEffect(() => { try { localStorage.setItem("forecast-initial", initialBalance); } catch {} }, [initialBalance]);
   useEffect(() => { try { localStorage.setItem("forecast-horizon", String(horizon)); } catch {} }, [horizon]);
   useEffect(() => { try { localStorage.setItem("forecast-value-mode", valueMode); } catch {} }, [valueMode]);
@@ -86,6 +95,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
+  const g = evalF(incomeGrowthPct);
   const init = evalF(initialBalance);
 
   /* Weekly HSA contributions: HSA lives inside preDed (pre-tax deductions),
@@ -206,17 +216,43 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   }, [contribSource, actualsResult, tExpW]);
   const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
   const fireWithdrawalRate = useMemo(() => fireMultiplierNum > 0 ? 100 / fireMultiplierNum : 0, [fireMultiplierNum]);
-  const yearsToFire = useMemo(() => {
-    if (!fireEnabled || fireTarget <= 0) return null;
-    // Real return = nominal return − inflation (approximation; exact is (1+r)/(1+i)−1
-    // but for typical values the difference is < 0.1%).
-    return yearsToTarget(init, annualContribution, r - i, fireTarget);
-  }, [fireEnabled, fireTarget, init, annualContribution, r, i]);
 
-  const forecast = useMemo(() => forecastGrowth(init, annualContribution, r, i, horizon), [init, annualContribution, r, i, horizon]);
+  // Forecast must be computed before years-to-X calcs so they can derive
+  // crossover years from the array (which already accounts for income
+  // growth via `g`). This is more robust than calling yearsToTarget with
+  // a flat contribution — that would ignore the growth toggle.
+  const forecast = useMemo(() => forecastGrowth(init, annualContribution, r, i, horizon, g), [init, annualContribution, r, i, horizon, g]);
   const finalRow = forecast[forecast.length - 1];
 
-  const yearsToGoal = useMemo(() => targetAmount > 0 ? yearsToTarget(init, annualContribution, r, targetAmount) : null, [init, annualContribution, r, targetAmount]);
+  // Helper: walk the forecast and find the year (with fractional precision via
+  // linear interpolation between adjacent rows) when `field` first crosses
+  // `target`. Returns null if not reached within horizon.
+  const crossoverYear = (field, target) => {
+    if (init >= target) return 0;
+    for (let y = 1; y < forecast.length; y++) {
+      if (forecast[y][field] >= target) {
+        const prev = forecast[y - 1][field];
+        const cur = forecast[y][field];
+        const frac = cur > prev ? (target - prev) / (cur - prev) : 0;
+        return (y - 1) + Math.max(0, Math.min(1, frac));
+      }
+    }
+    return null;
+  };
+
+  // FIRE: target is in today's dollars (flat line on chart), so we compare
+  // against the REAL balance line — the inflation-adjusted balance climbs
+  // to meet the flat target. Income growth is already baked into `forecast`.
+  const yearsToFire = useMemo(() => {
+    if (!fireEnabled || fireTarget <= 0) return null;
+    return crossoverYear("real", fireTarget);
+  }, [fireEnabled, fireTarget, forecast]);
+
+  // Time-to-X-months: target is X × today's monthly expenses (today's $).
+  // Compared against NOMINAL balance for back-compat with the existing
+  // calculator semantics. (Switching to real here would be more honest, but
+  // it's a separate decision from this slice.)
+  const yearsToGoal = useMemo(() => targetAmount > 0 ? crossoverYear("nominal", targetAmount) : null, [targetAmount, forecast]);
 
   const horizonOpts = [1, 5, 10, 20, 30];
   const modeBtn = (mode, val, label) => (
@@ -237,7 +273,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
       {/* Inputs card */}
       <Card>
         <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Assumptions</h3>
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5, 1fr)", gap: 12 }}>
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Starting Balance</label>
             <NI value={initialBalance} onChange={setInitialBalance} onBlurResolve prefix="$" />
@@ -249,6 +285,13 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Inflation %</label>
             <NI value={inflationPct} onChange={setInflationPct} onBlurResolve />
+          </div>
+          <div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Income Growth %
+              <span title={"Annual nominal growth of contributions \u2014 raises, salary-tied savings (401k%, HSA, bonus%, employer match all scale with salary).\n\n\u2022 Set equal to inflation (default) for flat real contributions\n\u2022 Set above inflation to model real career growth\n\u2022 Set to 0 to model stagnation\n\nApplied to total annual contribution; year-y contribution = base \u00d7 (1+growth)^(y-1)."} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+            </label>
+            <NI value={incomeGrowthPct} onChange={setIncomeGrowthPct} onBlurResolve />
           </div>
           <div>
             <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>Horizon</label>
@@ -416,21 +459,21 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
                   </div>
                 ) : yearsToFire === null ? (
                   <div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable</div>
-                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>At a real return of {(r - i).toFixed(1)}% with {fmt(annualContribution)}/yr contributions, you'd never reach {fmt(fireTarget)}. Increase contributions, reduce expenses, or raise expected return.</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable in {horizon} yr</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Real balance doesn't reach {fmt(fireTarget)} within your horizon at current settings. Increase contributions, reduce expenses, raise expected return — or extend the horizon to see if it crosses later.</div>
                   </div>
                 ) : (
                   <div>
                     <div style={{ fontSize: 32, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFire.toFixed(1)} years</div>
                     <div style={{ fontSize: 13, color: "var(--tx2,#555)", marginTop: 4, fontWeight: 600 }}>≈ {new Date(Date.now() + yearsToFire * 365.25 * 86400000).toLocaleDateString(undefined, { year: "numeric", month: "long" })}</div>
-                    <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>at {(r - i).toFixed(1)}% real return, {fmt(annualContribution)}/yr contributions</div>
+                    <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>at {r}% return, {i}% infl, {g}% income growth, {fmt(annualContribution)}/yr base</div>
                     {yearsToFire > horizon && <div style={{ fontSize: 11, color: "#E8573A", marginTop: 4, fontWeight: 600 }}>⚠️ Beyond your {horizon}yr horizon — extend horizon to see crossover.</div>}
                   </div>
                 )}
               </div>
             </div>
             <div style={{ marginTop: 12, padding: 12, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, fontSize: 11, color: "var(--tx3,#888)", lineHeight: 1.6 }}>
-              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI compares against the <em>real</em> balance line, using a real return of {(r - i).toFixed(1)}% (= {r}% nominal − {i}% inflation). When the real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
+              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI is when the <em>real</em> balance line crosses the target — derived from the same projection as the chart, so income growth ({g}%) and all other settings flow through automatically. When real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
             </div>
           </>
         )}

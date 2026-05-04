@@ -375,6 +375,48 @@ describe("forecastGrowth — compound growth", () => {
     expect(realGrowth).toBeGreaterThan(0);
     expect(realGrowth).toBeLessThan(last.realContributions); // less than doubling
   });
+
+  it("contributionGrowthPct defaults to 0 (back-compat with old callers)", () => {
+    const a = forecastGrowth(10000, 12000, 7, 3, 10);
+    const b = forecastGrowth(10000, 12000, 7, 3, 10, 0);
+    expect(a[10].nominal).toBeCloseTo(b[10].nominal, 6);
+    expect(a[10].contributions).toBeCloseTo(b[10].contributions, 6);
+    expect(a[10].realContributions).toBeCloseTo(b[10].realContributions, 6);
+  });
+
+  it("contributionGrowthPct scales each year's contribution by (1+g)^(y-1)", () => {
+    // 0% return so totals are pure contributions. 0% inflation so real == nominal.
+    // Initial 0, base 1000/yr, 10% growth → year 1: 1000, year 2: 1100, year 3: 1210.
+    // Cumulative at year 3: 1000 + 1100 + 1210 = 3310.
+    const out = forecastGrowth(0, 1000, 0, 0, 3, 10);
+    expect(out[1].contributions).toBeCloseTo(1000, 4);
+    expect(out[2].contributions).toBeCloseTo(2100, 4);
+    expect(out[3].contributions).toBeCloseTo(3310, 4);
+    // Same for realContributions when inflation is 0.
+    expect(out[3].realContributions).toBeCloseTo(3310, 4);
+  });
+
+  it("contributionGrowth at inflation rate keeps each year's deflated contribution roughly constant", () => {
+    // 3% growth + 3% inflation: each year's contribution in today's dollars
+    // is roughly constant. realContributions accumulates deflated contributions
+    // (year-y contribution deflated by (1+i)^y), so total ≈ years × base.
+    // Note: this is NOT the same as `real` ending balance — a 0% return means
+    // dormant principal loses value to inflation each year, so `real` runs
+    // below `realContributions`. The "flat real contribution" property lives
+    // in the realContributions accumulation, not the balance.
+    const out = forecastGrowth(0, 10000, 0, 3, 20, 3);
+    // 20 years × ~$9,709 per year (in today's $) ≈ $194k
+    expect(out[20].realContributions).toBeGreaterThan(190000);
+    expect(out[20].realContributions).toBeLessThan(200000);
+  });
+
+  it("higher contribution growth yields higher real ending balance", () => {
+    const noGrowth = forecastGrowth(50000, 30000, 6, 4, 30, 0);
+    const matchInfl = forecastGrowth(50000, 30000, 6, 4, 30, 3);
+    const realRaises = forecastGrowth(50000, 30000, 6, 4, 30, 5);
+    expect(matchInfl[30].real).toBeGreaterThan(noGrowth[30].real);
+    expect(realRaises[30].real).toBeGreaterThan(matchInfl[30].real);
+  });
 });
 
 describe("yearsToTarget — time-to-goal calculator", () => {
