@@ -340,6 +340,41 @@ describe("forecastGrowth — compound growth", () => {
     // year 5: initial + 5 * 12000 = 65000
     expect(out[5].contributions).toBe(65000);
   });
+
+  it("realContributions equals nominal contributions when inflation is 0", () => {
+    const out = forecastGrowth(5000, 12000, 7, 0, 5);
+    for (const row of out) {
+      expect(row.realContributions).toBeCloseTo(row.contributions, 6);
+    }
+  });
+
+  it("realContributions deflates each year's contribution to today's dollars", () => {
+    // 0% return so we can isolate the deflation arithmetic.
+    // 4% inflation. Initial 0, $1000/yr.
+    const out = forecastGrowth(0, 1000, 0, 4, 3);
+    // year 0: nothing contributed → 0
+    expect(out[0].realContributions).toBe(0);
+    // year 1: 1000 / 1.04 ≈ 961.54
+    expect(out[1].realContributions).toBeCloseTo(1000 / 1.04, 4);
+    // year 2: above + 1000 / 1.04² ≈ 961.54 + 924.56 ≈ 1886.09
+    expect(out[2].realContributions).toBeCloseTo(1000 / 1.04 + 1000 / Math.pow(1.04, 2), 4);
+    // year 3: cumulative 3-year deflated sum
+    const expected = 1000 / 1.04 + 1000 / Math.pow(1.04, 2) + 1000 / Math.pow(1.04, 3);
+    expect(out[3].realContributions).toBeCloseTo(expected, 4);
+  });
+
+  it("real return survives the realContributions comparison at 6%/4%", () => {
+    // The motivating bug: at 6% return / 4% inflation, real balance was below
+    // nominal contributions, falsely implying a loss. Real-vs-real should
+    // show modest positive growth (real return ≈ 1.92%).
+    const out = forecastGrowth(50000, 30000, 6, 4, 30);
+    const last = out[30];
+    expect(last.real).toBeGreaterThan(last.realContributions);
+    // Sanity: real growth should be positive but modest (not 4×).
+    const realGrowth = last.real - last.realContributions;
+    expect(realGrowth).toBeGreaterThan(0);
+    expect(realGrowth).toBeLessThan(last.realContributions); // less than doubling
+  });
 });
 
 describe("yearsToTarget — time-to-goal calculator", () => {

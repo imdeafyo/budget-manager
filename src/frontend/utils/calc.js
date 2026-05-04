@@ -144,10 +144,29 @@ export const recalcSnapPure = recalcMilestonePure;
 
 /* ── Forecast math: compound growth with periodic contributions ──
    Standard future-value formula for a growing annuity (monthly contribution +
-   monthly compounding). Returns array of { year, nominal, real, contributions }
-   for years 0..horizon inclusive. `annualContribution` is total saved per year,
-   `initialBalance` is starting principal, `returnPct` and `inflationPct` are
-   annual percentages (e.g. 7 for 7%). */
+   monthly compounding). Returns array of:
+     { year, nominal, real, contributions, realContributions }
+   for years 0..horizon inclusive.
+
+   Fields:
+     nominal             — account-statement balance in year-y dollars
+     real                — same balance expressed in today's purchasing power
+     contributions       — cumulative nominal contributions (mixed-vintage $)
+     realContributions   — cumulative contributions deflated to today's $.
+                           Each year's contribution is worth less in today's
+                           terms the further out it is, so the running total
+                           is depressed relative to the nominal sum.
+
+   Why both contribution columns? `contributions` matches Investment Growth
+   (a same-vintage nominal comparison: nominal balance − nominal contribs).
+   `realContributions` matches the "is my purchasing power actually growing?"
+   comparison: real balance − real contributions. Comparing real balance to
+   nominal contributions is apples-to-oranges and used to make modest-return
+   scenarios look like losses when they weren't.
+
+   `annualContribution` is total saved per year, `initialBalance` is starting
+   principal (treated as already in today's dollars at year 0), `returnPct`
+   and `inflationPct` are annual percentages (e.g. 7 for 7%). */
 export function forecastGrowth(initialBalance, annualContribution, returnPct, inflationPct, horizonYears) {
   const r = returnPct / 100;
   const i = inflationPct / 100;
@@ -156,14 +175,20 @@ export function forecastGrowth(initialBalance, annualContribution, returnPct, in
   const out = [];
   let bal = initialBalance;
   let contribTotal = initialBalance;
-  out.push({ year: 0, nominal: bal, real: bal, contributions: contribTotal });
+  let realContribTotal = initialBalance; // year-0 dollars are today's dollars
+  out.push({ year: 0, nominal: bal, real: bal, contributions: contribTotal, realContributions: realContribTotal });
   for (let y = 1; y <= horizonYears; y++) {
     for (let m = 0; m < 12; m++) {
       bal = bal * (1 + monthlyR) + monthlyC;
     }
     contribTotal += annualContribution;
+    // Year-y contribution deflated to today's purchasing power. We treat the
+    // full annual amount as occurring at year-end for symmetry with the way
+    // `real` is computed (end-of-year balance ÷ (1+i)^y). Sub-yearly precision
+    // doesn't change the comparison meaningfully.
+    realContribTotal += annualContribution / Math.pow(1 + i, y);
     const real = bal / Math.pow(1 + i, y);
-    out.push({ year: y, nominal: bal, real, contributions: contribTotal });
+    out.push({ year: y, nominal: bal, real, contributions: contribTotal, realContributions: realContribTotal });
   }
   return out;
 }
