@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { forecastGrowth, yearsToTarget, fmt, evalF } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
@@ -58,6 +58,15 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const [includeHSA, setIncludeHSA] = useState(() => {
     try { return localStorage.getItem("forecast-include-hsa") !== "0"; } catch { return true; }
   });
+  // Phase 7: FIRE — financial independence target as multiple of annual expenses.
+  // Standard FIRE = 25× (4% safe withdrawal). 28-33× for early retirement.
+  // 20× = aggressive 5% withdrawal, only safe with flexibility.
+  const [fireEnabled, setFireEnabled] = useState(() => {
+    try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; }
+  });
+  const [fireMultiplier, setFireMultiplier] = useState(() => {
+    try { return localStorage.getItem("forecast-fire-multiplier") || "25"; } catch { return "25"; }
+  });
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
@@ -72,6 +81,8 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   useEffect(() => { try { localStorage.setItem("forecast-include-401k", include401k ? "1" : "0"); } catch {} }, [include401k]);
   useEffect(() => { try { localStorage.setItem("forecast-include-match", includeMatch ? "1" : "0"); } catch {} }, [includeMatch]);
   useEffect(() => { try { localStorage.setItem("forecast-include-hsa", includeHSA ? "1" : "0"); } catch {} }, [includeHSA]);
+  useEffect(() => { try { localStorage.setItem("forecast-fire-enabled", fireEnabled ? "1" : "0"); } catch {} }, [fireEnabled]);
+  useEffect(() => { try { localStorage.setItem("forecast-fire-multiplier", fireMultiplier); } catch {} }, [fireMultiplier]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
@@ -171,6 +182,37 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const targetMonthsNum = Math.max(0, evalF(targetMonths));
   const targetAmount = monthlyExpenses * targetMonthsNum;
 
+  /* FIRE — financial independence target.
+     Annual expenses source follows the contribution-source toggle:
+     - "budget"  → tExpW × 48 (annualized weekly budget)
+     - actuals/N → annualized actual expenses from the window
+     Target = annualExpenses × multiplier. Default multiplier 25 (4% rule).
+
+     Math basis: flat target (today's dollars) compared against the REAL
+     balance line (already inflation-adjusted in `forecastGrowth`). This
+     means the target doesn't move on the chart; the real balance climbs
+     to meet it. Years-to-FI uses real return rate (r − i) for the same
+     reason: contributions and growth must keep pace with inflation in
+     real terms. */
+  const fireMultiplierNum = useMemo(() => {
+    const v = evalF(fireMultiplier);
+    return isFinite(v) && v > 0 ? v : 25;
+  }, [fireMultiplier]);
+  const fireAnnualExpenses = useMemo(() => {
+    if (contribSource !== "budget" && actualsResult && actualsResult.expenses > 0 && actualsResult.months > 0) {
+      return actualsResult.expenses * 12 / actualsResult.months;
+    }
+    return tExpW * 48;
+  }, [contribSource, actualsResult, tExpW]);
+  const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
+  const fireWithdrawalRate = useMemo(() => fireMultiplierNum > 0 ? 100 / fireMultiplierNum : 0, [fireMultiplierNum]);
+  const yearsToFire = useMemo(() => {
+    if (!fireEnabled || fireTarget <= 0) return null;
+    // Real return = nominal return − inflation (approximation; exact is (1+r)/(1+i)−1
+    // but for typical values the difference is < 0.1%).
+    return yearsToTarget(init, annualContribution, r - i, fireTarget);
+  }, [fireEnabled, fireTarget, init, annualContribution, r, i]);
+
   const forecast = useMemo(() => forecastGrowth(init, annualContribution, r, i, horizon), [init, annualContribution, r, i, horizon]);
   const finalRow = forecast[forecast.length - 1];
 
@@ -267,16 +309,19 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
         </div>
       </Card>
 
-      {/* Summary stats */}
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 12 }}>
+      {/* Summary stats. Red text on nominal/real when below contributions
+          (i.e. you're losing money in real terms — investment growth is
+          negative). FIRE card appears at the end when enabled. */}
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : (fireEnabled ? "repeat(5, 1fr)" : "1fr 1fr 1fr 1fr"), gap: 12 }}>
         <Card>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (Nominal)</div>
-          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#4ECDC4", marginTop: 4 }}>{fmt(finalRow.nominal)}</div>
+          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: finalRow.nominal < finalRow.contributions ? "#E8573A" : "#4ECDC4", marginTop: 4 }}>{fmt(finalRow.nominal)}</div>
+          {finalRow.nominal < finalRow.contributions && <div style={{ fontSize: 10, color: "#E8573A", marginTop: 2 }}>below contributions</div>}
         </Card>
         <Card>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (Real)</div>
-          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#556FB5", marginTop: 4 }}>{fmt(finalRow.real)}</div>
-          <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>in today's dollars</div>
+          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: finalRow.real < finalRow.contributions ? "#E8573A" : "#556FB5", marginTop: 4 }}>{fmt(finalRow.real)}</div>
+          <div style={{ fontSize: 10, color: finalRow.real < finalRow.contributions ? "#E8573A" : "var(--tx3,#888)", marginTop: 2 }}>{finalRow.real < finalRow.contributions ? "below contributions" : "in today's dollars"}</div>
         </Card>
         <Card>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Total Contributions</div>
@@ -284,8 +329,29 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
         </Card>
         <Card>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Investment Growth</div>
-          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#2ECC71", marginTop: 4 }}>{fmt(finalRow.nominal - finalRow.contributions)}</div>
+          <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: (finalRow.nominal - finalRow.contributions) < 0 ? "#E8573A" : "#2ECC71", marginTop: 4 }}>{fmt(finalRow.nominal - finalRow.contributions)}</div>
         </Card>
+        {fireEnabled && (
+          <Card>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FI Date</div>
+            {yearsToFire === null ? (
+              <>
+                <div style={{ fontSize: mob ? 18 : 20, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#E8573A", marginTop: 4 }}>Unreachable</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>at current contribution + return</div>
+              </>
+            ) : yearsToFire === 0 ? (
+              <>
+                <div style={{ fontSize: mob ? 18 : 20, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#2ECC71", marginTop: 4 }}>Already FI ✓</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} target hit</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#F39C12", marginTop: 4 }}>{yearsToFire.toFixed(1)} yr</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
+              </>
+            )}
+          </Card>
+        )}
       </div>
 
       {/* Growth chart */}
@@ -307,9 +373,67 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               {(valueMode === "both" || valueMode === "nominal") && <Line type="monotone" dataKey="nominal" stroke="#4ECDC4" strokeWidth={2.5} dot={false} name="Nominal" />}
               {(valueMode === "both" || valueMode === "real") && <Line type="monotone" dataKey="real" stroke="#556FB5" strokeWidth={2.5} dot={false} name={`Real (${i}% infl)`} />}
               <Line type="monotone" dataKey="contributions" stroke="#95A5A6" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Contributions" />
+              {fireEnabled && fireTarget > 0 && <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmt(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />}
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </Card>
+
+      {/* FIRE — Financial Independence calculator. Toggleable; when on,
+          adds a stat card to the summary row, a horizontal target line on
+          the compound-growth chart, and shows full math here. Annual
+          expenses follow the contribution source toggle (budget vs
+          actuals/N-mo). */}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: fireEnabled ? 16 : 0, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>FIRE — Financial Independence</h3>
+          <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{fireEnabled ? "ON" : "OFF"}</button>
+          <span style={{ fontSize: 11, color: "var(--tx3,#888)", flex: 1, minWidth: 200 }} title="When ON, adds a target line to the chart, a stat card with years-to-FI, and expands the math below.">Project when your portfolio can fund your lifestyle indefinitely.</span>
+        </div>
+        {fireEnabled && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 2fr", gap: 16, alignItems: "start" }}>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Multiplier (× annual expenses)
+                  <span title={"Inverse of safe withdrawal rate.\n\n• 25× = 4% rule (Trinity Study, ~30yr retirement)\n• 28-33× = 3-3.5% rule (FIRE, 50+ year horizon)\n• 20× = 5% (aggressive, requires flexibility)\n\nLower withdrawal rate = larger target = safer, but takes longer to reach. Most people use 25.\n\nThe withdrawal rate matters because your portfolio has to survive forever — too high and you risk running out during a bad market sequence."} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+                </label>
+                <NI value={fireMultiplier} onChange={setFireMultiplier} onBlurResolve />
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>Withdrawal rate: <strong>{fireWithdrawalRate.toFixed(2)}%</strong></div>
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Annual expenses: {fmt(fireAnnualExpenses)}</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2, fontStyle: "italic" }}>
+                  ({contribSource === "budget" ? "from budget × 48" : `from ${contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6}mo actuals`})
+                </div>
+                <div style={{ fontSize: 11, color: "var(--tx2,#555)", marginTop: 6, fontWeight: 700 }}>Target: {fmt(fireTarget)}</div>
+              </div>
+              <div style={{ padding: 16, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, textAlign: "center" }}>
+                {fireTarget <= 0 ? (
+                  <div style={{ color: "var(--tx3,#888)", fontSize: 13 }}>Set annual expenses and a multiplier to see your FI date.</div>
+                ) : yearsToFire === 0 ? (
+                  <div>
+                    <div style={{ fontSize: 28, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Already FI ✓</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Your starting balance covers {fireMultiplierNum}× expenses.</div>
+                  </div>
+                ) : yearsToFire === null ? (
+                  <div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>At a real return of {(r - i).toFixed(1)}% with {fmt(annualContribution)}/yr contributions, you'd never reach {fmt(fireTarget)}. Increase contributions, reduce expenses, or raise expected return.</div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 32, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFire.toFixed(1)} years</div>
+                    <div style={{ fontSize: 13, color: "var(--tx2,#555)", marginTop: 4, fontWeight: 600 }}>≈ {new Date(Date.now() + yearsToFire * 365.25 * 86400000).toLocaleDateString(undefined, { year: "numeric", month: "long" })}</div>
+                    <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>at {(r - i).toFixed(1)}% real return, {fmt(annualContribution)}/yr contributions</div>
+                    {yearsToFire > horizon && <div style={{ fontSize: 11, color: "#E8573A", marginTop: 4, fontWeight: 600 }}>⚠️ Beyond your {horizon}yr horizon — extend horizon to see crossover.</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div style={{ marginTop: 12, padding: 12, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, fontSize: 11, color: "var(--tx3,#888)", lineHeight: 1.6 }}>
+              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI compares against the <em>real</em> balance line, using a real return of {(r - i).toFixed(1)}% (= {r}% nominal − {i}% inflation). When the real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
+            </div>
+          </>
+        )}
       </Card>
 
       {/* Time-to-target calculator */}
@@ -360,15 +484,20 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               </tr>
             </thead>
             <tbody>
-              {forecast.map(row => (
-                <tr key={row.year} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
-                  <td style={{ padding: "6px", fontWeight: 600 }}>{row.year}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#4ECDC4", fontWeight: 600 }}>{fmt(row.nominal)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#556FB5" }}>{fmt(row.real)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(row.contributions)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#2ECC71", fontWeight: 600 }}>{fmt(row.nominal - row.contributions)}</td>
-                </tr>
-              ))}
+              {forecast.map(row => {
+                const growth = row.nominal - row.contributions;
+                const nomBelow = row.nominal < row.contributions;
+                const realBelow = row.real < row.contributions;
+                return (
+                  <tr key={row.year} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
+                    <td style={{ padding: "6px", fontWeight: 600 }}>{row.year}</td>
+                    <td style={{ padding: "6px", textAlign: "right", color: nomBelow ? "#E8573A" : "#4ECDC4", fontWeight: 600 }}>{fmt(row.nominal)}</td>
+                    <td style={{ padding: "6px", textAlign: "right", color: realBelow ? "#E8573A" : "#556FB5", fontWeight: realBelow ? 600 : 400 }}>{fmt(row.real)}</td>
+                    <td style={{ padding: "6px", textAlign: "right", color: "var(--tx3,#888)" }}>{fmt(row.contributions)}</td>
+                    <td style={{ padding: "6px", textAlign: "right", color: growth < 0 ? "#E8573A" : "#2ECC71", fontWeight: 600 }}>{fmt(growth)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
