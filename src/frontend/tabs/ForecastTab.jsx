@@ -24,6 +24,19 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   // Phase 7: actuals mode — "net" (income − expenses) | "expenses" (budgeted income − expenses)
   // Only meaningful when contribSource !== "budget".
   const [actualMode, setActualMode] = useState(() => { try { return localStorage.getItem("forecast-actual-mode") || "net"; } catch { return "net"; } });
+  // Phase 7: forecast-local pay cadence — 48 (paycheck) or 52 (calendar). Default 52.
+  // Calendar is more honest for compound growth; 48 matches the rest of the app's
+  // budget cadence. This is intentionally independent from the rest of the app's
+  // visCols 48/52 toggle (which is just a display unit, not a forecast assumption).
+  const [forecastWeeks, setForecastWeeks] = useState(() => {
+    try { const v = Number(localStorage.getItem("forecast-weeks")); return v === 48 || v === 52 ? v : 52; } catch { return 52; }
+  });
+  // Phase 7: forecast-local bonus inclusion. Default OFF (conservative). Independent
+  // from the global Charts-tab `includeEaip` so changing one doesn't silently move
+  // the forecast number.
+  const [forecastBonus, setForecastBonus] = useState(() => {
+    try { return localStorage.getItem("forecast-bonus") === "1"; } catch { return false; }
+  });
 
   useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
   useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
@@ -33,29 +46,35 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   useEffect(() => { try { localStorage.setItem("forecast-target-months", targetMonths); } catch {} }, [targetMonths]);
   useEffect(() => { try { localStorage.setItem("forecast-contrib-source", contribSource); } catch {} }, [contribSource]);
   useEffect(() => { try { localStorage.setItem("forecast-actual-mode", actualMode); } catch {} }, [actualMode]);
+  useEffect(() => { try { localStorage.setItem("forecast-weeks", String(forecastWeeks)); } catch {} }, [forecastWeeks]);
+  useEffect(() => { try { localStorage.setItem("forecast-bonus", forecastBonus ? "1" : "0"); } catch {} }, [forecastBonus]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
   const init = evalF(initialBalance);
 
-  /* Budget-based annual contribution: savings + positive remaining, times 48
-     paychecks. Optionally add bonus. This is the default source. */
+  /* Budget-based annual contribution.
+     Income scales with weeks (52 calendar / 48 paycheck cadence). Expenses
+     are fixed costs that don't scale with the toggle (per app convention —
+     see budget tab's Y48/Y52 logic). Bonus follows this tab's local toggle.
+     Algebra: at 48 weeks this reduces to (savings + remaining) × 48 + bonus,
+     matching the prior implementation. */
   const budgetAnnualContribution = useMemo(() => {
-    const base = totalSavPlusRemW * 48;
-    const bonus = includeEaip ? (C.eaipNet || 0) : 0;
-    return base + bonus;
-  }, [totalSavPlusRemW, includeEaip, C.eaipNet]);
+    const incomeAnnual = (C.net || 0) * forecastWeeks;
+    const expensesAnnual = tExpW * 48;
+    const bonus = forecastBonus ? (C.eaipNet || 0) : 0;
+    return incomeAnnual - expensesAnnual + bonus;
+  }, [C.net, C.eaipNet, tExpW, forecastWeeks, forecastBonus]);
 
   /* Budgeted annual NET income — used by the "expenses" actuals mode as a
      stable income baseline so a one-off bonus paycheck in the window doesn't
-     inflate the projection. C.net is weekly net paycheck total; × 48 to
-     match the budget's paycheck cadence. Bonus follows the same toggle as
-     the budget contribution path. */
+     inflate the projection. Scales with the local weeks toggle. Bonus
+     follows the local forecast bonus toggle. */
   const budgetedAnnualIncome = useMemo(() => {
-    const base = (C.net || 0) * 48;
-    const bonus = includeEaip ? (C.eaipNet || 0) : 0;
+    const base = (C.net || 0) * forecastWeeks;
+    const bonus = forecastBonus ? (C.eaipNet || 0) : 0;
     return base + bonus;
-  }, [C.net, includeEaip, C.eaipNet]);
+  }, [C.net, forecastWeeks, forecastBonus, C.eaipNet]);
 
   /* Actuals-based contribution: derived from transactions over a recent
      window. Returns null if there are no transactions in the window — in
@@ -135,6 +154,13 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
             {sourceBtn("actual6", "Actuals (6mo)")}
             {sourceBtn("actual12", "Actuals (12mo)")}
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Basis:</span>
+            <button onClick={() => setForecastWeeks(52)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastWeeks === 52 ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastWeeks === 52 ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="52 calendar weeks per year. More honest for compound growth — reflects when paychecks actually arrive.">52 wk</button>
+            <button onClick={() => setForecastWeeks(48)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastWeeks === 48 ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastWeeks === 48 ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="48 paychecks per year — matches the rest of the app's budget cadence. The 4 'extra' paychecks are absorbed into the budget cushion.">48 pc</button>
+            <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
+            <button onClick={() => setForecastBonus(!forecastBonus)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastBonus ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastBonus ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Include net annual bonus in the projection. Independent from the Trends tab toggle.">Bonus: {forecastBonus ? "ON" : "OFF"}</button>
+          </div>
           {contribSource !== "budget" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Actuals formula:</span>
@@ -142,10 +168,10 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               <button onClick={() => setActualMode("expenses")} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: actualMode === "expenses" ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: actualMode === "expenses" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Budgeted income − actual expenses. Isolates spending discipline from income volatility (bonus paychecks won't inflate the figure).">vs Budgeted Income</button>
             </div>
           )}
-          <div><strong>Annual contribution:</strong> {fmt(annualContribution)} {includeEaip && contribSource === "budget" ? "(includes bonus)" : ""}</div>
+          <div><strong>Annual contribution:</strong> {fmt(annualContribution)} {forecastBonus && contribSource === "budget" ? "(includes bonus)" : ""}</div>
           {contribSource === "budget" && (
             <div style={{ color: "var(--tx3,#888)", fontSize: 11, marginTop: 4 }}>
-              = (savings + remaining) × 48 paychecks {includeEaip ? "+ net bonus" : ""}. Adjust on the Charts tab to toggle bonus inclusion.
+              = (net income × {forecastWeeks} wk) − (expenses × 48) {forecastBonus ? "+ net bonus" : ""}. Expenses use 48 because budgeted expenses are fixed costs that don't scale with the weeks toggle.
             </div>
           )}
           {contribSource !== "budget" && usingActuals && actualMode === "net" && (
