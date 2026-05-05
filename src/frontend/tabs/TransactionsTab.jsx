@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
-import { BarChart, Bar, LineChart, Line, Legend, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, usePlotArea, ZIndexLayer } from "recharts";
+import { BarChart, Bar, LineChart, Line, Legend, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, ReferenceLine, usePlotArea, ZIndexLayer } from "recharts";
 import { Card, SH, NI } from "../components/ui.jsx";
 import {
   BUILTIN_COLUMNS, newTransaction,
@@ -116,6 +116,20 @@ export default function TransactionsTab(props) {
   });
   useEffect(() => { try { localStorage.setItem("tx_compare_basis", String(basis)); } catch {} }, [basis]);
   useEffect(() => { try { localStorage.setItem("tx_compare_show", showCompare ? "1" : "0"); } catch {} }, [showCompare]);
+
+  // Chart's "Category" dropdown lives here (not inside BudgetCompareCard) so
+  // the top-level Clear filters button can reset it alongside the other
+  // filters. Without this lift, the line-mode category narrow stays sticky
+  // even after the user wipes everything else.
+  const [chartCategory, setChartCategory] = useState("");
+  // Income overlay toggle: optional reference line on the bar chart and an
+  // extra Line on the line chart so the user can see "did income cover what
+  // I spent." Persisted per-device.
+  const [showIncomeOverlay, setShowIncomeOverlay] = useState(() => {
+    try { return localStorage.getItem("tx_compare_income") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem("tx_compare_income", showIncomeOverlay ? "1" : "0"); } catch {} }, [showIncomeOverlay]);
 
   // Remember-my-choice modal — fires when the user manually sets a category
   // on a row whose description doesn't already match an existing rule.
@@ -387,6 +401,10 @@ export default function TransactionsTab(props) {
   const clearFilters = () => {
     setPreset(""); setDateFrom(""); setDateTo(""); setSearch("");
     setCatSel([]); setAcctSel([]); setAmtMin(""); setAmtMax("");
+    // The chart's per-line category narrow is part of the visible filter
+    // surface even though it lives next to the chart — wipe it too so the
+    // page genuinely "clears."
+    setChartCategory("");
   };
 
   /* CSV export of the currently-filtered + sorted view.
@@ -729,7 +747,7 @@ export default function TransactionsTab(props) {
               view. Especially important after a line-chart click, since that
               filters by date but doesn't open the Filters drawer, so without
               this link the user can't undo the filter without opening Filters. */}
-          {(preset || dateFrom || dateTo || search || catSel.length || acctSel.length || amtMin !== "" || amtMax !== "") && (
+          {(preset || dateFrom || dateTo || search || catSel.length || acctSel.length || amtMin !== "" || amtMax !== "" || chartCategory) && (
             <button onClick={clearFilters}
               style={{ background: "none", border: "none", color: "#556FB5", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
               ✕ Clear filters
@@ -782,6 +800,10 @@ export default function TransactionsTab(props) {
         setDateFrom={setDateFrom}
         setDateTo={setDateTo}
         setPreset={setPreset}
+        chartCategory={chartCategory}
+        setChartCategory={setChartCategory}
+        showIncomeOverlay={showIncomeOverlay}
+        setShowIncomeOverlay={setShowIncomeOverlay}
       />
 
       <Card style={{ marginTop: 16, padding: 0, overflow: "auto" }}>
@@ -1795,13 +1817,34 @@ function LineColClickOverlay({ rows, onPick }) {
   const plot = usePlotArea();
   if (!plot || !rows?.length) return null;
   const { x, y, width, height } = plot;
-  const bandW = width / rows.length;
+  const n = rows.length;
+  // Recharts places a LineChart's data points at x = i/(n-1) * width with
+  // default (no left/right) padding — NOT at the center of n equal bands the
+  // way a BarChart does. Splitting the plot into n flat bands meant clicking
+  // near a dot would frequently land in band i+1 because the dot for index i
+  // sits at the LEFT edge of the i-th flat band (boundary case). To make
+  // clicks land on the visually-nearest dot, we center each band on its data
+  // point: band i covers [(i - 0.5)/(n - 1), (i + 0.5)/(n - 1)]. The first
+  // and last bands are clamped to the plot's edges. n=1 is the obvious
+  // degenerate case (one band covering the whole width).
+  const bands = [];
+  for (let i = 0; i < n; i++) {
+    let left, right;
+    if (n === 1) { left = 0; right = width; }
+    else {
+      left  = ((i - 0.5) / (n - 1)) * width;
+      right = ((i + 0.5) / (n - 1)) * width;
+    }
+    if (left < 0) left = 0;
+    if (right > width) right = width;
+    bands.push({ left, right });
+  }
   return (
     <ZIndexLayer zIndex={OVERLAY_Z_INDEX}>
       <g className="bm-line-click-overlay">
-        {rows.map((_, i) => (
+        {bands.map((b, i) => (
           <rect key={i}
-            x={x + i * bandW} y={y} width={bandW} height={height}
+            x={x + b.left} y={y} width={Math.max(0, b.right - b.left)} height={height}
             fill="transparent"
             pointerEvents="all"
             style={{ cursor: "pointer" }}
@@ -1822,7 +1865,7 @@ function LineColClickOverlay({ rows, onPick }) {
        uncategorized as its own bar
    All math comes from `compare` (produced by compareBudgetToActual). This
    component owns zero business logic — pure rendering of the aggregator output. */
-function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], milestones = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset }) {
+function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showCompare, setShowCompare, basis, setBasis, dateFrom, dateTo, transactions = [], exp: expBudget = [], cats = [], transferCats = [], incomeCats = [], milestones = [], today, filterCats = [], setFilterCats, setDateFrom, setDateTo, setPreset, chartCategory = "", setChartCategory, showIncomeOverlay = false, setShowIncomeOverlay }) {
   // Click handling lives in BarRowClickOverlay / LineColClickOverlay (above)
   // — see comments there for why neither <Bar onClick>, <Line onClick>, nor
   // chart-level onClick is reliable in Recharts 3. Handlers below are wired
@@ -1830,9 +1873,9 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
   // View-mode toggle: "bars" = the original per-category Actual vs Budgeted bar
   // chart, "lines" = monthly-bucketed trends (actual spend vs budgeted over
   // time). chartCategory is only used in lines mode — null/empty = all cats
-  // summed, otherwise a single category name.
+  // summed, otherwise a single category name. State is lifted to the parent
+  // (TransactionsTab) so the top-level Clear filters button can reset it.
   const [chartMode, setChartMode] = useState("bars");
-  const [chartCategory, setChartCategory] = useState(""); // "" = all
 
   // Keep chartCategory consistent with the currently-available category list.
   // When the table's category filter narrows or changes, a previously-picked
@@ -1841,8 +1884,10 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
   // defaults to the scoped "all".
   useEffect(() => {
     if (!chartCategory) return;
-    if (!cats || !cats.includes(chartCategory)) setChartCategory("");
-  }, [cats, chartCategory]);
+    if (!cats || !cats.includes(chartCategory)) {
+      if (setChartCategory) setChartCategory("");
+    }
+  }, [cats, chartCategory, setChartCategory]);
 
   // Build the chart dataset once. Expense rows come first (what users care about
   // most on this tab), then uncategorized as its own bar. Savings rows are
@@ -1995,7 +2040,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
               hint={p.elapsed > 0 && p.elapsed < p.days ? "at current pace" : "= actual"} />
           </div>
 
-          {/* Chart mode toggle + category picker (lines mode only) */}
+          {/* Chart mode toggle + category picker (lines mode only) + income overlay toggle */}
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 10 }}>
             <div style={{ display: "flex", gap: 0, border: "1px solid var(--bdr, #ccc)", borderRadius: 8, overflow: "hidden" }}>
               <button onClick={() => setChartMode("bars")}
@@ -2012,7 +2057,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             {chartMode === "lines" && (
               <>
                 <span style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Category</span>
-                <select value={chartCategory} onChange={e => setChartCategory(e.target.value)}
+                <select value={chartCategory} onChange={e => setChartCategory && setChartCategory(e.target.value)}
                   style={{ ...inp(), width: "auto", minWidth: 160, fontSize: 12 }}>
                   <option value="">All categories (summed)</option>
                   {[...cats].sort().map(c => <option key={c} value={c}>{c}</option>)}
@@ -2023,6 +2068,17 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                   </span>
                 )}
               </>
+            )}
+            {/* Income overlay toggle. In bars mode it draws a vertical reference
+                line at the period's total income (a "you can spend up to X"
+                marker); in lines mode it adds an Income line per bucket so
+                spend can be visually compared against actual paychecks. */}
+            {setShowIncomeOverlay && (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--tx2,#555)", cursor: "pointer", marginLeft: "auto" }}
+                title="Overlay actual income (sum of paychecks + other income-category transactions) on the chart">
+                <input type="checkbox" checked={!!showIncomeOverlay} onChange={e => setShowIncomeOverlay(e.target.checked)} />
+                Show income
+              </label>
             )}
           </div>
 
@@ -2041,7 +2097,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                     <YAxis type="category" dataKey="category" width={mob ? 90 : 140}
                       stroke="var(--tx3, #999)" style={{ fontSize: 11 }}
                       tick={{ fill: "var(--tx2, #555)" }} />
-                    <Tooltip content={<CompareTooltip />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
+                    <Tooltip content={<CompareTooltip totalActual={compare?.expense?.totalActual} totalBudget={compare?.expense?.totalBudget} totalUncat={compare?.uncategorized?.actual || 0} totalIncome={compare?.income?.total || 0} />} cursor={{ fill: "rgba(85, 111, 181, 0.06)" }} />
                     <Bar dataKey="budgeted" name="Budgeted" fill="var(--bdr, #ccc)" opacity={0.55} radius={[0, 3, 3, 0]} />
                     <Bar dataKey="actual" name="Actual" radius={[0, 3, 3, 0]}>
                       {chartData.map((row, i) => (
@@ -2052,6 +2108,17 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                         } />
                       ))}
                     </Bar>
+                    {/* Income reference line — single vertical line at the
+                        period's total income. Helps answer "did income cover
+                        spend?" when a month is over-budget but still in the
+                        green income-wise. Only renders when toggled on AND we
+                        have a positive income figure. */}
+                    {showIncomeOverlay && (compare?.income?.total > 0) && (
+                      <ReferenceLine x={compare.income.total}
+                        stroke="#2E86C1" strokeWidth={2} strokeDasharray="6 4"
+                        label={{ value: `Income ${fmt(compare.income.total)}`, position: "top",
+                          fill: "#2E86C1", fontSize: 11, fontWeight: 700 }} />
+                    )}
                     {/* Invisible per-row click overlay — see notes by
                         BarRowClickOverlay above. Renders last so it captures
                         clicks anywhere in the row band, not just on the bar
@@ -2073,12 +2140,20 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                     <CartesianGrid stroke="var(--bdr2, #eee)" strokeDasharray="3 3" />
                     <XAxis dataKey="monthLabel" stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
                     <YAxis tickFormatter={(v) => fmt(v)} stroke="var(--tx3, #999)" style={{ fontSize: 11 }} />
-                    <Tooltip content={<LineTooltip category={chartCategory} />} />
+                    <Tooltip content={<LineTooltip category={chartCategory} showIncome={!!showIncomeOverlay} />} />
                     <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {/* dot={false} keeps the lines clean — Recharts only draws
+                        the activeDot under the cursor on hover, which is much
+                        more readable when buckets are dense or the y-axis is
+                        compressed by an outlier month. */}
                     <Line type="monotone" dataKey="budgeted" name="Budgeted" stroke="var(--tx3, #888)"
-                      strokeDasharray="5 4" strokeWidth={2} dot={{ r: 3 }} />
+                      strokeDasharray="5 4" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />
                     <Line type="monotone" dataKey="actual" name="Actual" stroke="#556FB5"
-                      strokeWidth={2.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                      strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
+                    {showIncomeOverlay && (
+                      <Line type="monotone" dataKey="income" name="Income" stroke="#2E86C1"
+                        strokeWidth={2} strokeDasharray="2 3" dot={false} activeDot={{ r: 5 }} />
+                    )}
                     {/* Invisible per-column click overlay — see notes above. */}
                     {(setDateFrom && setDateTo) && <LineColClickOverlay rows={lineData} onPick={handleLineBandClick} />}
                   </LineChart>
@@ -2093,6 +2168,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             <LegendSwatch color="#2ECC71" label="Under budget" />
             <LegendSwatch color="#E8573A" label="Over budget" />
             {chartMode === "bars" && <LegendSwatch color="#F2A93B" label="Uncategorized" />}
+            {showIncomeOverlay && <LegendSwatch color="#2E86C1" label="Income" />}
           </div>
         </>
       )}
@@ -2119,18 +2195,25 @@ function LegendSwatch({ color, label }) {
   );
 }
 
-function CompareTooltip({ active, payload, label }) {
+function CompareTooltip({ active, payload, label, totalActual = 0, totalBudget = 0, totalUncat = 0, totalIncome = 0 }) {
   if (!active || !payload || !payload.length) return null;
   // payload has two entries (Budgeted, Actual) both pointing at the same row
   const row = payload[0].payload;
   const delta = (row.actual || 0) - (row.budgeted || 0);
+  // Total spend for the period including Uncategorized (which doesn't appear
+  // in totalActual because it has no paired budget). Surfacing this answers
+  // the common "what did I actually spend, all in?" question without making
+  // the user mentally add the bars.
+  const periodSpend = (totalActual || 0) + (totalUncat || 0);
+  const incomeMinusSpend = (totalIncome || 0) - periodSpend;
   return (
-    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 180 }}>
+    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 200 }}>
       <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
       {row.kind === "uncategorized" ? (
         <>
           <div>Spend: <strong>{fmt(row.actual)}</strong></div>
-          <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.count} transaction{row.count === 1 ? "" : "s"} without a category</div>
+          <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.count} transaction{row.count === 1 ? "" : "s"} whose category isn't part of your budget</div>
+          <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2, fontStyle: "italic" }}>Edit the category on these rows to roll them into a real bar.</div>
         </>
       ) : (
         <>
@@ -2142,6 +2225,20 @@ function CompareTooltip({ active, payload, label }) {
           {row.refunded > 0 && <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>Net of {fmt(row.refunded)} refunded</div>}
         </>
       )}
+      {/* Period totals — always shown so the per-bar context anchors back to
+          the whole period at a glance. */}
+      <div style={{ borderTop: "1px solid var(--bdr2,#eee)", marginTop: 6, paddingTop: 6, fontSize: 11, color: "var(--tx3,#888)" }}>
+        <div>Period spend: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(periodSpend)}</strong>{totalUncat > 0.005 && <span> (incl. {fmt(totalUncat)} uncategorized)</span>}</div>
+        <div>Period budget: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(totalBudget)}</strong></div>
+        {totalIncome > 0.005 && (
+          <div style={{ marginTop: 2 }}>
+            Period income: <strong style={{ color: "#2E86C1" }}>{fmt(totalIncome)}</strong>
+            <span style={{ color: incomeMinusSpend >= 0 ? "#2ECC71" : "#E8573A", marginLeft: 4 }}>
+              ({incomeMinusSpend >= 0 ? "+" : "−"}{fmt(Math.abs(incomeMinusSpend))} vs spend)
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2169,15 +2266,17 @@ const modeBtn = (active) => ({
   fontFamily: "'DM Sans', sans-serif",
 });
 
-function LineTooltip({ active, payload, label, category }) {
+function LineTooltip({ active, payload, label, category, showIncome = false }) {
   if (!active || !payload || !payload.length) return null;
   const row = payload[0].payload;
   const actual = row?.actual || 0;
   const budgeted = row?.budgeted || 0;
   const uncat = row?.uncategorized || 0;
+  const income = row?.income || 0;
+  const totalSpend = actual + uncat;
   const delta = actual - budgeted;
   return (
-    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 180 }}>
+    <div style={{ background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 6, padding: "8px 10px", fontSize: 12, color: "var(--tx, #333)", boxShadow: "0 4px 12px rgba(0,0,0,0.12)", minWidth: 200 }}>
       <div style={{ fontWeight: 700, marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginBottom: 4 }}>
         {category ? category : "All categories"}
@@ -2187,14 +2286,27 @@ function LineTooltip({ active, payload, label, category }) {
       <div style={{ color: delta > 0.005 ? "#E8573A" : delta < -0.005 ? "#2ECC71" : "var(--tx3, #888)", marginTop: 2 }}>
         {delta > 0.005 ? `Over by ${fmt(delta)}` : delta < -0.005 ? `Under by ${fmt(-delta)}` : "On target"}
       </div>
+      {/* Total spend including uncategorized — useful when an outlier month
+          looks "fine" against budget but has a fat uncategorized bar dragging
+          the real total up. */}
       {uncat > 0.005 && !category && (
-        <div style={{ fontSize: 11, color: "#F2A93B", marginTop: 4 }}
-          title="Rows whose category isn't in your budget — e.g. unconfirmed transfer pairs, deleted categories, or categories you haven't assigned to expense/savings/transfer. Excluded from Actual.">
-          {fmt(uncat)} uncategorized (not counted)
+        <div style={{ borderTop: "1px solid var(--bdr2,#eee)", marginTop: 5, paddingTop: 5, fontSize: 11, color: "var(--tx2,#555)" }}>
+          Total spend (incl. uncategorized): <strong>{fmt(totalSpend)}</strong>
+          <div style={{ color: "#F2A93B", marginTop: 2 }} title="These are transactions whose category isn't part of your expense budget — typically a category that was deleted, or one you haven't added to expenses yet. Not counted in 'Actual' so you don't double-count.">
+            {fmt(uncat)} uncategorized (not counted in Actual)
+          </div>
+        </div>
+      )}
+      {showIncome && income > 0.005 && (
+        <div style={{ borderTop: uncat > 0.005 && !category ? "none" : "1px solid var(--bdr2,#eee)", marginTop: 5, paddingTop: 5, fontSize: 11 }}>
+          <span style={{ color: "#2E86C1" }}>Income: <strong>{fmt(income)}</strong></span>
+          <span style={{ color: (income - totalSpend) >= 0 ? "#2ECC71" : "#E8573A", marginLeft: 4 }}>
+            ({(income - totalSpend) >= 0 ? "+" : "−"}{fmt(Math.abs(income - totalSpend))} vs spend)
+          </span>
         </div>
       )}
       {row?.days != null && (
-        <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>{row.days} day{row.days === 1 ? "" : "s"} in bucket</div>
+        <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 4 }}>{row.days} day{row.days === 1 ? "" : "s"} in bucket</div>
       )}
     </div>
   );

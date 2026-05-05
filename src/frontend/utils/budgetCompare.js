@@ -305,6 +305,36 @@ export function actualsByCategory(transactions, opts = {}) {
   };
 }
 
+/* ── Income totals per category set ──
+   Sum of positive amounts attributed to income categories. Used by the budget
+   chart's optional "income line" overlay so the user can see "did my income
+   actually cover what I spent." Splits are honored via categoryContribution
+   so a single transaction split across an income cat + an expense cat is
+   counted correctly. Marked-transfer rows are excluded.
+
+   Convention matches the rest of refunds.js: amount > 0 = money in (income),
+   amount < 0 = money out (spend / refund-out). For income categories we only
+   count the positive side — a "negative income" entry is almost certainly a
+   correction and should reduce the total, so we sum signed values and then
+   clamp at 0 to avoid showing a negative income line. */
+export function sumIncome(transactions, opts = {}) {
+  const { incomeCategorySet } = opts;
+  if (!Array.isArray(transactions) || !transactions.length) return 0;
+  if (!incomeCategorySet || typeof incomeCategorySet.has !== "function") return 0;
+
+  let total = 0;
+  for (const tx of transactions) {
+    if (!tx || isMarkedTransfer(tx)) continue;
+    const contrib = categoryContribution(tx);
+    for (const [cat, amt] of contrib) {
+      if (!incomeCategorySet.has(cat)) continue;
+      const n = Number(amt) || 0;
+      total += n;
+    }
+  }
+  return total > 0 ? round2(total) : 0;
+}
+
 /* ── The main aggregator ──
    Given the period, category sets, budget arrays, and transactions, produce
    everything the chart + cards need in one pass.
@@ -436,6 +466,13 @@ export function compareBudgetToActual(opts) {
   const totalSavBudget = sum(savRows.map(r => r.budgeted));
   const totalSavActual = sum(savRows.map(r => r.actual));
 
+  // Income for the range: sum of positive amounts in income-cat rows.
+  // The aggregator already filtered them OUT of `inRange` (line ~360) so we
+  // can't reuse it — pull straight from the date-filtered (but not income-
+  // dropped) list.
+  const inRangeAll = filterByDateRange(transactions, fromIso, toIso);
+  const totalIncome = sumIncome(inRangeAll, { incomeCategorySet: incSet });
+
   // Projected end-of-period spend, expense side only.
   // If we're 15 days into a 30-day period with $300 spent, project $600.
   // If the period is entirely in the past or future, projection = actual.
@@ -464,6 +501,9 @@ export function compareBudgetToActual(opts) {
       totalBudget: round2(totalSavBudget),
       totalActual: round2(totalSavActual),
       pctUsed: totalSavBudget > 0 ? totalSavActual / totalSavBudget : (totalSavActual > 0 ? Infinity : 0),
+    },
+    income: {
+      total: totalIncome,
     },
     uncategorized: uncatRow,
   };
@@ -545,6 +585,11 @@ export function monthlyBuckets(opts) {
     // Transactions inside this bucket (reuses the same string comparison the
     // main aggregator uses).
     const inBucket = filterByDateRange(scopedRows, bucketFromIso, bucketToIso);
+    // Income comes from rows we filtered OUT of scopedRows (income-cat rows),
+    // so re-derive a per-bucket view from the unscoped list. Cheap because
+    // the date filter is a string compare.
+    const inBucketAll = filterByDateRange(transactions || [], bucketFromIso, bucketToIso);
+    const income = sumIncome(inBucketAll, { incomeCategorySet: incSet });
 
     // Actual via the shared aggregator so refund-netting + split attribution
     // match the bar chart exactly.
@@ -608,6 +653,7 @@ export function monthlyBuckets(opts) {
       actual: round2(actual),
       budgeted: round2(budgeted),
       uncategorized,
+      income,
     });
 
     // advance to next month

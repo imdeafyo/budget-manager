@@ -5,7 +5,7 @@ import {
   itemWeeklyBudget, weeklyToPeriod, budgetByCategory,
   filterByDateRange, actualsByCategory,
   compareBudgetToActual, monthlyBuckets, pickBudgetForDate,
-  reconstructFromItems,
+  reconstructFromItems, sumIncome,
 } from "./budgetCompare.js";
 
 /* ── Date helpers ─────────────────────────────────────────────────────── */
@@ -244,6 +244,63 @@ describe("actualsByCategory", () => {
     const b = actualsByCategory(txs, { expenseCategorySet: expSet, savingsCategorySet: savSet, treatRefundsAsNetting: false });
     expect(a.expense.get("Food")).toBe(80);
     expect(b.expense.get("Food")).toBe(100);
+  });
+});
+
+/* ── sumIncome ────────────────────────────────────────────────────────── */
+describe("sumIncome", () => {
+  const incSet = new Set(["Paycheck", "Interest"]);
+
+  it("sums positive amounts in income categories", () => {
+    const txs = [
+      { date: "2026-04-01", amount: 2500, category: "Paycheck" },
+      { date: "2026-04-15", amount: 2500, category: "Paycheck" },
+      { date: "2026-04-30", amount:   12, category: "Interest" },
+    ];
+    expect(sumIncome(txs, { incomeCategorySet: incSet })).toBe(5012);
+  });
+
+  it("ignores rows whose category isn't in the income set", () => {
+    const txs = [
+      { date: "2026-04-01", amount: 2500, category: "Paycheck" },
+      { date: "2026-04-02", amount:  500, category: "Refund" }, // not income
+      { date: "2026-04-03", amount: -100, category: "Food" },
+    ];
+    expect(sumIncome(txs, { incomeCategorySet: incSet })).toBe(2500);
+  });
+
+  it("ignores marked-transfer rows", () => {
+    const txs = [
+      { date: "2026-04-01", amount: 2500, category: "Paycheck" },
+      { date: "2026-04-02", amount: 1000, category: "Paycheck", custom_fields: { _is_transfer: true } },
+    ];
+    expect(sumIncome(txs, { incomeCategorySet: incSet })).toBe(2500);
+  });
+
+  it("clamps negative net to 0 (correction entries don't go below zero)", () => {
+    const txs = [
+      { date: "2026-04-01", amount:  100, category: "Paycheck" },
+      { date: "2026-04-02", amount: -500, category: "Paycheck" }, // big correction
+    ];
+    expect(sumIncome(txs, { incomeCategorySet: incSet })).toBe(0);
+  });
+
+  it("returns 0 with no income set or empty list", () => {
+    expect(sumIncome([], { incomeCategorySet: incSet })).toBe(0);
+    expect(sumIncome(null, { incomeCategorySet: incSet })).toBe(0);
+    expect(sumIncome([{ amount: 100, category: "Paycheck" }], {})).toBe(0);
+  });
+
+  it("honors splits across income + non-income categories", () => {
+    const txs = [
+      // $2000 split: $1500 paycheck + $500 reimbursement (non-income)
+      { date: "2026-04-01", amount: 2000, category: "Paycheck",
+        splits: [
+          { category: "Paycheck", amount: 1500 },
+          { category: "Reimbursement", amount: 500 },
+        ] },
+    ];
+    expect(sumIncome(txs, { incomeCategorySet: incSet })).toBe(1500);
   });
 });
 
