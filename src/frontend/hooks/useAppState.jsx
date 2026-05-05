@@ -281,6 +281,11 @@ export default function useAppState() {
   const [forecast, setForecast] = useState(() => ({
     accounts: defaultForecastAccounts(),
     hsaCoverage: "family",
+    /* Annual % growth applied to IRS contribution limits for projection
+       years past today. Default 2.5% — the rough long-run nominal pace
+       at which the IRS has actually raised 401(k) and HSA limits. Set
+       to 0 to freeze limits at today's values. */
+    limitGrowthPct: 2.5,
   }));
   const [txLoaded, setTxLoaded] = useState(false);
 

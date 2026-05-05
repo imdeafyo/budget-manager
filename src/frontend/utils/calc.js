@@ -62,6 +62,18 @@ export function fromWk(wk, p) {
 }
 
 export const fmt = n => (Math.round((n || 0) * 100) / 100).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+/* Compact currency for axis labels: $10.8M / $1.2M / $450k / $300.
+   Prefers one decimal in the millions/thousands range when it adds info,
+   integer otherwise. Negative passthrough. */
+export const fmtCompact = n => {
+  const v = Number(n) || 0;
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(a >= 1e10 ? 0 : 1)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2)}M`.replace(/\.?0+M$/, "M");
+  if (a >= 1e3) return `${sign}$${Math.round(a / 1e3)}k`;
+  return `${sign}$${Math.round(a)}`;
+};
 export const fp = n => `${(n * 100).toFixed(2)}%`;
 export const p2 = n => `${(+n).toFixed(2)}%`;
 export const pctOf = (part, total) => total > 0 ? `${(part / total * 100).toFixed(1)}%` : "0%";
@@ -281,6 +293,14 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     hsaCoverage = "family",
     getPoolLimit, // function(pool, year, age, hsaCoverage) -> limit
     accountTypeToPool, // map: type -> pool name | null
+    /* Annual % growth applied to IRS limits for years strictly after the
+       baseYear (today's actual limits are used for the current year). The
+       underlying limit tables stop in the most recent known IRS year, and
+       fall back to that year's value for future calls. We compound on top
+       of that fallback. Round to nearest $500 (IRS rounds $401(k) to $500
+       and HSA to $50; rounding all to $500 is a fine projection
+       simplification). */
+    limitGrowthPct = 0,
   } = opts || {};
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -291,6 +311,24 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   }
 
   const i = inflationPct / 100;
+  const lg = (Number(limitGrowthPct) || 0) / 100;
+  /* Growth-aware limit lookup. For calendarYear == baseYear we use the
+     unmodified table value (real current-year limit). For future years we
+     take the table value at the LATEST known year (which is what
+     getPoolLimit already falls back to for futures) and compound from
+     baseYear forward, then round to nearest $500.
+     Rationale: caller's getPoolLimit returns today's limit for futures;
+     we then layer growth on top. This is correct as long as the table's
+     latest year is roughly today — true by construction (taxDB updates
+     yearly). */
+  const limitFor = (pool, calendarYear, age) => {
+    const raw = getPoolLimit(pool, calendarYear, age, hsaCoverage);
+    if (!isFinite(raw)) return raw;
+    const yearsForward = calendarYear - baseYear;
+    if (lg === 0 || yearsForward <= 0) return raw;
+    const grown = raw * Math.pow(1 + lg, yearsForward);
+    return Math.round(grown / 500) * 500;
+  };
   const ageOf = (owner, calendarYear) => {
     if (owner === "p1" && p1BirthYear) return calendarYear - p1BirthYear;
     if (owner === "p2" && p2BirthYear) return calendarYear - p2BirthYear;
@@ -361,7 +399,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     const finalContrib = { ...desired };
     for (const [k, group] of Object.entries(poolGroups)) {
       const age = ageOf(group.accounts[0].owner === "joint" ? "joint" : group.owner, calendarYear);
-      const limit = getPoolLimit(group.pool, calendarYear, age, hsaCoverage);
+      const limit = limitFor(group.pool, calendarYear, age);
       const total = group.accounts.reduce((s, a) => s + desired[a.id], 0);
       if (!isFinite(limit) || total <= limit) continue;
 

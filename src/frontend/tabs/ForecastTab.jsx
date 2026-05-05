@@ -1,58 +1,136 @@
 import { useMemo, useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { forecastGrowth, fmt, evalF, forecastGrowthAccounts, yearsToHitPoolLimit } from "../utils/calc.js";
+import { forecastGrowth, fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 
 /* ── Account type display metadata ──
    Account `type` strings map to (a) IRS pool for limit checking
    (ACCOUNT_TYPE_TO_POOL in taxDB.js) and (b) display label + pool color
-   for the chart legend. Keep the type list in sync with both maps. */
+   for the chart legend. Keep the type list in sync with both maps.
+   Order in this object also drives the order of the "+ add" chips and
+   the type <select> dropdown. */
 const ACCOUNT_TYPE_LABELS = {
   "401k_pretax":     "401(k) — Pre-tax",
   "401k_roth":       "401(k) — Roth",
+  "401k_match":      "401(k) — Employer Match",
   "ira_traditional": "IRA — Traditional",
   "ira_roth":        "IRA — Roth",
-  "hsa":             "HSA",
+  "hsa_cash":        "HSA — Cash",
+  "hsa_invested":    "HSA — Invested",
+  "hsa":             "HSA (legacy)", // kept for backward compat with existing saved accounts
   "taxable":         "Taxable / Brokerage",
   "cash":            "Cash / Savings",
   "custom":          "Other",
 };
-/* Pool-level color palette for the stacked area chart. Each pool gets a
-   base hue; individual accounts within a pool are shades of that hue.
-   Recharts handles continuous color from a discrete list — keep these in
-   the same visual family per pool. */
+/* Pool-level color palette (Color by: Type). Each pool gets a base hue;
+   individual accounts within a pool are shades of that hue. Recharts handles
+   continuous color from a discrete list — keep these in the same visual
+   family per pool. */
 const POOL_COLORS = {
   "401k_employee": ["#556FB5", "#7B91C9", "#3D5499", "#9CABD8"],
   "ira":           ["#2ECC71", "#5EDC8C", "#1FAA5F", "#7FE3A1"],
   "hsa":           ["#9B59B6", "#B57BCC", "#7E45A0", "#C99FD8"],
   "_other":        ["#888888", "#A8A8A8", "#666666", "#BFBFBF"],
 };
+/* Owner color palette (Color by: Owner). P1 = blues, P2 = teals, joint = warm
+   neutrals. Picked to be visually distinct from the pool palette so toggling
+   between modes feels meaningful, not just a re-shading. */
+const OWNER_COLORS = {
+  "p1":    ["#2C5F8D", "#4A7BA8", "#1F4A6E", "#6692BF"],
+  "p2":    ["#1A8B91", "#3DAEB4", "#0F6E73", "#5DC4CA"],
+  "joint": ["#A06236", "#B97A50", "#84502A", "#C99068"],
+};
 
 function poolForType(type) {
   return ACCOUNT_TYPE_TO_POOL[type] || "_other";
 }
-function colorForAccount(account, idxInPool) {
+function colorForAccountByPool(account, idxInPool) {
   const pool = poolForType(account.type);
   const palette = POOL_COLORS[pool] || POOL_COLORS._other;
   return palette[idxInPool % palette.length];
+}
+function colorForAccountByOwner(account, idxInOwner) {
+  const palette = OWNER_COLORS[account.owner] || OWNER_COLORS.joint;
+  return palette[idxInOwner % palette.length];
+}
+
+/* Derive display name from owner + type, with optional user nickname.
+   Format: "<Owner> <TypeLabel>" with nickname prefixed if present.
+   Example: "Corey 401(k) — Pre-tax" or "Megacorp Corey 401(k) — Pre-tax".
+   The "joint" owner drops its prefix on HSA-family accounts because "Joint
+   HSA — Cash" reads worse than "HSA — Cash". */
+function deriveAccountName(account, p1Name, p2Name) {
+  const typeLabel = ACCOUNT_TYPE_LABELS[account.type] || account.type;
+  const ownerLabel = account.owner === "p1" ? p1Name : account.owner === "p2" ? p2Name : "";
+  const baseLabel = ownerLabel ? `${ownerLabel} ${typeLabel}` : typeLabel;
+  const nick = (account.nickname || "").trim();
+  return nick ? `${nick} ${baseLabel}` : baseLabel;
+}
+
+/* Migration: pre-round-2 saves stored a free-text `name` field. When loaded,
+   compare to the auto-derived name; any difference becomes the nickname. */
+function migrateAccountName(account, p1Name, p2Name) {
+  if (account.nickname !== undefined && !("name" in account)) return account;
+  const expected = deriveAccountName({ ...account, nickname: "" }, p1Name, p2Name);
+  if (!account.name || account.name === expected) {
+    const { name, ...rest } = account;
+    return { ...rest, nickname: rest.nickname || "" };
+  }
+  // Try stripping the expected suffix to recover an original nickname
+  let nickname = "";
+  if (account.name.endsWith(expected)) {
+    nickname = account.name.slice(0, account.name.length - expected.length).trim();
+  } else {
+    // Couldn't reconcile — preserve user's free-text label as nickname so info isn't lost
+    nickname = account.name;
+  }
+  const { name, ...rest } = account;
+  return { ...rest, nickname };
 }
 
 /* ── Advanced (account-based) Forecast view ──
    Self-contained sub-component rendered when forecastMode === "advanced".
    Reads the account list from `forecast.accounts` (in `st`) and writes
-   updates back via `setForecast`. Re-uses simple-mode's horizon and
-   inflation inputs (passed as props) so the user doesn't have to
-   re-enter them when toggling modes. */
-function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, horizon, inflationPct }) {
-  const accounts = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
+   updates back via `setForecast`. Re-uses simple-mode's horizon, inflation,
+   and FIRE state (all passed as props) so the user doesn't have to re-enter
+   them when toggling modes. */
+function AdvancedForecast({
+  mob, forecast, setForecast, tax, setTax, p1Name, p2Name,
+  horizon, setHorizon, inflationPct,
+  fireEnabled, setFireEnabled, fireTarget, fireMultiplierNum, fireAnnualExpenses,
+  // Income-tab signals for auto-derived contributions
+  cSal, kSal, c4pre, c4ro, k4pre, k4ro, preDed = [], hsaEmployerMatchAnnual = 0,
+}) {
+  const accountsRaw = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
+
+  /* One-shot migration: drop legacy `name` field, recover nickname from any
+     diff vs. derived format. Memoized on the raw accounts so renames flow. */
+  const accounts = useMemo(
+    () => accountsRaw.map(a => migrateAccountName(a, p1Name, p2Name)),
+    [accountsRaw, p1Name, p2Name]
+  );
+
   const hsaCoverage = (forecast && forecast.hsaCoverage) || "family";
+  const limitGrowthPct = forecast && forecast.limitGrowthPct !== undefined ? forecast.limitGrowthPct : 2.5;
   const baseYear = new Date().getFullYear();
+
+  /* Color mode (per-device, per-tab — short-lived UI preference). */
+  const [colorBy, setColorBy] = useState(() => {
+    try { return localStorage.getItem("forecast-color-by") || "type"; } catch { return "type"; }
+  });
+  useEffect(() => { try { localStorage.setItem("forecast-color-by", colorBy); } catch {} }, [colorBy]);
 
   /* Per-account expand/collapse. Default: all collapsed for compactness. */
   const [expanded, setExpanded] = useState({});
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }));
+  const expandAll = () => setExpanded(Object.fromEntries(accounts.map(a => [a.id, true])));
+  const collapseAll = () => setExpanded({});
+  const expandedCount = accounts.filter(a => expanded[a.id]).length;
+  const allExpanded = accounts.length > 0 && expandedCount === accounts.length;
+  const allCollapsed = expandedCount === 0;
+  const expandMixed = !allExpanded && !allCollapsed;
 
   const updateAccount = (id, patch) => {
     const next = accounts.map(a => a.id === id ? { ...a, ...patch } : a);
@@ -62,7 +140,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
     const id = `acc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const newAcc = {
       id,
-      name: ACCOUNT_TYPE_LABELS[type] || "New Account",
+      nickname: "",
       owner: "p1",
       type,
       startBalance: 0,
@@ -70,7 +148,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
       contribOverride: false,
       contribAmount: 0,
       annualIncrease: 0,
-      capAtLimit: type !== "taxable" && type !== "cash" && type !== "custom",
+      capAtLimit: !["taxable","cash","custom","401k_match"].includes(type),
     };
     setForecast({ ...forecast, accounts: [...accounts, newAcc] });
     setExpanded(p => ({ ...p, [id]: true }));
@@ -80,13 +158,119 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
     setForecast({ ...forecast, accounts: accounts.filter(a => a.id !== id) });
   };
   const resetToDefaults = () => {
-    if (!window.confirm("Reset to the default account list? This replaces your current account configuration with the 6 starter accounts. Cannot be undone.")) return;
+    if (!window.confirm("Reset to the default account list? This replaces your current account configuration with the starter accounts. Cannot be undone.")) return;
     setForecast({ ...forecast, accounts: defaultForecastAccounts() });
   };
 
+  /* Cap-at-limit master toggle. Tristate: all-on / all-off / mixed.
+     Click flips: any-off → all-on, all-on → all-off. */
+  const eligibleAccounts = accounts.filter(a => ACCOUNT_TYPE_TO_POOL[a.type]); // limit applies
+  const allCapped = eligibleAccounts.length > 0 && eligibleAccounts.every(a => a.capAtLimit);
+  const noneCapped = eligibleAccounts.every(a => !a.capAtLimit);
+  const capMixed = !allCapped && !noneCapped;
+  const flipAllCap = () => {
+    const target = !allCapped; // off → on, on → off, mixed → on
+    const next = accounts.map(a => ACCOUNT_TYPE_TO_POOL[a.type] ? { ...a, capAtLimit: target } : a);
+    setForecast({ ...forecast, accounts: next });
+  };
+
+  /* ── Auto-derived annual contributions from the Income tab ──
+     For derivable account types we can compute today's annual contribution
+     directly from the live state. The user can flip `contribOverride` per
+     account to switch between auto and manual. When auto, the contribution
+     input is read-only and reflects the derived value.
+
+     Match auto-derivation uses calcMatch with the per-person tier/base.
+     The match-lump toggle works at this layer: when c401MatchLump is on,
+     the P1 match account auto-contributes 0 and the P1 pre-tax account's
+     auto-contribution INCLUDES the match. Same for P2. */
+  const cSalNum = useMemo(() => evalF(cSal), [cSal]);
+  const kSalNum = useMemo(() => evalF(kSal), [kSal]);
+  const c4preNum = useMemo(() => evalF(c4pre), [c4pre]);
+  const c4roNum = useMemo(() => evalF(c4ro), [c4ro]);
+  const k4preNum = useMemo(() => evalF(k4pre), [k4pre]);
+  const k4roNum = useMemo(() => evalF(k4ro), [k4ro]);
+  const cMatchAnnual = useMemo(() => {
+    const tot = c4preNum + c4roNum;
+    if (cSalNum <= 0 || tot <= 0) return 0;
+    /* calcMatch returns the EMPLOYER % directly (base + tiered match on
+       employee deferral %). Multiply by salary and divide by 100 for $. */
+    const matchPct = calcMatch(tot, tax?.cMatchTiers || [], tax?.cMatchBase || 0);
+    return cSalNum * matchPct / 100;
+  }, [cSalNum, c4preNum, c4roNum, tax?.cMatchTiers, tax?.cMatchBase]);
+  const kMatchAnnual = useMemo(() => {
+    const tot = k4preNum + k4roNum;
+    if (kSalNum <= 0 || tot <= 0) return 0;
+    const matchPct = calcMatch(tot, tax?.kMatchTiers || [], tax?.kMatchBase || 0);
+    return kSalNum * matchPct / 100;
+  }, [kSalNum, k4preNum, k4roNum, tax?.kMatchTiers, tax?.kMatchBase]);
+  /* HSA employee weekly contribution: same convention as BudgetTab/simple-mode
+     (preDed rows whose name contains "hsa"). c+k summed × 52 for annual. */
+  const hsaEmployeeAnnualByOwner = useMemo(() => {
+    if (!Array.isArray(preDed)) return { p1: 0, p2: 0 };
+    let p1 = 0, p2 = 0;
+    for (const d of preDed) {
+      if (!d || typeof d.n !== "string") continue;
+      if (!d.n.toLowerCase().includes("hsa")) continue;
+      p1 += evalF(d.c) * 52;
+      p2 += evalF(d.k) * 52;
+    }
+    return { p1, p2 };
+  }, [preDed]);
+  const hsaTotalAnnual = useMemo(() => {
+    return hsaEmployeeAnnualByOwner.p1 + hsaEmployeeAnnualByOwner.p2 + (Number(hsaEmployerMatchAnnual) || 0);
+  }, [hsaEmployeeAnnualByOwner, hsaEmployerMatchAnnual]);
+
+  const cLump = !!tax?.c401MatchLump;
+  const kLump = !!tax?.k401MatchLump;
+
+  const autoContribFor = (a) => {
+    if (a.owner === "p1") {
+      if (a.type === "401k_pretax") {
+        const base = cSalNum * c4preNum / 100;
+        return base + (cLump ? cMatchAnnual : 0);
+      }
+      if (a.type === "401k_roth")  return cSalNum * c4roNum / 100;
+      if (a.type === "401k_match") return cLump ? 0 : cMatchAnnual;
+    }
+    if (a.owner === "p2") {
+      if (a.type === "401k_pretax") {
+        const base = kSalNum * k4preNum / 100;
+        return base + (kLump ? kMatchAnnual : 0);
+      }
+      if (a.type === "401k_roth")  return kSalNum * k4roNum / 100;
+      if (a.type === "401k_match") return kLump ? 0 : kMatchAnnual;
+    }
+    /* Joint HSA accounts: lump everything into "cash" by default. The user
+       can flip individual rows to manual to allocate a portion to invested
+       (most institutions hold contributions in cash until a minimum is
+       reached, then sweep to invested). */
+    if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
+    if (a.type === "hsa_invested" && a.owner === "joint") return 0;
+    if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
+    return null; // not auto-derivable
+  };
+
+  const isAutoDerivable = (a) => autoContribFor(a) !== null;
+
+  /* The contribution amount actually flowing into the projection: auto when
+     not overridden and derivable, else the manual `contribAmount`. */
+  const effectiveContribFor = (a) => {
+    if (!a.contribOverride && isAutoDerivable(a)) return autoContribFor(a) || 0;
+    return Number(a.contribAmount) || 0;
+  };
+
+  /* The accounts list passed to the projection, with effective contributions
+     baked in. Keep `contribAmount` field name for compatibility with the
+     pure calc function. */
+  const projAccounts = useMemo(
+    () => accounts.map(a => ({ ...a, contribAmount: effectiveContribFor(a) })),
+    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual]
+  );
+
   /* Run the projection. */
   const projection = useMemo(() => {
-    return forecastGrowthAccounts(accounts, horizon, {
+    return forecastGrowthAccounts(projAccounts, horizon, {
       baseYear,
       inflationPct,
       p1BirthYear: tax?.p1BirthYear || null,
@@ -94,14 +278,21 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
       hsaCoverage,
       getPoolLimit,
       accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+      limitGrowthPct,
     });
-  }, [accounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage]);
+  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct]);
 
   /* Chart data: stacked area, one series per account. We use account ids
-     for the dataKey so renames don't break Recharts' internal series state. */
+     for the dataKey so renames don't break Recharts' internal series state.
+     Also includes the real total for FIRE crossover comparison. */
   const chartData = useMemo(() => {
     return projection.years.map(row => {
-      const point = { year: row.year, calendarYear: row.calendarYear, total: row.totals.nominal };
+      const point = {
+        year: row.year,
+        calendarYear: row.calendarYear,
+        total: row.totals.nominal,
+        totalReal: row.totals.real,
+      };
       for (const a of accounts) {
         point[a.id] = row.byAccount[a.id]?.nominal || 0;
       }
@@ -109,19 +300,29 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
     });
   }, [projection, accounts]);
 
-  /* Color assignment per account: group accounts by pool, take palette
-     index by position within pool. */
+  /* Color assignment per account. With Color by Owner the index is per-owner;
+     with Color by Type the index is per-pool. */
   const accountColors = useMemo(() => {
-    const byPool = {};
     const colors = {};
-    for (const a of accounts) {
-      const p = poolForType(a.type);
-      byPool[p] = byPool[p] || [];
-      colors[a.id] = colorForAccount(a, byPool[p].length);
-      byPool[p].push(a);
+    if (colorBy === "owner") {
+      const byOwner = {};
+      for (const a of accounts) {
+        const o = a.owner || "joint";
+        byOwner[o] = byOwner[o] || [];
+        colors[a.id] = colorForAccountByOwner(a, byOwner[o].length);
+        byOwner[o].push(a);
+      }
+    } else {
+      const byPool = {};
+      for (const a of accounts) {
+        const p = poolForType(a.type);
+        byPool[p] = byPool[p] || [];
+        colors[a.id] = colorForAccountByPool(a, byPool[p].length);
+        byPool[p].push(a);
+      }
     }
     return colors;
-  }, [accounts]);
+  }, [accounts, colorBy]);
 
   /* Per-pool ending-balance summary for the cards row. */
   const poolSummary = useMemo(() => {
@@ -146,6 +347,24 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
     "_other": "Cash / Taxable",
   };
 
+  /* FIRE crossover: when does the real total cross the FIRE target?
+     Returns null if not reached, 0 if already there, else fractional year. */
+  const yearsToFireAdv = useMemo(() => {
+    if (!fireEnabled || !fireTarget || fireTarget <= 0) return null;
+    const series = projection.years;
+    if (!series.length) return null;
+    if (series[0].totals.real >= fireTarget) return 0;
+    for (let y = 1; y < series.length; y++) {
+      if (series[y].totals.real >= fireTarget) {
+        const prev = series[y - 1].totals.real;
+        const cur = series[y].totals.real;
+        const frac = cur > prev ? (fireTarget - prev) / (cur - prev) : 0;
+        return (y - 1) + Math.max(0, Math.min(1, frac));
+      }
+    }
+    return null;
+  }, [projection, fireEnabled, fireTarget]);
+
   /* Look up the per-account current-year limit + ramp years for each
      account that participates in a pool. Used in the input row UI. */
   const accountInsight = (a) => {
@@ -162,14 +381,34 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
       return null;
     })();
     const limit = getPoolLimit(pool, baseYear, ageNow, hsaCoverage);
-    const base = Number(a.contribAmount) || 0;
+    const eff = effectiveContribFor(a);
     const incr = Number(a.annualIncrease) || 0;
-    const yearsToHit = yearsToHitPoolLimit(base, incr, limit);
-    return { pool, limit, ageNow, yearsToHit };
+    const yearsToHit = yearsToHitPoolLimit(eff, incr, limit);
+    return { pool, limit, ageNow, yearsToHit, eff };
   };
+
+  const horizonOpts = [1, 5, 10, 20, 30];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Shared horizon at top of advanced — same state as simple. */}
+      <Card>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Horizon:</span>
+          {horizonOpts.map(h => (
+            <button key={h} onClick={() => setHorizon(h)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: horizon === h ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: horizon === h ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{h}y</button>
+          ))}
+          <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
+          <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
+          {fireEnabled && fireTarget > 0 && (
+            <span style={{ fontSize: 11, color: "var(--tx3,#888)" }} title={`${fireMultiplierNum}× annual expenses (${fmt(fireAnnualExpenses)}/yr)`}>
+              Target: <strong>{fmt(fireTarget)}</strong>
+            </span>
+          )}
+        </div>
+      </Card>
+
       {/* Account list */}
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
@@ -180,8 +419,31 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
               <button key={c} onClick={() => setForecast({ ...forecast, hsaCoverage: c })} style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "none", borderRadius: 5, background: hsaCoverage === c ? "#9B59B6" : "var(--input-bg,#f5f5f5)", color: hsaCoverage === c ? "#fff" : "var(--tx2,#555)", cursor: "pointer", textTransform: "capitalize" }}>{c.replace("-", " ")}</button>
             ))}
             <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
+            <button
+              onClick={flipAllCap}
+              title={allCapped ? "All accounts capped — click to uncap all" : noneCapped ? "No accounts capped — click to cap all" : "Some accounts capped — click to cap all"}
+              style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "transparent", color: "var(--tx2,#555)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 5 }}
+            >
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: allCapped ? "#2ECC71" : capMixed ? "#F39C12" : "#888" }} />
+              Cap all at IRS limits
+            </button>
+            <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
+            <button onClick={expandAll} disabled={allExpanded} style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "transparent", color: allExpanded ? "var(--tx3,#bbb)" : "var(--tx2,#555)", cursor: allExpanded ? "default" : "pointer" }}>Expand all</button>
+            <button onClick={collapseAll} disabled={allCollapsed} style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "transparent", color: allCollapsed ? "var(--tx3,#bbb)" : "var(--tx2,#555)", cursor: allCollapsed ? "default" : "pointer" }}>Collapse all</button>
+            <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
             <button onClick={resetToDefaults} style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "transparent", color: "var(--tx3,#888)", cursor: "pointer" }} title="Replace all accounts with the default starter list.">Reset</button>
           </div>
+        </div>
+
+        {/* Projection assumptions: limit growth %. Small inline mini-section. */}
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>IRS limit growth:</span>
+          <div style={{ width: 90 }}>
+            <NI value={String(limitGrowthPct)} onChange={v => setForecast({ ...forecast, limitGrowthPct: evalF(v) })} onBlurResolve />
+          </div>
+          <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
+            % per year applied to today's IRS limits for future projection years (rounded to nearest $500). Default 2.5%. Set to 0 to freeze limits at today's values.
+          </span>
         </div>
 
         {(!tax?.p1BirthYear && !tax?.p2BirthYear) && (
@@ -196,15 +458,34 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
           )}
           {accounts.map(a => {
             const insight = accountInsight(a);
-            const isOver = insight && (Number(a.contribAmount) || 0) > insight.limit;
+            const eff = effectiveContribFor(a);
+            const isOver = insight && eff > insight.limit;
             const color = accountColors[a.id] || "#888";
             const isExp = !!expanded[a.id];
+            const baseLabel = deriveAccountName({ ...a, nickname: "" }, p1Name, p2Name);
+            const auto = isAutoDerivable(a);
+            const isAutoMode = auto && !a.contribOverride;
+            const isMatchAcct = a.type === "401k_match";
+            const matchLumpForOwner = a.owner === "p1" ? cLump : a.owner === "p2" ? kLump : false;
+            const matchOwnerName = a.owner === "p1" ? p1Name : a.owner === "p2" ? p2Name : "";
             return (
-              <div key={a.id} style={{ border: "1px solid var(--bdr,#e0e0e0)", borderLeft: `4px solid ${color}`, borderRadius: 8, overflow: "hidden" }}>
+              <div key={a.id} style={{ border: "1px solid var(--bdr,#e0e0e0)", borderLeft: `4px solid ${color}`, borderRadius: 8, overflow: "hidden", opacity: isMatchAcct && matchLumpForOwner ? 0.55 : 1 }}>
                 {/* Header row — always visible */}
-                <div onClick={() => toggleExpand(a.id)} style={{ display: "flex", alignItems: "center", padding: "10px 12px", cursor: "pointer", gap: 12, background: "var(--input-bg,#fafafa)", flexWrap: "wrap" }}>
+                <div onClick={() => toggleExpand(a.id)} style={{ display: "flex", alignItems: "center", padding: "10px 12px", cursor: "pointer", gap: 10, background: "var(--input-bg,#fafafa)", flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, color: "var(--tx3,#888)", width: 12 }}>{isExp ? "▾" : "▸"}</span>
-                  <input value={a.name} onChange={e => updateAccount(a.id, { name: e.target.value })} onClick={e => e.stopPropagation()} style={{ flex: "1 1 200px", border: "none", background: "transparent", fontSize: 13, fontWeight: 700, color: "var(--card-color,#222)", padding: 4 }} />
+                  <input
+                    value={a.nickname || ""}
+                    onChange={e => updateAccount(a.id, { nickname: e.target.value })}
+                    onClick={e => e.stopPropagation()}
+                    placeholder="+ nickname"
+                    style={{ width: 110, border: "1px dashed var(--bdr,#ddd)", borderRadius: 4, background: "transparent", fontSize: 11, fontWeight: 600, color: "var(--card-color,#222)", padding: "3px 6px" }}
+                  />
+                  <span style={{ flex: "1 1 200px", fontSize: 13, fontWeight: 700, color: "var(--card-color,#222)", padding: 4 }}>
+                    {baseLabel}
+                    {isMatchAcct && matchLumpForOwner && (
+                      <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: "var(--tx3,#888)", fontStyle: "italic" }}>(combined into pre-tax)</span>
+                    )}
+                  </span>
                   <span style={{ fontSize: 10, color: "var(--tx3,#888)", padding: "2px 6px", background: "var(--card-bg,#fff)", borderRadius: 4, fontWeight: 600 }}>{ACCOUNT_TYPE_LABELS[a.type] || a.type}</span>
                   <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>{a.owner === "p1" ? p1Name : a.owner === "p2" ? p2Name : "Joint"}</span>
                   <span style={{ fontSize: 12, fontWeight: 700, color: "var(--card-color,#222)", minWidth: 90, textAlign: "right" }}>{fmt(Number(a.startBalance) || 0)}</span>
@@ -216,7 +497,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
                   <div style={{ padding: 12, display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10 }}>
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Type</label>
-                      <select value={a.type} onChange={e => updateAccount(a.id, { type: e.target.value, capAtLimit: !["taxable","cash","custom"].includes(e.target.value) })} style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}>
+                      <select value={a.type} onChange={e => updateAccount(a.id, { type: e.target.value, capAtLimit: !["taxable","cash","custom","401k_match"].includes(e.target.value) })} style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}>
                         {Object.entries(ACCOUNT_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
                     </div>
@@ -237,10 +518,25 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
                       <NI value={String(a.annualReturn)} onChange={v => updateAccount(a.id, { annualReturn: evalF(v) })} onBlurResolve />
                     </div>
                     <div style={{ gridColumn: mob ? "1/-1" : "auto" }}>
-                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: isOver ? "#E8573A" : "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                        Annual Contribution {isOver && "⚠"}
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: isOver ? "#E8573A" : "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        <span>Annual Contribution {isOver && "⚠"}</span>
+                        {auto && (
+                          <button
+                            onClick={() => updateAccount(a.id, { contribOverride: !a.contribOverride })}
+                            title={isAutoMode ? "Auto: derived from Income tab. Click to switch to manual." : "Manual: enter your own number. Click to use auto-derived value."}
+                            style={{ padding: "1px 6px", fontSize: 9, fontWeight: 700, border: "none", borderRadius: 4, background: isAutoMode ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: isAutoMode ? "#fff" : "var(--tx3,#888)", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}
+                          >
+                            {isAutoMode ? "Auto" : "Manual"}
+                          </button>
+                        )}
                       </label>
-                      <NI value={String(a.contribAmount)} onChange={v => updateAccount(a.id, { contribAmount: evalF(v) })} onBlurResolve prefix="$" />
+                      {isAutoMode ? (
+                        <div style={{ padding: "6px 8px", background: "var(--input-bg,#f0f0f0)", border: "1px dashed var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, color: "var(--tx2,#555)", fontFamily: "monospace" }}>
+                          {fmt(autoContribFor(a) || 0)}
+                        </div>
+                      ) : (
+                        <NI value={String(a.contribAmount)} onChange={v => updateAccount(a.id, { contribAmount: evalF(v) })} onBlurResolve prefix="$" />
+                      )}
                     </div>
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Annual Increase %</label>
@@ -252,12 +548,28 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
                         Cap at IRS limit
                       </label>
                     </div>
+                    {/* Per-person match-lump toggle, only shown on 401k_match accounts */}
+                    {isMatchAcct && (a.owner === "p1" || a.owner === "p2") && setTax && (
+                      <div style={{ gridColumn: "1/-1", padding: "8px 10px", background: matchLumpForOwner ? "#E8F4F8" : "var(--input-bg,#f8f8f8)", border: matchLumpForOwner ? "1px solid #B3D9E0" : "1px solid var(--bdr,#eee)", borderRadius: 6 }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--tx2,#555)", cursor: "pointer" }}>
+                          <input
+                            type="checkbox"
+                            checked={matchLumpForOwner}
+                            onChange={e => setTax(prev => ({ ...prev, [a.owner === "p1" ? "c401MatchLump" : "k401MatchLump"]: e.target.checked }))}
+                          />
+                          <span>Combine {matchOwnerName}'s match with {matchOwnerName}'s pre-tax 401(k)</span>
+                        </label>
+                        <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 4, marginLeft: 22 }}>
+                          When ON, this match account contributes 0 and the match is folded into {matchOwnerName}'s pre-tax 401(k) auto-contribution. Reflects how some plans report combined contributions; off keeps them visually separate.
+                        </div>
+                      </div>
+                    )}
                     {insight && (
                       <div style={{ gridColumn: "1/-1", padding: "8px 10px", background: "var(--input-bg,#f8f8f8)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", lineHeight: 1.6 }}>
                         <span style={{ color: "var(--tx3,#888)" }}>Pool limit ({baseYear}, {a.owner === "joint" ? "household" : a.owner === "p1" ? p1Name : p2Name}{insight.ageNow ? `, age ${insight.ageNow}` : ""}):</span> <strong>{fmt(insight.limit)}/yr</strong>
                         {isOver && (
                           <span style={{ color: "#E8573A", marginLeft: 8 }}>
-                            ⚠ Over by {fmt((Number(a.contribAmount) || 0) - insight.limit)}{a.capAtLimit ? " — will be capped in projection" : ""}
+                            ⚠ Over by {fmt(eff - insight.limit)}{a.capAtLimit ? " — will be capped in projection" : ""}
                           </span>
                         )}
                         {!isOver && insight.yearsToHit !== null && insight.yearsToHit > 0 && (
@@ -270,7 +582,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
                         )}
                         {insight.pool === "hsa" && (
                           <div style={{ color: "var(--tx3,#888)", fontSize: 10, marginTop: 4 }}>
-                            Household HSA pool — limit shared across all HSA accounts.
+                            Household HSA pool — limit shared across all HSA accounts (cash + invested + legacy).
                           </div>
                         )}
                       </div>
@@ -283,7 +595,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
         </div>
 
         <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {Object.entries(ACCOUNT_TYPE_LABELS).map(([type, label]) => (
+          {Object.entries(ACCOUNT_TYPE_LABELS).filter(([k]) => k !== "hsa").map(([type, label]) => (
             <button key={type} onClick={() => addAccount(type)} style={{ padding: "5px 10px", fontSize: 11, border: "1px dashed var(--bdr,#ccc)", borderRadius: 6, background: "transparent", cursor: "pointer", color: "var(--tx2,#555)" }}>+ {label}</button>
           ))}
         </div>
@@ -292,35 +604,44 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
       {/* Stacked area chart — totals over time */}
       {accounts.length > 0 && (
         <Card>
-          <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Projected Balance by Account</h3>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Projected Balance by Account</h3>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginLeft: "auto" }}>Color by:</span>
+            <button onClick={() => setColorBy("type")} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: colorBy === "type" ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: colorBy === "type" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>Type</button>
+            <button onClick={() => setColorBy("owner")} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: colorBy === "owner" ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: colorBy === "owner" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>Owner</button>
+          </div>
           <div style={{ width: "100%", height: 360 }}>
             <ResponsiveContainer>
               <AreaChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr,#e0e0e0)" />
                 <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} label={{ value: "Years from now", position: "insideBottom", offset: -2, fontSize: 11, fill: "var(--tx3,#888)" }} />
-                <YAxis tickFormatter={v => fmt(v)} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={70} />
+                <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
                   formatter={(v, k) => {
                     if (k === "total") return [fmt(v), "Total"];
+                    if (k === "totalReal") return [fmt(v), "Total (Real)"];
                     const a = accounts.find(x => x.id === k);
-                    return [fmt(v), a ? a.name : k];
+                    return [fmt(v), a ? deriveAccountName(a, p1Name, p2Name) : k];
                   }}
                   labelFormatter={(y) => `Year ${y} (${baseYear + Number(y)})`}
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 {accounts.map(a => (
-                  <Area key={a.id} type="monotone" dataKey={a.id} name={a.name} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
+                  <Area key={a.id} type="monotone" dataKey={a.id} name={deriveAccountName(a, p1Name, p2Name)} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
                 ))}
+                {fireEnabled && fireTarget > 0 && (
+                  <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmtCompact(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </Card>
       )}
 
-      {/* Per-pool summary cards */}
+      {/* Per-pool summary cards (+ Total + optional FIRE) */}
       {poolSummary.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : `repeat(${Math.min(poolSummary.length + 1, 5)}, 1fr)`, gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : `repeat(${Math.min(poolSummary.length + (fireEnabled ? 2 : 1), 6)}, 1fr)`, gap: 12 }}>
           {poolSummary.map(p => (
             <Card key={p.pool}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
@@ -335,6 +656,27 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
             <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(poolSummary.reduce((s, p) => s + p.nominal, 0)))}</div>
             <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
           </Card>
+          {fireEnabled && fireTarget > 0 && (
+            <Card>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Years to FIRE</div>
+              {yearsToFireAdv === null ? (
+                <>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable</div>
+                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>within {horizon}y horizon</div>
+                </>
+              ) : yearsToFireAdv === 0 ? (
+                <>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Already FI ✓</div>
+                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} target hit</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFireAdv.toFixed(1)} yr</div>
+                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
+                </>
+              )}
+            </Card>
+          )}
         </div>
       )}
 
@@ -349,10 +691,10 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
                   <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Year</th>
                   <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Total</th>
                   {accounts.map(a => (
-                    <th key={a.id} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: accountColors[a.id], borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>{a.name}</th>
+                    <th key={a.id} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: accountColors[a.id], borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>{deriveAccountName(a, p1Name, p2Name)}</th>
                   ))}
                   {accounts.map(a => (
-                    <th key={a.id + "_c"} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#aaa)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap", fontStyle: "italic" }}>{a.name} Contrib.</th>
+                    <th key={a.id + "_c"} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#aaa)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap", fontStyle: "italic" }}>{deriveAccountName(a, p1Name, p2Name)} Contrib.</th>
                   ))}
                 </tr>
               </thead>
@@ -404,7 +746,7 @@ function AdvancedForecast({ mob, forecast, setForecast, tax, p1Name, p2Name, hor
      stacked area chart, per-pool summary cards. Mode persists to
      localStorage; account list persists to st.forecast (server-synced).
 */
-export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0, forecast = {}, setForecast, tax = {}, p1Name = "Person 1", p2Name = "Person 2" }) {
+export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0, forecast = {}, setForecast, tax = {}, setTax, p1Name = "Person 1", p2Name = "Person 2", cSal = "0", kSal = "0", c4pre = "0", c4ro = "0", k4pre = "0", k4ro = "0" }) {
   const [forecastMode, setForecastMode] = useState(() => { try { return localStorage.getItem("forecast-mode") || "simple"; } catch { return "simple"; } });
   useEffect(() => { try { localStorage.setItem("forecast-mode", forecastMode); } catch {} }, [forecastMode]);
   const [returnPct, setReturnPct] = useState(() => { try { return localStorage.getItem("forecast-return") || "7"; } catch { return "7"; } });
@@ -685,10 +1027,25 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
           forecast={forecast}
           setForecast={setForecast}
           tax={tax}
+          setTax={setTax}
           p1Name={p1Name}
           p2Name={p2Name}
           horizon={horizon}
-          inflationPct={i * 100}
+          setHorizon={setHorizon}
+          inflationPct={i}
+          fireEnabled={fireEnabled}
+          setFireEnabled={setFireEnabled}
+          fireTarget={fireTarget}
+          fireMultiplierNum={fireMultiplierNum}
+          fireAnnualExpenses={fireAnnualExpenses}
+          cSal={cSal}
+          kSal={kSal}
+          c4pre={c4pre}
+          c4ro={c4ro}
+          k4pre={k4pre}
+          k4ro={k4ro}
+          preDed={preDed}
+          hsaEmployerMatchAnnual={hsaEmployerMatchAnnual}
         />
       )}
 

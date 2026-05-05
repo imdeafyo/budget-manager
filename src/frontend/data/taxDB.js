@@ -44,6 +44,13 @@ export const DEF_TAX = {
   k401Catch: 0, k401CatchPreTax: true,
   cMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], cMatchBase: 6,
   kMatchTiers: [{ upTo: 4, rate: 1 }, { upTo: 6, rate: 0.5 }], kMatchBase: 6,
+  /* Whether to fold employer match into the per-person pre-tax 401(k) line
+     in the forecast advanced view. When false, match shows as its own
+     account; when true, the match account contributes 0 and the pre-tax
+     account's auto-derived contribution includes the match. Per-person
+     because plans differ across employers in real life. */
+  c401MatchLump: false,
+  k401MatchLump: false,
   hsaLimit: 8300, hsaEmployerMatch: 0,
   /* Birth years (4-digit) for catch-up tier resolution in the forecast.
      Empty/0 = no catch-up applied (graceful default for the generic build
@@ -270,26 +277,64 @@ export function getPoolLimit(pool, year, age, hsaCoverage = "family") {
 }
 
 /* Map of account `type` → limit pool. Used by forecast math to bucket
-   account-level contributions into pools for limit checking. */
+   account-level contributions into pools for limit checking.
+
+   Notes on additions:
+   - `hsa_cash` and `hsa_invested` are two halves of the same HSA dollar:
+     they share the household HSA pool. The split is operational (cash sits
+     uninvested until you reach an institution-specific minimum) — there's
+     no IRS distinction.
+   - `hsa` (singular) stays mapped to "hsa" for backward compat with saved
+     account lists from before the split landed; new defaults use the
+     cash/invested pair.
+   - `401k_match` is intentionally `null` (uncapped). Employer match has no
+     employee deferral cap; the only ceiling is 415(c) total-plan
+     ($70k+ in 2025-26), which is large enough that it almost never binds
+     for typical match formulas. We don't model 415(c) — note here so it's
+     obvious if someone later wonders. */
 export const ACCOUNT_TYPE_TO_POOL = {
   "401k_pretax": "401k_employee",
   "401k_roth":   "401k_employee",
+  "401k_match":  null,           // employer match — uncapped (415(c) not modeled)
   "ira_traditional": "ira",
   "ira_roth":        "ira",
-  "hsa":     "hsa",
+  "hsa":           "hsa",        // legacy single HSA type — kept for backward compat
+  "hsa_cash":      "hsa",
+  "hsa_invested":  "hsa",
   "taxable": null,
   "cash":    null,
   "custom":  null,
 };
 
-/* Default account list for first-time advanced-mode users. */
+/* Default account list for first-time advanced-mode users.
+   Display names are derived in the UI from owner + type + nickname; we
+   intentionally don't store a `name` field here so renames of P1/P2 flow
+   through automatically. `nickname` defaults to empty.
+   HSA is split into Cash + Invested (both share the same household HSA
+   pool — the split is operational, not legal). The 401(k) match accounts
+   are uncapped and exist so the user can either show match as its own
+   line or fold it into the pre-tax 401(k) via the per-person lump
+   toggle (tax.c401MatchLump / tax.k401MatchLump). */
 export function defaultForecastAccounts() {
+  const mk = (id, owner, type, defaults = {}) => ({
+    id, nickname: "", owner, type,
+    startBalance: 0,
+    annualReturn: 7,
+    contribOverride: false,
+    contribAmount: 0,
+    annualIncrease: 0,
+    capAtLimit: !["taxable","cash","custom","401k_match"].includes(type),
+    ...defaults,
+  });
   return [
-    { id: "acc_p1_401k_pretax", name: "P1 401(k) — Pre-tax", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
-    { id: "acc_p1_401k_roth",   name: "P1 401(k) — Roth",    owner: "p1", type: "401k_roth",   startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
-    { id: "acc_p2_401k_pretax", name: "P2 401(k) — Pre-tax", owner: "p2", type: "401k_pretax", startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
-    { id: "acc_p2_401k_roth",   name: "P2 401(k) — Roth",    owner: "p2", type: "401k_roth",   startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
-    { id: "acc_hsa_family",     name: "HSA — Family",        owner: "joint", type: "hsa",      startBalance: 0, annualReturn: 7, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
-    { id: "acc_cash_joint",     name: "Cash / Taxable",      owner: "joint", type: "taxable",  startBalance: 0, annualReturn: 4, contribOverride: false, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    mk("acc_p1_401k_pretax", "p1", "401k_pretax"),
+    mk("acc_p1_401k_roth",   "p1", "401k_roth"),
+    mk("acc_p1_401k_match",  "p1", "401k_match", { annualReturn: 7 }),
+    mk("acc_p2_401k_pretax", "p2", "401k_pretax"),
+    mk("acc_p2_401k_roth",   "p2", "401k_roth"),
+    mk("acc_p2_401k_match",  "p2", "401k_match", { annualReturn: 7 }),
+    mk("acc_hsa_cash",       "joint", "hsa_cash",     { annualReturn: 0.5 }),
+    mk("acc_hsa_invested",   "joint", "hsa_invested", { annualReturn: 7 }),
+    mk("acc_cash_joint",     "joint", "taxable",      { annualReturn: 4 }),
   ];
 }
