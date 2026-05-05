@@ -22,7 +22,7 @@ export default function useAppState() {
   //   #budget/milestones/<idx>         — viewing a milestone in the milestones subtab
   // Back-compat: pre-restructure used #budget/ms/N and bare #budget for the live view; both still parse.
   // Pre-restructure top-level #forecast redirects to #charts/forecast.
-  const VALID_SUBTABS = { budget: ["live", "milestones"], charts: ["trends", "forecast"] };
+  const VALID_SUBTABS = { budget: ["live", "milestones"], charts: ["trends", "forecast", "advanced"] };
   const DEFAULT_SUBTAB = { budget: "live", charts: "trends" };
   const parseHash = () => {
     const h = location.hash.replace("#","");

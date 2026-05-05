@@ -2115,9 +2115,9 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                         have a positive income figure. */}
                     {showIncomeOverlay && (compare?.income?.total > 0) && (
                       <ReferenceLine x={compare.income.total}
-                        stroke="#2E86C1" strokeWidth={2} strokeDasharray="6 4"
+                        stroke="#1E8449" strokeWidth={2} strokeDasharray="6 4"
                         label={{ value: `Income ${fmt(compare.income.total)}`, position: "top",
-                          fill: "#2E86C1", fontSize: 11, fontWeight: 700 }} />
+                          fill: "#1E8449", fontSize: 11, fontWeight: 700 }} />
                     )}
                     {/* Invisible per-row click overlay — see notes by
                         BarRowClickOverlay above. Renders last so it captures
@@ -2147,12 +2147,15 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
                         more readable when buckets are dense or the y-axis is
                         compressed by an outlier month. */}
                     <Line type="monotone" dataKey="budgeted" name="Budgeted" stroke="var(--tx3, #888)"
-                      strokeDasharray="5 4" strokeWidth={2} dot={false} activeDot={{ r: 5 }} />
+                      strokeDasharray="5 4" strokeWidth={2} dot={false}
+                      activeDot={{ r: 5, fill: "var(--tx3, #888)", stroke: "var(--tx3, #888)" }} />
                     <Line type="monotone" dataKey="actual" name="Actual" stroke="#556FB5"
-                      strokeWidth={2.5} dot={false} activeDot={{ r: 6 }} />
+                      strokeWidth={2.5} dot={false}
+                      activeDot={{ r: 6, fill: "#556FB5", stroke: "#556FB5" }} />
                     {showIncomeOverlay && (
-                      <Line type="monotone" dataKey="income" name="Income" stroke="#2E86C1"
-                        strokeWidth={2} strokeDasharray="2 3" dot={false} activeDot={{ r: 5 }} />
+                      <Line type="monotone" dataKey="income" name="Income" stroke="#1E8449"
+                        strokeWidth={2} strokeDasharray="2 3" dot={false}
+                        activeDot={{ r: 5, fill: "#1E8449", stroke: "#1E8449" }} />
                     )}
                     {/* Invisible per-column click overlay — see notes above. */}
                     {(setDateFrom && setDateTo) && <LineColClickOverlay rows={lineData} onPick={handleLineBandClick} />}
@@ -2168,7 +2171,7 @@ function BudgetCompareCard({ mob, compare, compareReady, rangeInferred, showComp
             <LegendSwatch color="#2ECC71" label="Under budget" />
             <LegendSwatch color="#E8573A" label="Over budget" />
             {chartMode === "bars" && <LegendSwatch color="#F2A93B" label="Uncategorized" />}
-            {showIncomeOverlay && <LegendSwatch color="#2E86C1" label="Income" />}
+            {showIncomeOverlay && <LegendSwatch color="#1E8449" label="Income" />}
           </div>
         </>
       )}
@@ -2232,7 +2235,7 @@ function CompareTooltip({ active, payload, label, totalActual = 0, totalBudget =
         <div>Period budget: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(totalBudget)}</strong></div>
         {totalIncome > 0.005 && (
           <div style={{ marginTop: 2 }}>
-            Period income: <strong style={{ color: "#2E86C1" }}>{fmt(totalIncome)}</strong>
+            Period income: <strong style={{ color: "#1E8449" }}>{fmt(totalIncome)}</strong>
             <span style={{ color: incomeMinusSpend >= 0 ? "#2ECC71" : "#E8573A", marginLeft: 4 }}>
               ({incomeMinusSpend >= 0 ? "+" : "−"}{fmt(Math.abs(incomeMinusSpend))} vs spend)
             </span>
@@ -2299,7 +2302,7 @@ function LineTooltip({ active, payload, label, category, showIncome = false }) {
       )}
       {showIncome && income > 0.005 && (
         <div style={{ borderTop: uncat > 0.005 && !category ? "none" : "1px solid var(--bdr2,#eee)", marginTop: 5, paddingTop: 5, fontSize: 11 }}>
-          <span style={{ color: "#2E86C1" }}>Income: <strong>{fmt(income)}</strong></span>
+          <span style={{ color: "#1E8449" }}>Income: <strong>{fmt(income)}</strong></span>
           <span style={{ color: (income - totalSpend) >= 0 ? "#2ECC71" : "#E8573A", marginLeft: 4 }}>
             ({(income - totalSpend) >= 0 ? "+" : "−"}{fmt(Math.abs(income - totalSpend))} vs spend)
           </span>

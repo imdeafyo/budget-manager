@@ -9,6 +9,7 @@ import ChartsTab from "./tabs/ChartsTab.jsx";
 import MilestoneViewTab from "./tabs/MilestoneViewTab.jsx";
 import MilestonesSubtab from "./tabs/MilestonesSubtab.jsx";
 import ForecastTab from "./tabs/ForecastTab.jsx";
+import AdvancedForecastTab from "./tabs/AdvancedForecastTab.jsx";
 import TransactionsTab from "./tabs/TransactionsTab.jsx";
 import SettingsTab from "./tabs/SettingsTab.jsx";
 
@@ -82,7 +83,7 @@ export default function App() {
                   <button key={k} onClick={() => S.setBudgetSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
                 );
               })}
-              {S.tab === "charts" && [["trends", "Trends"], ["forecast", "Forecast"]].map(([k, l]) => {
+              {S.tab === "charts" && [["trends", "Trends"], ["forecast", "Forecast"], ["advanced", "Advanced"]].map(([k, l]) => {
                 const active = S.chartsSubtab === k;
                 return (
                   <button key={k} onClick={() => S.setChartsSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
@@ -144,6 +145,9 @@ export default function App() {
 
         {/* ═══ CHARTS — Forecast subtab (was top-level Forecast tab pre-restructure) ═══ */}
         {S.tab === "charts" && S.chartsSubtab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} transactions={S.transactions} cats={S.cats} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} preDed={S.preDed} hsaEmployerMatchAnnual={S.tax?.hsaEmployerMatch || 0} forecast={S.forecast} setForecast={S.setForecast} tax={S.tax} setTax={S.setTax} p1Name={S.p1Name} p2Name={S.p2Name} cSal={S.cSal} kSal={S.kSal} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} />}
+
+        {/* ═══ CHARTS — Advanced (per-account forecast) subtab ═══ */}
+        {S.tab === "charts" && S.chartsSubtab === "advanced" && <AdvancedForecastTab mob={S.mob} forecast={S.forecast} setForecast={S.setForecast} tax={S.tax} setTax={S.setTax} p1Name={S.p1Name} p2Name={S.p2Name} cSal={S.cSal} kSal={S.kSal} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} preDed={S.preDed} hsaEmployerMatchAnnual={S.tax?.hsaEmployerMatch || 0} tExpW={S.tExpW} />}
 
         {/* ═══ TRANSACTIONS ═══ */}
         {S.tab === "transactions" && <TransactionsTab
