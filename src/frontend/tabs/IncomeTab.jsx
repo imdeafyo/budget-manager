@@ -1,7 +1,7 @@
 import { Card, NI, PI, EditTxt } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 
-export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, tax, upTax, preDed, setPreDed, postDed, setPostDed, C }) {
+export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, cIraTrad = "0", setCIraTrad, cIraRoth = "0", setCIraRoth, kIraTrad = "0", setKIraTrad, kIraRoth = "0", setKIraRoth, tax, upTax, preDed, setPreDed, postDed, setPostDed, C }) {
 
   const DedEditor = ({ items, setItems, label }) => (
     <Card>
@@ -80,6 +80,34 @@ export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, c
               <div><span style={{ color: "#999" }}>{p2Name} total:</span> <strong>{evalF(k4pre) + evalF(k4ro)}%</strong> ({fmt(C.k4w * 52)}/yr)</div>
               <div><span style={{ color: "#999" }}>{p1Name} employer:</span> <strong>{C.cMP.toFixed(2)}%</strong> ({fmt(C.cs * C.cMP / 100)}/yr)</div>
               <div><span style={{ color: "#999" }}>{p2Name} employer:</span> <strong>{C.kMP.toFixed(2)}%</strong> ({fmt(C.ks * C.kMP / 100)}/yr)</div>
+            </div>
+          </div>
+        </Card>
+        {/* ── IRA Contributions ──
+            Annual dollar amounts (not %) because IRAs aren't payroll-deducted —
+            users plan them as flat lump sums ("$7000/yr to my Roth"). The
+            Forecast tab's Advanced view auto-fills account contributions from
+            these values (account type = ira_traditional or ira_roth, owner =
+            p1 or p2). Joint IRAs aren't a thing legally so there's no joint
+            field. The 2026 IRA limit is $7000 ($8000 with catch-up); we don't
+            enforce it here — let the Forecast tab's "Cap at IRS limit"
+            checkbox handle that. */}
+        <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>IRA Contributions <span style={{ fontSize: 11, fontWeight: 500, color: "#999" }}>(annual $)</span></h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#2ECC71" }}>Traditional IRA</span></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name}</label><NI value={cIraTrad} onChange={setCIraTrad} prefix="$" /></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name}</label><NI value={kIraTrad} onChange={setKIraTrad} prefix="$" /></div>
+            <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4, marginTop: 8 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#9B59B6" }}>Roth IRA</span></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name}</label><NI value={cIraRoth} onChange={setCIraRoth} prefix="$" /></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name}</label><NI value={kIraRoth} onChange={setKIraRoth} prefix="$" /></div>
+          </div>
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><span style={{ color: "#999" }}>{p1Name} total:</span> <strong>{fmt(evalF(cIraTrad) + evalF(cIraRoth))}</strong>/yr</div>
+              <div><span style={{ color: "#999" }}>{p2Name} total:</span> <strong>{fmt(evalF(kIraTrad) + evalF(kIraRoth))}</strong>/yr</div>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>
+              Used by Forecast → Advanced to auto-fill IRA account contributions. IRS limit is shared across Traditional + Roth per person ($7,000/yr in 2026, $8,000 with age-50 catch-up).
             </div>
           </div>
         </Card>

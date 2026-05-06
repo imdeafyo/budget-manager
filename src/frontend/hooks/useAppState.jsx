@@ -181,6 +181,13 @@ export default function useAppState() {
   const [postDed, setPostDed] = useState(DEF_POST);
   const [c4pre, setC4pre] = useState("8"); const [c4ro, setC4ro] = useState("0");
   const [k4pre, setK4pre] = useState("8"); const [k4ro, setK4ro] = useState("0");
+  // IRA annual contributions in dollars (NOT percent of salary, unlike 401(k)).
+  // IRA limits aren't payroll-deducted so a flat-dollar input matches how
+  // people actually plan IRA contributions ("I put $7000/yr in my Roth").
+  // Used by AdvancedForecastTab → autoContribFor for ira_traditional / ira_roth
+  // account types so users don't have to type the same number twice.
+  const [cIraTrad, setCIraTrad] = useState("0"); const [cIraRoth, setCIraRoth] = useState("0");
+  const [kIraTrad, setKIraTrad] = useState("0"); const [kIraRoth, setKIraRoth] = useState("0");
   const [exp, setExp] = useState(DEF_EXP);
   const [sav, setSav] = useState(DEF_SAV);
   const [cats, setCats] = useState(DEF_CATS);
@@ -291,8 +298,8 @@ export default function useAppState() {
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,forecast:setForecast }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast]);
+  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,forecast:setForecast }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast]);
   useEffect(() => { if (!loaded) return; const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st, loaded]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -559,6 +566,14 @@ export default function useAppState() {
       if (fs.preDed) setPreDed(fs.preDed); if (fs.postDed) setPostDed(fs.postDed);
       if (fs.c4pre !== undefined) setC4pre(fs.c4pre); if (fs.c4ro !== undefined) setC4ro(fs.c4ro);
       if (fs.k4pre !== undefined) setK4pre(fs.k4pre); if (fs.k4ro !== undefined) setK4ro(fs.k4ro);
+      // IRA fields landed after the snapshot/milestone format was settled.
+      // Older milestones won't have them — just leave the live values untouched
+      // in that case (don't reset to 0). Only restore when the milestone
+      // actually carries the fields.
+      if (fs.cIraTrad !== undefined) setCIraTrad(fs.cIraTrad);
+      if (fs.cIraRoth !== undefined) setCIraRoth(fs.cIraRoth);
+      if (fs.kIraTrad !== undefined) setKIraTrad(fs.kIraTrad);
+      if (fs.kIraRoth !== undefined) setKIraRoth(fs.kIraRoth);
       if (fs.exp) setExp(fs.exp); if (fs.sav) setSav(fs.sav);
       if (fs.cats) setCats(fs.cats);
       if (fs.savCats) setSavCats(fs.savCats);
@@ -585,6 +600,10 @@ export default function useAppState() {
     if (ls.preDed) setPreDed(ls.preDed); if (ls.postDed) setPostDed(ls.postDed);
     if (ls.c4pre !== undefined) setC4pre(ls.c4pre); if (ls.c4ro !== undefined) setC4ro(ls.c4ro);
     if (ls.k4pre !== undefined) setK4pre(ls.k4pre); if (ls.k4ro !== undefined) setK4ro(ls.k4ro);
+    if (ls.cIraTrad !== undefined) setCIraTrad(ls.cIraTrad);
+    if (ls.cIraRoth !== undefined) setCIraRoth(ls.cIraRoth);
+    if (ls.kIraTrad !== undefined) setKIraTrad(ls.kIraTrad);
+    if (ls.kIraRoth !== undefined) setKIraRoth(ls.kIraRoth);
     if (ls.exp) setExp(ls.exp); if (ls.sav) setSav(ls.sav);
     if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats); if (ls.transferCats) setTransferCats(ls.transferCats); if (ls.incomeCats) setIncomeCats(ls.incomeCats);
     if (ls.tax) setTax(ls.tax);
@@ -704,6 +723,8 @@ export default function useAppState() {
     fil, setFil, cEaip, setCE, kEaip, setKE,
     preDed, setPreDed, postDed, setPostDed,
     c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro,
+    cIraTrad, setCIraTrad, cIraRoth, setCIraRoth,
+    kIraTrad, setKIraTrad, kIraRoth, setKIraRoth,
     // budget items
     exp, setExp, sav, setSav,
     cats, setCats, savCats, setSavCats, transferCats, setTransferCats, incomeCats, setIncomeCats, newCat, setNewCat,

@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
+import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 
 /* ── Account type display metadata ──
@@ -33,13 +34,16 @@ const POOL_COLORS = {
   "hsa":           ["#9B59B6", "#B57BCC", "#7E45A0", "#C99FD8"],
   "_other":        ["#888888", "#A8A8A8", "#666666", "#BFBFBF"],
 };
-/* Owner color palette (Color by: Owner). P1 = blues, P2 = teals, joint = warm
-   neutrals. Picked to be visually distinct from the pool palette so toggling
-   between modes feels meaningful, not just a re-shading. */
+/* Owner color palette (Color by: Owner). One color per owner, intentionally —
+   "Color by Owner" means the user wants to see total share by person, not
+   per-account variation. Multiple P1 accounts all paint the same blue and
+   visually merge into a single P1 block in the stacked area chart. The
+   tertiary entries are kept as fallbacks if more owners are ever added
+   (e.g., "kids"). */
 const OWNER_COLORS = {
-  "p1":    ["#2C5F8D", "#4A7BA8", "#1F4A6E", "#6692BF"],
-  "p2":    ["#1A8B91", "#3DAEB4", "#0F6E73", "#5DC4CA"],
-  "joint": ["#A06236", "#B97A50", "#84502A", "#C99068"],
+  "p1":    "#2C5F8D",
+  "p2":    "#1A8B91",
+  "joint": "#A06236",
 };
 
 function poolForType(type) {
@@ -50,9 +54,8 @@ function colorForAccountByPool(account, idxInPool) {
   const palette = POOL_COLORS[pool] || POOL_COLORS._other;
   return palette[idxInPool % palette.length];
 }
-function colorForAccountByOwner(account, idxInOwner) {
-  const palette = OWNER_COLORS[account.owner] || OWNER_COLORS.joint;
-  return palette[idxInOwner % palette.length];
+function colorForAccountByOwner(account) {
+  return OWNER_COLORS[account.owner] || OWNER_COLORS.joint;
 }
 
 /* Derive display name from owner + type, with optional user nickname.
@@ -100,7 +103,13 @@ function migrateAccountName(account, p1Name, p2Name) {
 export default function AdvancedForecastTab({
   mob, forecast = {}, setForecast, tax = {}, setTax, p1Name = "Person 1", p2Name = "Person 2",
   cSal = "0", kSal = "0", c4pre = "0", c4ro = "0", k4pre = "0", k4ro = "0",
+  // IRA dollar amounts from Income tab — used to auto-derive IRA account
+  // contributions so users don't enter the same number twice.
+  cIraTrad = "0", cIraRoth = "0", kIraTrad = "0", kIraRoth = "0",
   preDed = [], hsaEmployerMatchAnnual = 0, tExpW = 0,
+  // Transactions + category sets enable the "from actual spending (last N
+  // months)" contribution source on cash/savings accounts.
+  transactions = [], cats = [], savCats = [], transferCats = [],
 }) {
   // Cross-view shared state — read/written via the same keys Simple uses so
   // toggling between subtabs keeps the user's last horizon / FIRE settings.
@@ -135,6 +144,54 @@ export default function AdvancedForecastTab({
     [accountsRaw, p1Name, p2Name]
   );
 
+  /* Sorted view for rendering. `manual` keeps the persisted index order;
+     otherwise produce a fresh sorted copy each render. The underlying
+     `accounts` array is never reordered by sorting — only by user drag. */
+  const displayedAccounts = useMemo(() => {
+    if (sortMode === "manual") return accounts;
+    const list = [...accounts];
+    if (sortMode === "name") {
+      list.sort((a, b) => deriveAccountName(a, p1Name, p2Name).localeCompare(deriveAccountName(b, p1Name, p2Name)));
+    } else if (sortMode === "balance") {
+      list.sort((a, b) => (Number(b.startBalance) || 0) - (Number(a.startBalance) || 0));
+    }
+    return list;
+  }, [accounts, sortMode, p1Name, p2Name]);
+
+  /* Drag-and-drop reordering. Persists the new order back into
+     forecast.accounts so it survives reloads. Only enabled in manual sort
+     mode. */
+  const onDragStart = (id) => (e) => {
+    if (sortMode !== "manual") { e.preventDefault(); return; }
+    setDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+    // Some browsers require setData for drag to register at all.
+    try { e.dataTransfer.setData("text/plain", id); } catch {}
+  };
+  const onDragOver = (id) => (e) => {
+    if (sortMode !== "manual" || !dragId || dragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverId(id);
+  };
+  const onDragLeave = () => setDragOverId(null);
+  const onDrop = (id) => (e) => {
+    e.preventDefault();
+    if (sortMode !== "manual" || !dragId || dragId === id) {
+      setDragId(null); setDragOverId(null);
+      return;
+    }
+    const fromIdx = accounts.findIndex(a => a.id === dragId);
+    const toIdx = accounts.findIndex(a => a.id === id);
+    if (fromIdx < 0 || toIdx < 0) { setDragId(null); setDragOverId(null); return; }
+    const next = [...accounts];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    setForecast({ ...forecast, accounts: next });
+    setDragId(null); setDragOverId(null);
+  };
+  const onDragEnd = () => { setDragId(null); setDragOverId(null); };
+
   const hsaCoverage = (forecast && forecast.hsaCoverage) || "family";
   const limitGrowthPct = forecast && forecast.limitGrowthPct !== undefined ? forecast.limitGrowthPct : 2.5;
   const baseYear = new Date().getFullYear();
@@ -144,6 +201,65 @@ export default function AdvancedForecastTab({
     try { return localStorage.getItem("forecast-color-by") || "type"; } catch { return "type"; }
   });
   useEffect(() => { try { localStorage.setItem("forecast-color-by", colorBy); } catch {} }, [colorBy]);
+
+  /* Sort mode for the account list. "manual" preserves the user's drag-and-drop
+     order (which is also the index order in `forecast.accounts`). "name" and
+     "balance" sort the rendered view WITHOUT mutating the saved array — that
+     way flipping back to manual restores the user's hand-arranged order. */
+  const [sortMode, setSortMode] = useState(() => {
+    try { return localStorage.getItem("forecast-sort-mode") || "manual"; } catch { return "manual"; }
+  });
+  useEffect(() => { try { localStorage.setItem("forecast-sort-mode", sortMode); } catch {} }, [sortMode]);
+
+  /* Drag-and-drop state. dragId = id of the row currently being dragged.
+     Only meaningful when sortMode === "manual". */
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+
+  /* Summary-card order — separate DnD state from the account list. Stored as
+     a list of card ids: "pool:<poolName>", "total", "fire". When new cards
+     appear (e.g. user enables FIRE, or adds an account in a new pool), they
+     get appended to the end so the user's drag order is preserved.
+     Invalidates from the bottom: cards that no longer exist are filtered. */
+  const [cardOrder, setCardOrder] = useState(() => {
+    try {
+      const raw = localStorage.getItem("forecast-card-order");
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("forecast-card-order", JSON.stringify(cardOrder || [])); } catch {}
+  }, [cardOrder]);
+  const [cardDragId, setCardDragId] = useState(null);
+  const [cardDragOverId, setCardDragOverId] = useState(null);
+  const onCardDragStart = (id) => (e) => {
+    setCardDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", id); } catch {}
+  };
+  const onCardDragOver = (id) => (e) => {
+    if (!cardDragId || cardDragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setCardDragOverId(id);
+  };
+  const onCardDragLeave = () => setCardDragOverId(null);
+  const onCardDrop = (id, allIds) => (e) => {
+    e.preventDefault();
+    if (!cardDragId || cardDragId === id) {
+      setCardDragId(null); setCardDragOverId(null);
+      return;
+    }
+    const ids = [...allIds];
+    const fromIdx = ids.indexOf(cardDragId);
+    const toIdx   = ids.indexOf(id);
+    if (fromIdx < 0 || toIdx < 0) { setCardDragId(null); setCardDragOverId(null); return; }
+    const [moved] = ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, moved);
+    setCardOrder(ids);
+    setCardDragId(null); setCardDragOverId(null);
+  };
+  const onCardDragEnd = () => { setCardDragId(null); setCardDragOverId(null); };
 
   /* Per-account expand/collapse. Default: all collapsed for compactness. */
   const [expanded, setExpanded] = useState({});
@@ -247,6 +363,41 @@ export default function AdvancedForecastTab({
   const cLump = !!tax?.c401MatchLump;
   const kLump = !!tax?.k401MatchLump;
 
+  // Pre-evaluate IRA dollar amounts so autoContribFor stays sync.
+  const cIraTradNum = useMemo(() => evalF(cIraTrad), [cIraTrad]);
+  const cIraRothNum = useMemo(() => evalF(cIraRoth), [cIraRoth]);
+  const kIraTradNum = useMemo(() => evalF(kIraTrad), [kIraTrad]);
+  const kIraRothNum = useMemo(() => evalF(kIraRoth), [kIraRoth]);
+
+  /* Cash-from-actuals: for cash/savings accounts whose `contribSource` is set
+     to a "last N months" mode, compute net savings (income − expenses) over
+     that window from the transaction history. Returns a { [accountId]: $/yr }
+     map. Cached so the per-row `autoContribFor` lookup is O(1).
+     Returns 0 when the result is null (no data, or insufficient history) to
+     avoid surprising the user with a "nothing applied" silent fallback —
+     the row's tooltip explains the source. */
+  const cashActualByAccount = useMemo(() => {
+    const out = {};
+    if (!Array.isArray(transactions) || transactions.length === 0) return out;
+    for (const a of accounts) {
+      if (a.type !== "cash") continue;
+      const src = a.contribSource;
+      if (!src || src === "manual") continue;
+      const months = src === "actual3" ? 3 : src === "actual6" ? 6 : src === "actual12" ? 12 : null;
+      if (!months) continue;
+      const result = actualAnnualContribution({
+        transactions,
+        months,
+        cats,
+        savCats,
+        transferCats,
+        mode: "net",
+      });
+      out[a.id] = result && isFinite(result.annual) ? Math.max(0, result.annual) : 0;
+    }
+    return out;
+  }, [transactions, accounts, cats, savCats, transferCats]);
+
   const autoContribFor = (a) => {
     if (a.owner === "p1") {
       if (a.type === "401k_pretax") {
@@ -255,6 +406,11 @@ export default function AdvancedForecastTab({
       }
       if (a.type === "401k_roth")  return cSalNum * c4roNum / 100;
       if (a.type === "401k_match") return cLump ? 0 : cMatchAnnual;
+      // IRA fields are person-scoped; "joint" IRAs aren't a thing legally so
+      // we only auto-derive when owner is p1/p2 (joint IRA accounts fall
+      // through to manual entry).
+      if (a.type === "ira_traditional") return cIraTradNum;
+      if (a.type === "ira_roth")        return cIraRothNum;
     }
     if (a.owner === "p2") {
       if (a.type === "401k_pretax") {
@@ -263,14 +419,26 @@ export default function AdvancedForecastTab({
       }
       if (a.type === "401k_roth")  return kSalNum * k4roNum / 100;
       if (a.type === "401k_match") return kLump ? 0 : kMatchAnnual;
+      if (a.type === "ira_traditional") return kIraTradNum;
+      if (a.type === "ira_roth")        return kIraRothNum;
     }
     /* Joint HSA accounts: lump everything into "cash" by default. The user
        can flip individual rows to manual to allocate a portion to invested
        (most institutions hold contributions in cash until a minimum is
-       reached, then sweep to invested). */
+       reached, then sweep to invested).
+       TODO: HSA contributions live in preDed (string-matched on "hsa") for
+       historical reasons. A first-class field on the Income tab would be
+       cleaner — needs a one-time migration to move existing snapshot data. */
     if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
     if (a.type === "hsa_invested" && a.owner === "joint") return 0;
     if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
+    // Cash account with "actual spending" source — auto-derived from the
+    // transactions cache. Only kicks in when contribSource is explicitly
+    // set; manual cash accounts fall through to the manual contribAmount.
+    if (a.type === "cash" && a.contribSource && a.contribSource !== "manual") {
+      const v = cashActualByAccount[a.id];
+      return typeof v === "number" ? v : 0;
+    }
     return null; // not auto-derivable
   };
 
@@ -328,12 +496,11 @@ export default function AdvancedForecastTab({
   const accountColors = useMemo(() => {
     const colors = {};
     if (colorBy === "owner") {
-      const byOwner = {};
+      // One color per owner (intentional flat coloring — all P1 accounts paint
+      // the same blue so the stacked chart reads as "P1's share / P2's share /
+      // joint share").
       for (const a of accounts) {
-        const o = a.owner || "joint";
-        byOwner[o] = byOwner[o] || [];
-        colors[a.id] = colorForAccountByOwner(a, byOwner[o].length);
-        byOwner[o].push(a);
+        colors[a.id] = colorForAccountByOwner(a);
       }
     } else {
       const byPool = {};
@@ -425,8 +592,9 @@ export default function AdvancedForecastTab({
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
           <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
           {fireEnabled && fireTarget > 0 && (
-            <span style={{ fontSize: 11, color: "var(--tx3,#888)" }} title={`${fireMultiplierNum}× annual expenses (${fmt(fireAnnualExpenses)}/yr)`}>
-              Target: <strong>{fmt(fireTarget)}</strong>
+            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }} title={`${fireMultiplierNum}× annual expenses (${fmt(fireAnnualExpenses)}/yr)`}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target:</span>
+              <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(fireTarget)}</strong>
             </span>
           )}
         </div>
@@ -437,9 +605,16 @@ export default function AdvancedForecastTab({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Accounts</h3>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>HSA coverage:</span>
-            {["family", "self", "both-self"].map(c => (
-              <button key={c} onClick={() => setForecast({ ...forecast, hsaCoverage: c })} style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "none", borderRadius: 5, background: hsaCoverage === c ? "#9B59B6" : "var(--input-bg,#f5f5f5)", color: hsaCoverage === c ? "#fff" : "var(--tx2,#555)", cursor: "pointer", textTransform: "capitalize" }}>{c.replace("-", " ")}</button>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Sort:</span>
+            {[
+              { k: "manual",  label: "Manual",   title: "Drag rows by the ⠿ handle to reorder. Persists." },
+              { k: "name",    label: "A–Z",      title: "Alphabetical by account name. Drag is disabled." },
+              { k: "balance", label: "Balance",  title: "By starting balance, largest first. Drag is disabled." },
+            ].map(o => (
+              <button key={o.k} onClick={() => setSortMode(o.k)} title={o.title}
+                style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, border: "none", borderRadius: 5, background: sortMode === o.k ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: sortMode === o.k ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>
+                {o.label}
+              </button>
             ))}
             <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 4px" }} />
             <button
@@ -479,7 +654,7 @@ export default function AdvancedForecastTab({
           {accounts.length === 0 && (
             <div style={{ padding: 16, textAlign: "center", color: "var(--tx3,#888)", fontSize: 12 }}>No accounts. Add one below.</div>
           )}
-          {accounts.map(a => {
+          {displayedAccounts.map(a => {
             const insight = accountInsight(a);
             const eff = effectiveContribFor(a);
             const isOver = insight && eff > insight.limit;
@@ -491,10 +666,41 @@ export default function AdvancedForecastTab({
             const isMatchAcct = a.type === "401k_match";
             const matchLumpForOwner = a.owner === "p1" ? cLump : a.owner === "p2" ? kLump : false;
             const matchOwnerName = a.owner === "p1" ? p1Name : a.owner === "p2" ? p2Name : "";
+            const isHSA = a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa";
+            const isDragging = dragId === a.id;
+            const isDragOver = dragOverId === a.id && dragId !== a.id;
+            const dragEnabled = sortMode === "manual";
             return (
-              <div key={a.id} style={{ border: "1px solid var(--bdr,#e0e0e0)", borderLeft: `4px solid ${color}`, borderRadius: 8, overflow: "hidden", opacity: isMatchAcct && matchLumpForOwner ? 0.55 : 1 }}>
+              <div key={a.id}
+                onDragOver={dragEnabled ? onDragOver(a.id) : undefined}
+                onDragLeave={dragEnabled ? onDragLeave : undefined}
+                onDrop={dragEnabled ? onDrop(a.id) : undefined}
+                style={{
+                  border: "1px solid var(--bdr,#e0e0e0)",
+                  borderTop: isDragOver ? "2px solid #556FB5" : "1px solid var(--bdr,#e0e0e0)",
+                  borderLeft: `4px solid ${color}`,
+                  borderRadius: 8, overflow: "hidden",
+                  opacity: isMatchAcct && matchLumpForOwner ? 0.55 : (isDragging ? 0.4 : 1),
+                  transition: "opacity 0.15s",
+                }}>
                 {/* Header row — always visible */}
                 <div onClick={() => toggleExpand(a.id)} style={{ display: "flex", alignItems: "center", padding: "10px 12px", cursor: "pointer", gap: 10, background: "var(--input-bg,#fafafa)", flexWrap: "wrap" }}>
+                  {/* Drag handle. Only draggable in manual sort mode. The ⠿
+                      handle is the drag source — the rest of the header row
+                      stays clickable for expand/collapse. */}
+                  <span
+                    draggable={dragEnabled}
+                    onDragStart={dragEnabled ? onDragStart(a.id) : undefined}
+                    onDragEnd={dragEnabled ? onDragEnd : undefined}
+                    onClick={e => e.stopPropagation()}
+                    title={dragEnabled ? "Drag to reorder" : `Reordering disabled while sorted by ${sortMode === "name" ? "name" : "balance"} — switch Sort to Manual to drag.`}
+                    style={{
+                      cursor: dragEnabled ? "grab" : "not-allowed",
+                      color: dragEnabled ? "var(--tx3,#888)" : "var(--tx3,#ddd)",
+                      fontSize: 14, lineHeight: 1, userSelect: "none",
+                      padding: "0 2px",
+                    }}
+                  >⠿</span>
                   <span style={{ fontSize: 11, color: "var(--tx3,#888)", width: 12 }}>{isExp ? "▾" : "▸"}</span>
                   <input
                     value={a.nickname || ""}
@@ -546,15 +752,48 @@ export default function AdvancedForecastTab({
                         {auto && (
                           <button
                             onClick={() => updateAccount(a.id, { contribOverride: !a.contribOverride })}
-                            title={isAutoMode ? "Auto: derived from Income tab. Click to switch to manual." : "Manual: enter your own number. Click to use auto-derived value."}
+                            title={isAutoMode ? "Auto: derived from Income tab (or recent transaction history for cash accounts). Click to switch to manual." : "Manual: enter your own number. Click to use auto-derived value."}
                             style={{ padding: "1px 6px", fontSize: 9, fontWeight: 700, border: "none", borderRadius: 4, background: isAutoMode ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: isAutoMode ? "#fff" : "var(--tx3,#888)", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}
                           >
                             {isAutoMode ? "Auto" : "Manual"}
                           </button>
                         )}
                       </label>
+                      {/* Cash-account-only source picker. Switches the auto
+                          value between manual entry and "net savings over the
+                          last N months from your transaction history." When
+                          set to a non-manual mode, autoContribFor returns the
+                          computed value and the row's auto-derived display
+                          kicks in (just like 401k/HSA rows). */}
+                      {a.type === "cash" && (
+                        <div style={{ marginBottom: 4 }}>
+                          <select
+                            value={a.contribSource || "manual"}
+                            onChange={e => {
+                              const v = e.target.value;
+                              // Switching to actuals mode auto-flips contribOverride OFF so the
+                              // auto-derived value takes effect. Switching back to manual leaves
+                              // the override flag wherever it was — user can opt back to manual
+                              // by clicking Auto/Manual.
+                              const patch = { contribSource: v };
+                              if (v !== "manual") patch.contribOverride = false;
+                              updateAccount(a.id, patch);
+                            }}
+                            title="Pick the contribution source for this cash account. 'Last N months' uses your transaction history (income − expenses, transfer rows excluded) annualized to a yearly amount."
+                            style={{ width: "100%", padding: "4px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", marginBottom: 4 }}
+                          >
+                            <option value="manual">Source: Manual entry</option>
+                            <option value="actual3">Source: Last 3 months actual</option>
+                            <option value="actual6">Source: Last 6 months actual</option>
+                            <option value="actual12">Source: Last 12 months actual</option>
+                          </select>
+                        </div>
+                      )}
                       {isAutoMode ? (
-                        <div style={{ padding: "6px 8px", background: "var(--input-bg,#f0f0f0)", border: "1px dashed var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, color: "var(--tx2,#555)", fontFamily: "monospace" }}>
+                        <div style={{ padding: "6px 8px", background: "var(--input-bg,#f0f0f0)", border: "1px dashed var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, color: "var(--tx2,#555)", fontFamily: "monospace" }}
+                          title={a.type === "cash" && a.contribSource && a.contribSource !== "manual"
+                            ? `Net savings (income − expenses) over the last ${a.contribSource.replace("actual","")} months from your transactions, annualized. Transfers + marked-transfer rows excluded.`
+                            : "Auto-derived from your Income tab values."}>
                           {fmt(autoContribFor(a) || 0)}
                         </div>
                       ) : (
@@ -571,6 +810,29 @@ export default function AdvancedForecastTab({
                         Cap at IRS limit
                       </label>
                     </div>
+                    {/* HSA coverage selector — only on HSA accounts. Used to
+                        be a global toolbar chip but it's really an HSA-specific
+                        setting (other account types ignore it), so the input
+                        lives on the HSA row that needs it. Still persists in
+                        forecast.hsaCoverage (single household-level setting,
+                        unchanged for backward-compat with snapshots). */}
+                    {isHSA && (
+                      <div style={{ gridColumn: mob ? "1/-1" : "auto" }}>
+                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}
+                          title="HSA contribution limit depends on health-plan coverage. Family limit (~$8,300 in 2025) is roughly 2× self-only.">
+                          HSA Coverage
+                        </label>
+                        <select
+                          value={hsaCoverage}
+                          onChange={e => setForecast({ ...forecast, hsaCoverage: e.target.value })}
+                          style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                        >
+                          <option value="family">Family</option>
+                          <option value="self">Self-only</option>
+                          <option value="both-self">Both self-only (split household)</option>
+                        </select>
+                      </div>
+                    )}
                     {/* Per-person match-lump toggle, only shown on 401k_match accounts */}
                     {isMatchAcct && (a.owner === "p1" || a.owner === "p2") && setTax && (
                       <div style={{ gridColumn: "1/-1", padding: "8px 10px", background: matchLumpForOwner ? "#E8F4F8" : "var(--input-bg,#f8f8f8)", border: matchLumpForOwner ? "1px solid #B3D9E0" : "1px solid var(--bdr,#eee)", borderRadius: 6 }}>
@@ -624,6 +886,111 @@ export default function AdvancedForecastTab({
         </div>
       </Card>
 
+      {/* Per-pool summary cards — moved above the chart so the headline
+          numbers anchor the visualization that follows. Cards are draggable
+          (drag handle ⠿ in each card's top-right corner); order is persisted
+          per-device. New cards appear at the end. */}
+      {poolSummary.length > 0 && (() => {
+        // Build the card definitions first so the same id schema is shared
+        // between the order-resolver and the renderer.
+        const cardDefs = [];
+        for (const p of poolSummary) {
+          cardDefs.push({
+            id: `pool:${p.pool}`,
+            render: () => (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(p.real))}</div>
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed: {fmt(Math.round(p.contributions))}</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#bbb)", marginTop: 2 }}>{p.count} account{p.count === 1 ? "" : "s"}</div>
+              </>
+            ),
+          });
+        }
+        cardDefs.push({
+          id: "total",
+          render: () => (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Total at Year {horizon}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(poolSummary.reduce((s, p) => s + p.nominal, 0)))}</div>
+              <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
+            </>
+          ),
+        });
+        if (fireEnabled && fireTarget > 0) {
+          cardDefs.push({
+            id: "fire",
+            render: () => (
+              <>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Years to FIRE</div>
+                {yearsToFireAdv === null ? (
+                  <>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable</div>
+                    <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>within {horizon}y horizon</div>
+                  </>
+                ) : yearsToFireAdv === 0 ? (
+                  <>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Already FI ✓</div>
+                    <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} target hit</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFireAdv.toFixed(1)} yr</div>
+                    <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
+                  </>
+                )}
+              </>
+            ),
+          });
+        }
+        // Resolve order: take user's saved order, drop ids that no longer
+        // exist, append any new ids at the end.
+        const defIds = cardDefs.map(c => c.id);
+        const saved = Array.isArray(cardOrder) ? cardOrder.filter(id => defIds.includes(id)) : [];
+        const missing = defIds.filter(id => !saved.includes(id));
+        const finalIds = [...saved, ...missing];
+        const finalCards = finalIds.map(id => cardDefs.find(c => c.id === id)).filter(Boolean);
+        const cols = mob ? "1fr 1fr" : `repeat(${Math.min(finalCards.length, 6)}, 1fr)`;
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12 }}>
+            {finalCards.map(c => {
+              const isCardDragging = cardDragId === c.id;
+              const isCardDragOver = cardDragOverId === c.id && cardDragId !== c.id;
+              return (
+                <div key={c.id}
+                  onDragOver={onCardDragOver(c.id)}
+                  onDragLeave={onCardDragLeave}
+                  onDrop={onCardDrop(c.id, finalIds)}
+                  style={{
+                    position: "relative",
+                    outline: isCardDragOver ? "2px solid #556FB5" : "none",
+                    outlineOffset: 2,
+                    borderRadius: 10,
+                    opacity: isCardDragging ? 0.4 : 1,
+                    transition: "opacity 0.15s",
+                  }}>
+                  <Card>
+                    {c.render()}
+                    <span
+                      draggable
+                      onDragStart={onCardDragStart(c.id)}
+                      onDragEnd={onCardDragEnd}
+                      title="Drag to reorder cards"
+                      style={{
+                        position: "absolute", top: 6, right: 8,
+                        cursor: "grab", color: "var(--tx3,#bbb)",
+                        fontSize: 14, lineHeight: 1, userSelect: "none",
+                      }}
+                    >⠿</span>
+                  </Card>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* Stacked area chart — totals over time */}
       {accounts.length > 0 && (
         <Card>
@@ -660,47 +1027,6 @@ export default function AdvancedForecastTab({
             </ResponsiveContainer>
           </div>
         </Card>
-      )}
-
-      {/* Per-pool summary cards (+ Total + optional FIRE) */}
-      {poolSummary.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : `repeat(${Math.min(poolSummary.length + (fireEnabled ? 2 : 1), 6)}, 1fr)`, gap: 12 }}>
-          {poolSummary.map(p => (
-            <Card key={p.pool}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
-              <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(p.real))}</div>
-              <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed: {fmt(Math.round(p.contributions))}</div>
-              <div style={{ fontSize: 10, color: "var(--tx3,#bbb)", marginTop: 2 }}>{p.count} account{p.count === 1 ? "" : "s"}</div>
-            </Card>
-          ))}
-          <Card>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Total at Year {horizon}</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(poolSummary.reduce((s, p) => s + p.nominal, 0)))}</div>
-            <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
-          </Card>
-          {fireEnabled && fireTarget > 0 && (
-            <Card>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Years to FIRE</div>
-              {yearsToFireAdv === null ? (
-                <>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable</div>
-                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>within {horizon}y horizon</div>
-                </>
-              ) : yearsToFireAdv === 0 ? (
-                <>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Already FI ✓</div>
-                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} target hit</div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFireAdv.toFixed(1)} yr</div>
-                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
-                </>
-              )}
-            </Card>
-          )}
-        </div>
       )}
 
       {/* Year-by-year table with per-account contribution columns */}
