@@ -277,6 +277,18 @@ export default function useAppState() {
   const [transferConfidenceThreshold, setTransferConfidenceThreshold] = useState(0);
   const [treatRefundsAsNetting, setTreatRefundsAsNetting] = useState(true);
 
+  /* Duplicate-scan settings — used by Transactions toolbar's "🔍 Scan
+     duplicates" action. Defaults are conservative: ±3 days catches the
+     common posting-date drift case (card processing delays, shared cards),
+     $0.01 tolerance is penny-precision, "exact" description requires the
+     normalized desc to match (case + whitespace ignored, but reference
+     numbers in the description matter — flip to "first-words" to ignore
+     them). dupScanFirstWordCount only applies when mode is first-words. */
+  const [dupScanDayWindow, setDupScanDayWindow] = useState(3);
+  const [dupScanAmountTolerance, setDupScanAmountTolerance] = useState(0.01);
+  const [dupScanDescriptionMode, setDupScanDescriptionMode] = useState("exact");
+  const [dupScanFirstWordCount, setDupScanFirstWordCount] = useState(2);
+
   /* Forecast advanced-mode state. `accounts` is the user-defined account
      list (see defaultForecastAccounts in taxDB.js for shape and defaults).
      `hsaCoverage` is the household-level HSA coverage type used by the
@@ -298,8 +310,8 @@ export default function useAppState() {
 
   // Load
   const [loaded, setLoaded] = useState(false);
-  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,forecast:setForecast }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,forecast]);
+  useEffect(() => { (async () => { try { const res = await fetch("/api/state"); if (!res.ok) { console.error("State load failed:", res.status); return; } const r = await res.json(); if (r?.state) { const d = r.state; /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */ if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; } const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,forecast:setForecast }; Object.entries(d).forEach(([k,v])=>{if(m[k])m[k](v)}); } setLoaded(true); } catch(e){ console.error("State load threw:", e); } })(); }, []);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,forecast]);
   useEffect(() => { if (!loaded) return; const t = setTimeout(async () => { try { await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ state: st }) }); } catch(e){} }, 600); return () => clearTimeout(t); }, [st, loaded]);
 
   /* ── Transactions: load from /api/transactions on mount (deploy).
@@ -780,6 +792,10 @@ export default function useAppState() {
     transferToleranceDays, setTransferToleranceDays,
     transferConfidenceThreshold, setTransferConfidenceThreshold,
     treatRefundsAsNetting, setTreatRefundsAsNetting,
+    dupScanDayWindow, setDupScanDayWindow,
+    dupScanAmountTolerance, setDupScanAmountTolerance,
+    dupScanDescriptionMode, setDupScanDescriptionMode,
+    dupScanFirstWordCount, setDupScanFirstWordCount,
     forecast, setForecast,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,

@@ -211,6 +211,14 @@ export default function App() {
           setTransferConfidenceThreshold={S.setTransferConfidenceThreshold}
           treatRefundsAsNetting={S.treatRefundsAsNetting}
           setTreatRefundsAsNetting={S.setTreatRefundsAsNetting}
+          dupScanDayWindow={S.dupScanDayWindow}
+          setDupScanDayWindow={S.setDupScanDayWindow}
+          dupScanAmountTolerance={S.dupScanAmountTolerance}
+          setDupScanAmountTolerance={S.setDupScanAmountTolerance}
+          dupScanDescriptionMode={S.dupScanDescriptionMode}
+          setDupScanDescriptionMode={S.setDupScanDescriptionMode}
+          dupScanFirstWordCount={S.dupScanFirstWordCount}
+          setDupScanFirstWordCount={S.setDupScanFirstWordCount}
           deleteImportBatch={S.deleteImportBatch}
         />}
       </div>

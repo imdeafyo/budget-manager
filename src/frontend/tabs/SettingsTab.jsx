@@ -53,6 +53,14 @@ export default function SettingsTab(props) {
     setTransferConfidenceThreshold,
     treatRefundsAsNetting = true,
     setTreatRefundsAsNetting,
+    dupScanDayWindow = 3,
+    setDupScanDayWindow,
+    dupScanAmountTolerance = 0.01,
+    setDupScanAmountTolerance,
+    dupScanDescriptionMode = "exact",
+    setDupScanDescriptionMode,
+    dupScanFirstWordCount = 2,
+    setDupScanFirstWordCount,
     deleteImportBatch,
   } = props;
 
@@ -421,6 +429,98 @@ export default function SettingsTab(props) {
           This affects how the budget-vs-actual comparison (Phase 6) calculates per-category spending.
           It doesn't change the raw transaction rows — they're still stored with their original amounts and
           categories. Rows marked as transfers are always excluded from refund calculations.
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="dup-scan"
+        title="Duplicate scan"
+        summary={(() => {
+          const days = Number(dupScanDayWindow) || 0;
+          const tol = Number(dupScanAmountTolerance) || 0;
+          const desc = dupScanDescriptionMode === "off" ? "any description"
+            : dupScanDescriptionMode === "first-words" ? `first ${dupScanFirstWordCount} words`
+            : "exact description";
+          return `${days === 0 ? "same day" : `±${days} day${days === 1 ? "" : "s"}`} · ±$${tol.toFixed(2)} · ${desc}`;
+        })()}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          Controls how the "🔍 Scan duplicates" button on the Transactions tab finds candidates. The scan walks
+          your entire history (cross-account by design — a charge appearing on two cards is the most common
+          duplicate). Confirmed transfers are always excluded. ALL three criteria must match for two rows to
+          cluster — relax any of them to catch more.
+        </p>
+
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div>
+            <label style={lbl()}>Date window (± days)</label>
+            <input type="number" min="0" step="1" value={dupScanDayWindow}
+              onChange={e => setDupScanDayWindow(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              style={inp(120)} />
+            <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 4, lineHeight: 1.4 }}>
+              0 = exact same calendar day. 3 = catches posting-date drift (cards processing the same charge a
+              day or two apart, business-day delays, etc.). Higher = more aggressive.
+            </div>
+          </div>
+          <div>
+            <label style={lbl()}>Amount tolerance (± $)</label>
+            <input type="number" min="0" step="0.01" value={dupScanAmountTolerance}
+              onChange={e => setDupScanAmountTolerance(Math.max(0.01, Number(e.target.value) || 0.01))}
+              style={inp(120)} />
+            <div style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 4, lineHeight: 1.4 }}>
+              0.01 = penny-precision. Loosen if you have currency-conversion rows where a charge appears at
+              slightly different amounts on two accounts.
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <label style={lbl()}>Description match</label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--tx, #333)" }}>
+              <input type="radio" name="dupScanDesc" checked={dupScanDescriptionMode === "exact"}
+                onChange={() => setDupScanDescriptionMode("exact")} style={{ marginTop: 3 }} />
+              <span>
+                <strong>Exact</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)" }}>
+                  Normalized exact match (case + whitespace + leading/trailing punctuation ignored).
+                  Conservative — won't pair "AMAZON #1" with "AMAZON #2".
+                </span>
+              </span>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--tx, #333)" }}>
+              <input type="radio" name="dupScanDesc" checked={dupScanDescriptionMode === "first-words"}
+                onChange={() => setDupScanDescriptionMode("first-words")} style={{ marginTop: 3 }} />
+              <span>
+                <strong>First N words match</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)" }}>
+                  Take the first N tokens of each description (split on whitespace + punctuation). Catches
+                  reference-number drift like "AMAZON.COM*ABC123" ≈ "AMAZON.COM*XYZ789".
+                </span>
+                {dupScanDescriptionMode === "first-words" && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                    <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>N =</span>
+                    <input type="number" min="1" max="10" step="1" value={dupScanFirstWordCount}
+                      onChange={e => setDupScanFirstWordCount(Math.max(1, Math.min(10, Math.floor(Number(e.target.value) || 1))))}
+                      style={inp(64)} />
+                    <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>(typical: 1–3)</span>
+                  </span>
+                )}
+              </span>
+            </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--tx, #333)" }}>
+              <input type="radio" name="dupScanDesc" checked={dupScanDescriptionMode === "off"}
+                onChange={() => setDupScanDescriptionMode("off")} style={{ marginTop: 3 }} />
+              <span>
+                <strong>Don't match descriptions</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)" }}>
+                  Date + amount only. Most aggressive — likely to surface false positives like coincidental
+                  same-day same-amount charges to different merchants. Use only if you trust the date+amount
+                  signal alone (e.g., very precise import sources).
+                </span>
+              </span>
+            </label>
+          </div>
         </div>
       </CollapsibleCard>
 
