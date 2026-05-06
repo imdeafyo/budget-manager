@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
@@ -144,6 +144,42 @@ export default function AdvancedForecastTab({
     [accountsRaw, p1Name, p2Name]
   );
 
+  /* Sort/drag state must be declared BEFORE displayedAccounts and the drag
+     handlers below — those reference sortMode/dragId, and Temporal Dead Zone
+     rules mean accessing them above their declaration line throws on the
+     first render's dependency-array evaluation. (This caused the Advanced
+     tab to render as a blank page.) */
+  const [sortMode, setSortMode] = useState(() => {
+    try { return localStorage.getItem("forecast-sort-mode") || "manual"; } catch { return "manual"; }
+  });
+  useEffect(() => { try { localStorage.setItem("forecast-sort-mode", sortMode); } catch {} }, [sortMode]);
+
+  /* Drag-and-drop state. dragId = id of the row currently being dragged.
+     Only meaningful when sortMode === "manual". */
+  const [dragId, setDragId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
+
+  /* "+ Add account" menu. Replaces the previous wall of one-button-per-type
+     chips with a single button that opens a popover. addMenuRef is on the
+     wrapper so an outside click closes the menu. */
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const addMenuRef = useRef(null);
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const onDocClick = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setAddMenuOpen(false);
+      }
+    };
+    const onKey = (e) => { if (e.key === "Escape") setAddMenuOpen(false); };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [addMenuOpen]);
+
   /* Sorted view for rendering. `manual` keeps the persisted index order;
      otherwise produce a fresh sorted copy each render. The underlying
      `accounts` array is never reordered by sorting — only by user drag. */
@@ -201,20 +237,6 @@ export default function AdvancedForecastTab({
     try { return localStorage.getItem("forecast-color-by") || "type"; } catch { return "type"; }
   });
   useEffect(() => { try { localStorage.setItem("forecast-color-by", colorBy); } catch {} }, [colorBy]);
-
-  /* Sort mode for the account list. "manual" preserves the user's drag-and-drop
-     order (which is also the index order in `forecast.accounts`). "name" and
-     "balance" sort the rendered view WITHOUT mutating the saved array — that
-     way flipping back to manual restores the user's hand-arranged order. */
-  const [sortMode, setSortMode] = useState(() => {
-    try { return localStorage.getItem("forecast-sort-mode") || "manual"; } catch { return "manual"; }
-  });
-  useEffect(() => { try { localStorage.setItem("forecast-sort-mode", sortMode); } catch {} }, [sortMode]);
-
-  /* Drag-and-drop state. dragId = id of the row currently being dragged.
-     Only meaningful when sortMode === "manual". */
-  const [dragId, setDragId] = useState(null);
-  const [dragOverId, setDragOverId] = useState(null);
 
   /* Summary-card order — separate DnD state from the account list. Stored as
      a list of card ids: "pool:<poolName>", "total", "fire". When new cards
@@ -879,10 +901,49 @@ export default function AdvancedForecastTab({
           })}
         </div>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {Object.entries(ACCOUNT_TYPE_LABELS).filter(([k]) => k !== "hsa").map(([type, label]) => (
-            <button key={type} onClick={() => addAccount(type)} style={{ padding: "5px 10px", fontSize: 11, border: "1px dashed var(--bdr,#ccc)", borderRadius: 6, background: "transparent", cursor: "pointer", color: "var(--tx2,#555)" }}>+ {label}</button>
-          ))}
+        {/* Single "+ Add account" button → popover with all type options.
+            Replaces the old flat chip row (one button per type) which got
+            unwieldy as the type list grew. The menu groups types by IRS pool
+            so 401(k), IRA, HSA, and "Other" are visually clustered. */}
+        <div style={{ marginTop: 12, position: "relative" }} ref={addMenuRef}>
+          <button
+            onClick={() => setAddMenuOpen(o => !o)}
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "1px dashed var(--bdr,#ccc)", borderRadius: 6, background: addMenuOpen ? "var(--input-bg,#f5f5f5)" : "transparent", cursor: "pointer", color: "var(--tx2,#555)" }}
+            title="Pick an account type to add to the projection."
+          >
+            + Add account {addMenuOpen ? "▴" : "▾"}
+          </button>
+          {addMenuOpen && (() => {
+            // Group types by display group so the menu has visible structure.
+            // "hsa" (legacy) is hidden — only the explicit cash/invested split
+            // is exposed for new accounts.
+            const groups = [
+              { label: "401(k)",   types: ["401k_pretax", "401k_roth", "401k_match"] },
+              { label: "IRA",      types: ["ira_traditional", "ira_roth"] },
+              { label: "HSA",      types: ["hsa_cash", "hsa_invested"] },
+              { label: "Other",    types: ["taxable", "cash", "custom"] },
+            ];
+            return (
+              <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, minWidth: 240, padding: 8, background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,0.12)" }}>
+                {groups.map((g, gi) => (
+                  <div key={g.label} style={{ marginBottom: gi < groups.length - 1 ? 6 : 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#999)", textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 8px 2px" }}>{g.label}</div>
+                    {g.types.map(t => (
+                      <button
+                        key={t}
+                        onClick={() => { addAccount(t); setAddMenuOpen(false); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", fontSize: 12, border: "none", borderRadius: 4, background: "transparent", color: "var(--tx,#222)", cursor: "pointer" }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "var(--input-bg,#f5f5f5)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                      >
+                        {ACCOUNT_TYPE_LABELS[t] || t}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </Card>
 
