@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area, Line, ComposedChart } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
@@ -116,8 +116,11 @@ export default function AdvancedForecastTab({
   const [horizon, setHorizonRaw] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
   const setHorizon = (v) => { setHorizonRaw(v); try { localStorage.setItem("forecast-horizon", String(v)); } catch {} };
 
-  const [inflationPctRaw] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
-  const inflationPct = inflationPctRaw;
+  // Inflation rate. Editable on this tab so the FIRE-target line on the chart
+  // can be adjusted without bouncing to Simple. Same localStorage key Simple
+  // reads from, so changes round-trip between subtabs.
+  const [inflationPct, setInflationPctRaw] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
+  const setInflationPct = (v) => { setInflationPctRaw(v); try { localStorage.setItem("forecast-inflation", String(v)); } catch {} };
 
   const [fireEnabled, setFireEnabledRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; } });
   const setFireEnabled = (v) => { setFireEnabledRaw(v); try { localStorage.setItem("forecast-fire-enabled", v ? "1" : "0"); } catch {} };
@@ -163,25 +166,15 @@ export default function AdvancedForecastTab({
   const [dragId, setDragId] = useState(null);
   const [dragOverId, setDragOverId] = useState(null);
 
-  /* "+ Add account" menu. Replaces the previous wall of one-button-per-type
-     chips with a single button that opens a popover. addMenuRef is on the
-     wrapper so an outside click closes the menu. */
+  /* "+ Add account" modal. Renders as a fixed overlay so it isn't clipped
+     by the Card's overflow. Escape closes it; backdrop click closes it
+     (handled inside the modal itself). */
   const [addMenuOpen, setAddMenuOpen] = useState(false);
-  const addMenuRef = useRef(null);
   useEffect(() => {
     if (!addMenuOpen) return;
-    const onDocClick = (e) => {
-      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
-        setAddMenuOpen(false);
-      }
-    };
     const onKey = (e) => { if (e.key === "Escape") setAddMenuOpen(false); };
-    document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
+    return () => document.removeEventListener("keydown", onKey);
   }, [addMenuOpen]);
 
   /* Sorted view for rendering. `manual` keeps the persisted index order;
@@ -241,6 +234,14 @@ export default function AdvancedForecastTab({
     try { return localStorage.getItem("forecast-color-by") || "type"; } catch { return "type"; }
   });
   useEffect(() => { try { localStorage.setItem("forecast-color-by", colorBy); } catch {} }, [colorBy]);
+
+  /* Legend visibility on the projection chart. Per-device, persisted —
+     once you hide it, it stays hidden across sessions. Default ON for
+     discoverability (people don't know the colors at first). */
+  const [showChartLegend, setShowChartLegend] = useState(() => {
+    try { return localStorage.getItem("forecast-adv-legend") !== "0"; } catch { return true; }
+  });
+  useEffect(() => { try { localStorage.setItem("forecast-adv-legend", showChartLegend ? "1" : "0"); } catch {} }, [showChartLegend]);
 
   /* Summary-card order — separate DnD state from the account list. Stored as
      a list of card ids: "pool:<poolName>", "total", "fire". When new cards
@@ -315,7 +316,18 @@ export default function AdvancedForecastTab({
       annualIncrease: 0,
       capAtLimit: !["taxable","cash","custom","401k_match"].includes(type),
     };
-    setForecast({ ...forecast, accounts: [...accounts, newAcc] });
+    // Adding an HSA account with no existing HSA in the forecast:
+    // default coverage to self-only because the new account also defaults
+    // to a single-person owner (p1). Family coverage only makes sense when
+    // the HDHP itself is joint; we'd rather under-estimate the limit and
+    // let the user opt up via the per-row Coverage dropdown.
+    const isAddingHSA = type === "hsa_cash" || type === "hsa_invested" || type === "hsa";
+    const hasExistingHSA = accounts.some(a => a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa");
+    const patch = { accounts: [...accounts, newAcc] };
+    if (isAddingHSA && !hasExistingHSA && !forecast?.hsaCoverage) {
+      patch.hsaCoverage = "self-only";
+    }
+    setForecast({ ...forecast, ...patch });
     setExpanded(p => ({ ...p, [id]: true }));
   };
   const removeAccount = (id) => {
@@ -461,7 +473,16 @@ export default function AdvancedForecastTab({
        reached, then sweep to invested).
        TODO: HSA contributions live in preDed (string-matched on "hsa") for
        historical reasons. A first-class field on the Income tab would be
-       cleaner — needs a one-time migration to move existing snapshot data. */
+       cleaner — needs a one-time migration to move existing snapshot data.
+       Carrying this forward to a later phase per user request.
+
+       TODO: pre-tax accounts (401k pretax, IRA traditional) don't account
+       for withdrawal tax in the FIRE calculation. A pre-tax dollar in
+       these accounts is worth less than 1× post-tax in retirement. The
+       FIRE target should arguably be:
+         (post-tax goal) + (pre-tax balance × effective_retirement_tax)
+       Punting this — needs a tax-rate input + clearer UX around what's
+       pre-tax vs post-tax. Worth a separate session. */
     if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
     if (a.type === "hsa_invested" && a.owner === "joint") return 0;
     if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
@@ -647,18 +668,33 @@ export default function AdvancedForecastTab({
             <button key={h} onClick={() => setHorizon(h)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: horizon === h ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: horizon === h ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{h}y</button>
           ))}
           <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
+          {/* Inflation rate — round-trips with Simple via the same
+              localStorage key. Drives the FI threshold line on the chart and
+              the deflation of the projection's "today's $" totals. */}
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }} title="Annual inflation %. Used to compute the FI target line (which rises year by year) and to deflate future balances back to today's purchasing power.">Inflation:</span>
+          <input
+            type="text"
+            value={inflationPct}
+            onChange={e => setInflationPct(e.target.value)}
+            onBlur={e => {
+              const v = evalF(e.target.value);
+              if (!isFinite(v) || v < 0) setInflationPct("3");
+              else setInflationPct(String(v));
+            }}
+            style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }} />
+          <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
+          <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
           <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
           {fireEnabled && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-              title={"Multiplier × annual expenses = FI target (in today's $).\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
+              title={"Multiplier × annual expenses = FI target.\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>×</span>
               <input
                 type="text"
                 value={fireMultiplier}
                 onChange={e => setFireMultiplier(e.target.value)}
                 onBlur={e => {
-                  // Snap to a sane number on blur. Empty string → reset to 25.
                   const v = evalF(e.target.value);
                   if (!isFinite(v) || v <= 0) setFireMultiplier("25");
                   else setFireMultiplier(String(v));
@@ -666,12 +702,28 @@ export default function AdvancedForecastTab({
                 style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
             </span>
           )}
-          {fireEnabled && fireTarget > 0 && (
-            <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }} title={`${fireMultiplierNum}× annual expenses (${fmt(fireAnnualExpenses)}/yr)`}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target:</span>
-              <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(fireTarget)}</strong>
-            </span>
-          )}
+          {fireEnabled && fireTarget > 0 && (() => {
+            // FIRE target shown in FUTURE dollars at a meaningful year. If
+            // FI is reachable, show the target at the crossover year (the
+            // dollar amount the account literally needs at that year). If
+            // unreachable, show the target at horizon-end so the user can
+            // compare to the chart's right edge. Today's-$ is intentionally
+            // not shown here — it confused users who'd see "$3M target" and
+            // expect that to match a $6M-looking chart at year 30.
+            const inflRate = (Number(inflationPct) || 0) / 100;
+            const refYear = (yearsToFireAdv != null && yearsToFireAdv > 0) ? yearsToFireAdv : horizon;
+            const futureTarget = fireTarget * Math.pow(1 + inflRate, refYear);
+            const yearLabel = (yearsToFireAdv != null && yearsToFireAdv > 0)
+              ? `at FI (year ${refYear.toFixed(1)})`
+              : `at year ${horizon}`;
+            return (
+              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}
+                title={`${fireMultiplierNum}× ${fmt(fireAnnualExpenses)}/yr today, inflated to year ${refYear.toFixed(1)}.\nTarget grows with inflation each year — that's the orange dashed line on the chart.`}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target {yearLabel}:</span>
+                <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(futureTarget)}</strong>
+              </span>
+            );
+          })()}
         </div>
       </Card>
 
@@ -807,7 +859,29 @@ export default function AdvancedForecastTab({
                     </div>
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Owner</label>
-                      <select value={a.owner} onChange={e => updateAccount(a.id, { owner: e.target.value })} style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}>
+                      <select value={a.owner} onChange={e => {
+                        const newOwner = e.target.value;
+                        const patch = { owner: newOwner };
+                        // HSA coverage tracks the underlying HDHP coverage,
+                        // not the account ownership directly — but in
+                        // practice changing an HSA from joint to a single
+                        // person almost always implies a self-only HDHP.
+                        // Flip hsaCoverage automatically so the IRS limit
+                        // recalculates to the lower self-only ceiling.
+                        // The user can override via the per-account
+                        // Coverage dropdown below if their setup is
+                        // unusual. Going joint → person is the common
+                        // case we're catching here.
+                        if (isHSA && a.owner === "joint" && newOwner !== "joint" && (forecast?.hsaCoverage || "family") === "family") {
+                          // Apply hsaCoverage change at the forecast level.
+                          // setForecast in the next tick avoids racing with
+                          // updateAccount for the same react state batch.
+                          setTimeout(() => {
+                            setForecast(prev => ({ ...prev, hsaCoverage: "self-only" }));
+                          }, 0);
+                        }
+                        updateAccount(a.id, patch);
+                      }} style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}>
                         <option value="p1">{p1Name}</option>
                         <option value="p2">{p2Name}</option>
                         <option value="joint">Joint</option>
@@ -990,40 +1064,46 @@ export default function AdvancedForecastTab({
           })}
         </div>
 
-        {/* Single "+ Add account" button → popover with all type options.
-            Replaces the old flat chip row (one button per type) which got
-            unwieldy as the type list grew. The menu groups types by IRS pool
-            so 401(k), IRA, HSA, and "Other" are visually clustered. */}
-        <div style={{ marginTop: 12, position: "relative" }} ref={addMenuRef}>
+        {/* Single "+ Add account" button → modal picker. Was a popover that
+            got clipped by the Card's `overflow: hidden`. The modal version
+            renders into a fixed overlay so it's always fully visible, and
+            also has more room to show grouped options + descriptions. */}
+        <div style={{ marginTop: 12 }}>
           <button
-            onClick={() => setAddMenuOpen(o => !o)}
-            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "1px dashed var(--bdr,#ccc)", borderRadius: 6, background: addMenuOpen ? "var(--input-bg,#f5f5f5)" : "transparent", cursor: "pointer", color: "var(--tx2,#555)" }}
+            onClick={() => setAddMenuOpen(true)}
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, border: "1px dashed var(--bdr,#ccc)", borderRadius: 6, background: "transparent", cursor: "pointer", color: "var(--tx2,#555)" }}
             title="Pick an account type to add to the projection."
           >
-            + Add account {addMenuOpen ? "▴" : "▾"}
+            + Add account
           </button>
-          {addMenuOpen && (() => {
-            // Group types by display group so the menu has visible structure.
-            // "hsa" (legacy) is hidden — only the explicit cash/invested split
-            // is exposed for new accounts.
-            const groups = [
-              { label: "401(k)",   types: ["401k_pretax", "401k_roth", "401k_match"] },
-              { label: "IRA",      types: ["ira_traditional", "ira_roth"] },
-              { label: "HSA",      types: ["hsa_cash", "hsa_invested"] },
-              { label: "Other",    types: ["taxable", "cash", "custom"] },
-            ];
-            return (
-              <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50, minWidth: 240, padding: 8, background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 8, boxShadow: "0 6px 18px rgba(0,0,0,0.12)" }}>
+        </div>
+        {addMenuOpen && (() => {
+          // Same groups as before. "hsa" (legacy) is hidden — only the
+          // explicit cash/invested split is exposed for new accounts.
+          const groups = [
+            { label: "401(k)",   types: ["401k_pretax", "401k_roth", "401k_match"] },
+            { label: "IRA",      types: ["ira_traditional", "ira_roth"] },
+            { label: "HSA",      types: ["hsa_cash", "hsa_invested"] },
+            { label: "Other",    types: ["taxable", "cash", "custom"] },
+          ];
+          return (
+            <div onClick={(e) => { if (e.target === e.currentTarget) setAddMenuOpen(false); }}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 20, maxWidth: 480, width: "100%", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                  <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Add account</h3>
+                  <button onClick={() => setAddMenuOpen(false)} style={{ border: "none", background: "transparent", fontSize: 22, color: "var(--tx3,#888)", cursor: "pointer", padding: "0 4px", lineHeight: 1 }} title="Close">×</button>
+                </div>
                 {groups.map((g, gi) => (
-                  <div key={g.label} style={{ marginBottom: gi < groups.length - 1 ? 6 : 0 }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#999)", textTransform: "uppercase", letterSpacing: 0.5, padding: "4px 8px 2px" }}>{g.label}</div>
+                  <div key={g.label} style={{ marginBottom: gi < groups.length - 1 ? 12 : 0 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#999)", textTransform: "uppercase", letterSpacing: 0.5, padding: "0 0 4px" }}>{g.label}</div>
                     {g.types.map(t => (
                       <button
                         key={t}
                         onClick={() => { addAccount(t); setAddMenuOpen(false); }}
-                        style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 8px", fontSize: 12, border: "none", borderRadius: 4, background: "transparent", color: "var(--tx,#222)", cursor: "pointer" }}
-                        onMouseEnter={e => { e.currentTarget.style.background = "var(--input-bg,#f5f5f5)"; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+                        style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 10px", fontSize: 13, border: "1px solid transparent", borderRadius: 6, background: "transparent", color: "var(--tx,#222)", cursor: "pointer", marginBottom: 2 }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "var(--input-bg,#f5f5f5)"; e.currentTarget.style.borderColor = "var(--bdr,#ddd)"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
                       >
                         {ACCOUNT_TYPE_LABELS[t] || t}
                       </button>
@@ -1031,9 +1111,9 @@ export default function AdvancedForecastTab({
                   </div>
                 ))}
               </div>
-            );
-          })()}
-        </div>
+            </div>
+          );
+        })()}
       </Card>
 
       {/* Per-pool summary cards — moved above the chart so the headline
@@ -1051,7 +1131,7 @@ export default function AdvancedForecastTab({
               <>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
-                <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(p.real))}</div>
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Today's $: {fmt(Math.round(p.real))}</div>
                 <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed: {fmt(Math.round(p.contributions))}</div>
                 <div style={{ fontSize: 10, color: "var(--tx3,#bbb)", marginTop: 2 }}>{p.count} account{p.count === 1 ? "" : "s"}</div>
               </>
@@ -1064,7 +1144,7 @@ export default function AdvancedForecastTab({
             <>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Total at Year {horizon}</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(poolSummary.reduce((s, p) => s + p.nominal, 0)))}</div>
-              <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Real: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
+              <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Today's $: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
             </>
           ),
         });
@@ -1119,8 +1199,17 @@ export default function AdvancedForecastTab({
                     borderRadius: 10,
                     opacity: isCardDragging ? 0.4 : 1,
                     transition: "opacity 0.15s",
+                    /* Make every summary card the same visual height so the
+                       row doesn't stagger when content varies (some cards
+                       have 'X accounts', others don't; FI status has 2-3
+                       lines depending on reachable vs not). 110px holds the
+                       worst case (4 lines) without clipping; shorter cards
+                       just have empty space at the bottom which reads
+                       cleaner than the previous shifting. */
+                    minHeight: 130,
+                    display: "flex",
                   }}>
-                  <Card>
+                  <Card style={{ flex: 1 }}>
                     {c.render()}
                     <span
                       draggable
@@ -1149,6 +1238,11 @@ export default function AdvancedForecastTab({
             <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginLeft: "auto" }}>Color by:</span>
             <button onClick={() => setColorBy("type")} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: colorBy === "type" ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: colorBy === "type" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>Type</button>
             <button onClick={() => setColorBy("owner")} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: colorBy === "owner" ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: colorBy === "owner" ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>Owner</button>
+            <button onClick={() => setShowChartLegend(v => !v)}
+              title={showChartLegend ? "Hide the legend below the chart" : "Show the legend below the chart"}
+              style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: showChartLegend ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: showChartLegend ? "#fff" : "var(--tx2,#555)", cursor: "pointer", marginLeft: 4 }}>
+              Legend
+            </button>
           </div>
           <div style={{ width: "100%", height: 360 }}>
             <ResponsiveContainer>
@@ -1158,16 +1252,29 @@ export default function AdvancedForecastTab({
                 <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
+                  /* itemSorter reverses the natural Recharts order so the
+                     tooltip lists items top-down to match the visual stack:
+                     the top-most band in the chart appears first in the
+                     tooltip. Recharts stacks items in the order they're
+                     declared (first <Area> at the bottom of the stack), so
+                     reversing dataKey index = top-down read. The FI target
+                     line gets a stable position at the bottom of the
+                     tooltip (after all stacked accounts). */
+                  itemSorter={(item) => {
+                    if (item.dataKey === "fireThresh") return Number.POSITIVE_INFINITY;
+                    const idx = accounts.findIndex(a => a.id === item.dataKey);
+                    return idx >= 0 ? -idx : 1e9;
+                  }}
                   formatter={(v, k) => {
                     if (k === "fireThresh") return [fmt(v), "FI target (year-y $)"];
-                    if (k === "total") return [fmt(v), "Total (nominal)"];
+                    if (k === "total") return [fmt(v), "Total (future $)"];
                     if (k === "totalReal") return [fmt(v), "Total (today's $)"];
                     const a = accounts.find(x => x.id === k);
                     return [fmt(v), a ? deriveAccountName(a, p1Name, p2Name) : k];
                   }}
                   labelFormatter={(y) => `Year ${y} (${baseYear + Number(y)})`}
                 />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {showChartLegend && <Legend wrapperStyle={{ fontSize: 11 }} />}
                 {accounts.map(a => (
                   <Area key={a.id} type="monotone" dataKey={a.id} name={deriveAccountName(a, p1Name, p2Name)} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
                 ))}

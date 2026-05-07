@@ -18,6 +18,10 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const [initialBalance, setInitialBalance] = useState(() => { try { return localStorage.getItem("forecast-initial") || "0"; } catch { return "0"; } });
   const [horizon, setHorizon] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
   const [valueMode, setValueMode] = useState(() => { try { return localStorage.getItem("forecast-value-mode") || "both"; } catch { return "both"; } }); // both | nominal | real
+  // Legend visibility on the compound-growth chart. Per-device, persisted.
+  // Default ON for first-time discoverability.
+  const [showChartLegend, setShowChartLegend] = useState(() => { try { return localStorage.getItem("forecast-simple-legend") !== "0"; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem("forecast-simple-legend", showChartLegend ? "1" : "0"); } catch {} }, [showChartLegend]);
   const [targetMonths, setTargetMonths] = useState(() => { try { return localStorage.getItem("forecast-target-months") || "12"; } catch { return "12"; } });
   // Phase 7: contribution source — "budget" | "actual3" | "actual6" | "actual12"
   const [contribSource, setContribSource] = useState(() => { try { return localStorage.getItem("forecast-contrib-source") || "budget"; } catch { return "budget"; } });
@@ -352,12 +356,12 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
           negative). FIRE card appears at the end when enabled. */}
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : (fireEnabled ? "repeat(5, 1fr)" : "1fr 1fr 1fr 1fr"), gap: 12 }}>
         <Card>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (Nominal)</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (future $)</div>
           <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: finalRow.nominal < finalRow.contributions ? "#E8573A" : "#4ECDC4", marginTop: 4 }}>{fmt(finalRow.nominal)}</div>
           {finalRow.nominal < finalRow.contributions && <div style={{ fontSize: 10, color: "#E8573A", marginTop: 2 }}>below contributions</div>}
         </Card>
         <Card>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (Real)</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>At Year {horizon} (today's $)</div>
           <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: finalRow.real < finalRow.realContributions ? "#E8573A" : "#556FB5", marginTop: 4 }}>{fmt(finalRow.real)}</div>
           <div style={{ fontSize: 10, color: finalRow.real < finalRow.realContributions ? "#E8573A" : "var(--tx3,#888)", marginTop: 2 }}>{finalRow.real < finalRow.realContributions ? `below real contributions (${fmt(finalRow.realContributions)})` : "in today's dollars"}</div>
         </Card>
@@ -397,8 +401,13 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Compound Growth <span style={{ fontSize: 12, fontWeight: 500, color: "var(--tx3,#999)" }}>({horizon}y)</span></h3>
           {modeBtn(valueMode, "both", "Both")}
-          {modeBtn(valueMode, "nominal", "Nominal only")}
-          {modeBtn(valueMode, "real", "Real only")}
+          {modeBtn(valueMode, "nominal", "Future $ only")}
+          {modeBtn(valueMode, "real", "Today's $ only")}
+          <button onClick={() => setShowChartLegend(v => !v)}
+            title={showChartLegend ? "Hide the legend below the chart" : "Show the legend below the chart"}
+            style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: showChartLegend ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: showChartLegend ? "#fff" : "var(--tx2,#555)", cursor: "pointer", marginLeft: 4 }}>
+            Legend
+          </button>
         </div>
         <div style={{ width: "100%", minHeight: 320 }}>
           <ResponsiveContainer width="100%" height={320}>
@@ -407,9 +416,9 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               <XAxis dataKey="year" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `Yr ${v}`} />
               <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
               <Tooltip formatter={v => fmt(v)} contentStyle={cs} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {(valueMode === "both" || valueMode === "nominal") && <Line type="monotone" dataKey="nominal" stroke="#4ECDC4" strokeWidth={2.5} dot={false} name="Nominal" />}
-              {(valueMode === "both" || valueMode === "real") && <Line type="monotone" dataKey="real" stroke="#556FB5" strokeWidth={2.5} dot={false} name={`Real (${i}% infl)`} />}
+              {showChartLegend && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {(valueMode === "both" || valueMode === "nominal") && <Line type="monotone" dataKey="nominal" stroke="#4ECDC4" strokeWidth={2.5} dot={false} name="Future $" />}
+              {(valueMode === "both" || valueMode === "real") && <Line type="monotone" dataKey="real" stroke="#556FB5" strokeWidth={2.5} dot={false} name={`Today's $ (${i}% infl)`} />}
               <Line type="monotone" dataKey="contributions" stroke="#95A5A6" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Contributions" />
               {fireEnabled && fireTarget > 0 && <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmt(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />}
             </LineChart>
@@ -455,7 +464,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
                 ) : yearsToFire === null ? (
                   <div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable in {horizon} yr</div>
-                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Real balance doesn't reach {fmt(fireTarget)} within your horizon at current settings. Increase contributions, reduce expenses, raise expected return — or extend the horizon to see if it crosses later.</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Today's $ balance doesn't reach {fmt(fireTarget)} within your horizon at current settings. Increase contributions, reduce expenses, raise expected return — or extend the horizon to see if it crosses later.</div>
                   </div>
                 ) : (
                   <div>
@@ -468,7 +477,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
               </div>
             </div>
             <div style={{ marginTop: 12, padding: 12, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, fontSize: 11, color: "var(--tx3,#888)", lineHeight: 1.6 }}>
-              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI is when the <em>real</em> balance line crosses the target — derived from the same projection as the chart, so income growth ({g}%) and all other settings flow through automatically. When real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
+              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI is when the <em>today's $</em> balance line crosses the target — derived from the same projection as the chart, so income growth ({g}%) and all other settings flow through automatically. When real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
             </div>
           </>
         )}
@@ -515,10 +524,10 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
             <thead>
               <tr style={{ borderBottom: "2px solid var(--bdr,#e0e0e0)" }}>
                 <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Year</th>
-                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Nominal</th>
-                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Real</th>
+                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Future $</th>
+                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Today's $</th>
                 <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Contributed</th>
-                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }} title="Cumulative contributions deflated to today's dollars. Compare against the Real column for true purchasing-power growth.">Real Contrib</th>
+                <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }} title="Cumulative contributions deflated to today's dollars. Compare against the Real column for true purchasing-power growth.">Today's $ Contrib</th>
                 <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, color: "var(--tx3,#888)" }}>Growth</th>
               </tr>
             </thead>

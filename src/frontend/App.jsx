@@ -83,7 +83,7 @@ export default function App() {
                   <button key={k} onClick={() => S.setBudgetSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
                 );
               })}
-              {S.tab === "charts" && [["trends", "Trends"], ["forecast", "Forecast"], ["advanced", "Advanced"]].map(([k, l]) => {
+              {S.tab === "charts" && [["trends", "Trends"], ["forecast", "Simple"], ["advanced", "Advanced"]].map(([k, l]) => {
                 const active = S.chartsSubtab === k;
                 return (
                   <button key={k} onClick={() => S.setChartsSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
