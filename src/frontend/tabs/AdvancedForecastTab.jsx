@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area, Line, ComposedChart } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
@@ -106,7 +106,7 @@ export default function AdvancedForecastTab({
   // IRA dollar amounts from Income tab — used to auto-derive IRA account
   // contributions so users don't enter the same number twice.
   cIraTrad = "0", cIraRoth = "0", kIraTrad = "0", kIraRoth = "0",
-  preDed = [], hsaEmployerMatchAnnual = 0, tExpW = 0,
+  preDed = [], hsaEmployerMatchAnnual = 0, tExpW = 0, tSavW = 0, remW = 0,
   // Transactions + category sets enable the "from actual spending (last N
   // months)" contribution source on cash/savings accounts.
   transactions = [], cats = [], savCats = [], transferCats = [],
@@ -482,14 +482,32 @@ export default function AdvancedForecastTab({
        FIRE target should arguably be:
          (post-tax goal) + (pre-tax balance × effective_retirement_tax)
        Punting this — needs a tax-rate input + clearer UX around what's
-       pre-tax vs post-tax. Worth a separate session. */
+       pre-tax vs post-tax. Worth a separate session.
+
+       TODO: bonus contributions (cEaip / kEaip) aren't accounted for in
+       Advanced's projection. Simple's "Include bonus" toggle adds C.eaipNet
+       to its annual contribution number, but Advanced has no analogous
+       per-account allocation UI — bonus would need to be split across
+       chosen accounts (typical: deferral % into 401k, rest to taxable).
+       Punting until we design the allocation UI; current behavior is to
+       silently exclude bonus from the projection. */
     if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
     if (a.type === "hsa_invested" && a.owner === "joint") return 0;
     if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
-    // Cash account with "actual spending" source — auto-derived from the
-    // transactions cache. Only kicks in when contribSource is explicitly
-    // set; manual cash accounts fall through to the manual contribAmount.
+    // Cash account contribution source — three modes besides manual:
+    //  • "budget"   = (savings + remaining) × 48, matching Simple's budget
+    //                 derivation. Single household-level number split across
+    //                 cash accounts is NOT done here — each cash account
+    //                 with budget source gets the SAME number, which is
+    //                 wrong if the user has multiple cash accounts. Document
+    //                 in the dropdown title.
+    //  • "actualN"  = net savings over the last N months from transactions
     if (a.type === "cash" && a.contribSource && a.contribSource !== "manual") {
+      if (a.contribSource === "budget") {
+        // (savings_weekly + remaining_weekly) × 48 paychecks/year — same
+        // formula Simple uses for its budget-derived contribution.
+        return Math.max(0, ((Number(tSavW) || 0) + (Number(remW) || 0)) * 48);
+      }
       const v = cashActualByAccount[a.id];
       return typeof v === "number" ? v : 0;
     }
@@ -660,14 +678,18 @@ export default function AdvancedForecastTab({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {/* Shared horizon at top of advanced — same state as simple. */}
-      <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Horizon:</span>
-          {horizonOpts.map(h => (
-            <button key={h} onClick={() => setHorizon(h)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: horizon === h ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: horizon === h ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{h}y</button>
-          ))}
-          <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
+      {/* Shared horizon at top of advanced — same state as simple.
+          Sticks to the top of the viewport while scrolling so it's always
+          reachable while you're looking at the chart or any account row.
+          The z-index keeps it above the chart's tooltip/legend layer. */}
+      <div style={{ position: "sticky", top: 0, zIndex: 30, marginBottom: 16 }}>
+        <Card style={{ borderTop: "3px solid #556FB5" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Horizon:</span>
+            {horizonOpts.map(h => (
+              <button key={h} onClick={() => setHorizon(h)} style={{ padding: "5px 12px", fontSize: 12, fontWeight: 600, border: "none", borderRadius: 6, background: horizon === h ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: horizon === h ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{h}y</button>
+            ))}
+            <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
           {/* Inflation rate — round-trips with Simple via the same
               localStorage key. Drives the FI threshold line on the chart and
               the deflation of the projection's "today's $" totals. */}
@@ -684,48 +706,63 @@ export default function AdvancedForecastTab({
             style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }} />
           <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
           <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
-          <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
-          {fireEnabled && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-              title={"Multiplier × annual expenses = FI target.\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>×</span>
-              <input
-                type="text"
-                value={fireMultiplier}
-                onChange={e => setFireMultiplier(e.target.value)}
-                onBlur={e => {
-                  const v = evalF(e.target.value);
-                  if (!isFinite(v) || v <= 0) setFireMultiplier("25");
-                  else setFireMultiplier(String(v));
-                }}
-                style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
+          {/* FIRE controls grouped into a single visually-bound chunk:
+              toggle + multiplier + target. Border + tinted background ties
+              them together so they don't read as three independent items
+              strung across the toolbar. Today's-$ check shows underneath
+              when reachable so the user can sanity-check the future-$
+              number. */}
+          <span style={{ display: "inline-flex", flexDirection: "column", padding: fireEnabled ? "6px 10px" : "4px 8px", borderRadius: 8, background: fireEnabled ? "rgba(243,156,18,0.08)" : "transparent", border: fireEnabled ? "1px solid rgba(243,156,18,0.25)" : "1px solid transparent", gap: 3 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
+              <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
+              {fireEnabled && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                  title={"Multiplier × annual expenses = FI target.\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>×</span>
+                  <input
+                    type="text"
+                    value={fireMultiplier}
+                    onChange={e => setFireMultiplier(e.target.value)}
+                    onBlur={e => {
+                      const v = evalF(e.target.value);
+                      if (!isFinite(v) || v <= 0) setFireMultiplier("25");
+                      else setFireMultiplier(String(v));
+                    }}
+                    style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
+                </span>
+              )}
+              {fireEnabled && fireTarget > 0 && (() => {
+                const inflRate = (Number(inflationPct) || 0) / 100;
+                const refYear = (yearsToFireAdv != null && yearsToFireAdv > 0) ? yearsToFireAdv : horizon;
+                const futureTarget = fireTarget * Math.pow(1 + inflRate, refYear);
+                const yearLabel = (yearsToFireAdv != null && yearsToFireAdv > 0)
+                  ? `at FI (year ${refYear.toFixed(1)})`
+                  : `at year ${horizon}`;
+                return (
+                  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}
+                    title={`${fireMultiplierNum}× ${fmt(fireAnnualExpenses)}/yr today, inflated to year ${refYear.toFixed(1)}.\nTarget grows with inflation each year — that's the orange dashed line on the chart.`}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target {yearLabel}:</span>
+                    <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(futureTarget)}</strong>
+                  </span>
+                );
+              })()}
             </span>
-          )}
-          {fireEnabled && fireTarget > 0 && (() => {
-            // FIRE target shown in FUTURE dollars at a meaningful year. If
-            // FI is reachable, show the target at the crossover year (the
-            // dollar amount the account literally needs at that year). If
-            // unreachable, show the target at horizon-end so the user can
-            // compare to the chart's right edge. Today's-$ is intentionally
-            // not shown here — it confused users who'd see "$3M target" and
-            // expect that to match a $6M-looking chart at year 30.
-            const inflRate = (Number(inflationPct) || 0) / 100;
-            const refYear = (yearsToFireAdv != null && yearsToFireAdv > 0) ? yearsToFireAdv : horizon;
-            const futureTarget = fireTarget * Math.pow(1 + inflRate, refYear);
-            const yearLabel = (yearsToFireAdv != null && yearsToFireAdv > 0)
-              ? `at FI (year ${refYear.toFixed(1)})`
-              : `at year ${horizon}`;
-            return (
-              <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}
-                title={`${fireMultiplierNum}× ${fmt(fireAnnualExpenses)}/yr today, inflated to year ${refYear.toFixed(1)}.\nTarget grows with inflation each year — that's the orange dashed line on the chart.`}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target {yearLabel}:</span>
-                <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(futureTarget)}</strong>
+            {/* Today's-$ check — shows the FI target in today's purchasing
+                power as a stable cross-reference. Number changes very slowly
+                (only when expenses or multiplier change), unlike the
+                future-$ display which jumps with inflation/year. Helpful
+                sanity check. */}
+            {fireEnabled && fireTarget > 0 && (
+              <span style={{ fontSize: 11, color: "var(--tx3,#888)", paddingLeft: 38 }}
+                title="FI target in today's purchasing power. Does not depend on inflation rate. Useful as a stable check while you're tuning the future-$ number above.">
+                Today's $: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(fireTarget)}</strong>
               </span>
-            );
-          })()}
-        </div>
-      </Card>
+            )}
+          </span>
+          </div>
+        </Card>
+      </div>
 
       {/* Account list */}
       <Card>
@@ -951,6 +988,7 @@ export default function AdvancedForecastTab({
                             style={{ width: "100%", padding: "4px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", marginBottom: 4 }}
                           >
                             <option value="manual">Source: Manual entry</option>
+                            <option value="budget">Source: Budget tab × 48 paychecks</option>
                             <option value="actual3">Source: Last 3 months actual</option>
                             <option value="actual6">Source: Last 6 months actual</option>
                             <option value="actual12">Source: Last 12 months actual</option>
@@ -1262,7 +1300,7 @@ export default function AdvancedForecastTab({
                      tooltip (after all stacked accounts). */
                   itemSorter={(item) => {
                     if (item.dataKey === "fireThresh") return Number.POSITIVE_INFINITY;
-                    const idx = accounts.findIndex(a => a.id === item.dataKey);
+                    const idx = displayedAccounts.findIndex(a => a.id === item.dataKey);
                     return idx >= 0 ? -idx : 1e9;
                   }}
                   formatter={(v, k) => {
@@ -1275,7 +1313,13 @@ export default function AdvancedForecastTab({
                   labelFormatter={(y) => `Year ${y} (${baseYear + Number(y)})`}
                 />
                 {showChartLegend && <Legend wrapperStyle={{ fontSize: 11 }} />}
-                {accounts.map(a => (
+                {/* Stack order follows the user's sort selection above (manual /
+                    A-Z / by balance) so the chart's visual order matches the
+                    account list. Recharts stacks first-declared at the bottom,
+                    so the first row in displayedAccounts ends up on the bottom
+                    of the stack and the last row on top. The tooltip's
+                    itemSorter inverts this so the tooltip reads top-down. */}
+                {displayedAccounts.map(a => (
                   <Area key={a.id} type="monotone" dataKey={a.id} name={deriveAccountName(a, p1Name, p2Name)} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
                 ))}
                 {/* FI threshold as a rising line, not a flat ReferenceLine.

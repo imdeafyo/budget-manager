@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { forecastGrowth, fmt, fmtCompact, evalF } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
@@ -217,7 +217,18 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   // crossover years from the array (which already accounts for income
   // growth via `g`). This is more robust than calling yearsToTarget with
   // a flat contribution — that would ignore the growth toggle.
-  const simpleSeries = useMemo(() => forecastGrowth(init, annualContribution, r, i, horizon, g), [init, annualContribution, r, i, horizon, g]);
+  const simpleSeriesRaw = useMemo(() => forecastGrowth(init, annualContribution, r, i, horizon, g), [init, annualContribution, r, i, horizon, g]);
+  // Augment each row with the FI threshold for that year (in future $) so
+  // the chart can plot it as a rising line. Same approach as Advanced — the
+  // line value at year y is `fireTarget × (1 + inflation)^y`.
+  const simpleSeries = useMemo(() => {
+    const inflRate = (Number(inflationPct) || 0) / 100;
+    const showFire = fireEnabled && fireTarget > 0;
+    return simpleSeriesRaw.map(row => ({
+      ...row,
+      fireThresh: showFire ? fireTarget * Math.pow(1 + inflRate, row.year) : null,
+    }));
+  }, [simpleSeriesRaw, inflationPct, fireEnabled, fireTarget]);
   const finalRow = simpleSeries[simpleSeries.length - 1];
 
   // Helper: walk the forecast and find the year (with fractional precision via
@@ -236,13 +247,27 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
     return null;
   };
 
-  // FIRE: target is in today's dollars (flat line on chart), so we compare
-  // against the REAL balance line — the inflation-adjusted balance climbs
-  // to meet the flat target. Income growth is already baked into the series.
+  // FIRE crossover: when does the future-$ balance reach the inflation-
+  // adjusted FIRE target? Mathematically equivalent to "real balance hits
+  // flat today's-$ target" but visually consistent with the chart, which
+  // shows future-$ balances and a rising target line. Same paradigm as
+  // Advanced — both tabs always agree on the question they're answering.
   const yearsToFire = useMemo(() => {
     if (!fireEnabled || fireTarget <= 0) return null;
-    return crossoverYear("real", fireTarget);
-  }, [fireEnabled, fireTarget, simpleSeries]);
+    const inflRate = (Number(inflationPct) || 0) / 100;
+    const targetAt = (y) => fireTarget * Math.pow(1 + inflRate, y);
+    if (init >= targetAt(0)) return 0;
+    for (let y = 1; y < simpleSeries.length; y++) {
+      const tgt = targetAt(y);
+      if (simpleSeries[y].nominal >= tgt) {
+        const prev = simpleSeries[y - 1].nominal;
+        const cur = simpleSeries[y].nominal;
+        const frac = cur > prev ? (tgt - prev) / (cur - prev) : 0;
+        return (y - 1) + Math.max(0, Math.min(1, frac));
+      }
+    }
+    return null;
+  }, [fireEnabled, fireTarget, inflationPct, simpleSeries, init]);
 
   // Time-to-X-months: target is X × today's monthly expenses (today's $).
   // Compared against NOMINAL balance for back-compat with the existing
@@ -373,27 +398,44 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Investment Growth</div>
           <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: (finalRow.nominal - finalRow.contributions) < 0 ? "#E8573A" : "#2ECC71", marginTop: 4 }}>{fmt(finalRow.nominal - finalRow.contributions)}</div>
         </Card>
-        {fireEnabled && (
+        {fireEnabled && (() => {
+          // FI target shown in future $ at the relevant year (matches Advanced
+          // tab paradigm). When reachable: target at the FI crossover year
+          // (the dollar amount your account literally needs to hit at that
+          // year). When unreachable: horizon-end value. Today's-$ shown as
+          // secondary cross-reference (changes very slowly — only when
+          // expenses or multiplier change).
+          const inflRate = (Number(inflationPct) || 0) / 100;
+          const refYear = (yearsToFire != null && yearsToFire > 0) ? yearsToFire : horizon;
+          const futureTarget = fireTarget * Math.pow(1 + inflRate, refYear);
+          const yearLabel = (yearsToFire != null && yearsToFire > 0)
+            ? `at FI (yr ${refYear.toFixed(1)})`
+            : `at yr ${horizon}`;
+          return (
           <Card>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FI Date</div>
             {yearsToFire === null ? (
               <>
                 <div style={{ fontSize: mob ? 18 : 20, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#E8573A", marginTop: 4 }}>Unreachable</div>
                 <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>at current contribution + return</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 4 }}>Target {yearLabel}: <strong style={{ color: "#F39C12" }}>{fmt(futureTarget)}</strong></div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#aaa)", marginTop: 1 }}>Today's $: {fmt(fireTarget)}</div>
               </>
             ) : yearsToFire === 0 ? (
               <>
                 <div style={{ fontSize: mob ? 18 : 20, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#2ECC71", marginTop: 4 }}>Already FI ✓</div>
-                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} target hit</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>{fmt(fireTarget)} (today's $) target hit</div>
               </>
             ) : (
               <>
                 <div style={{ fontSize: mob ? 20 : 24, fontWeight: 800, fontFamily: "'Fraunces',serif", color: "#F39C12", marginTop: 4 }}>{yearsToFire.toFixed(1)} yr</div>
-                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>Target {yearLabel}: <strong style={{ color: "#F39C12" }}>{fmt(futureTarget)}</strong></div>
+                <div style={{ fontSize: 10, color: "var(--tx3,#aaa)", marginTop: 1 }}>Today's $: {fmt(fireTarget)}</div>
               </>
             )}
           </Card>
-        )}
+          );
+        })()}
       </div>
 
       {/* Growth chart */}
@@ -414,13 +456,15 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
             <LineChart data={simpleSeries}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr,#eee)" />
               <XAxis dataKey="year" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `Yr ${v}`} />
-              <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+              <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => fmtCompact(v)} width={70} />
               <Tooltip formatter={v => fmt(v)} contentStyle={cs} />
               {showChartLegend && <Legend wrapperStyle={{ fontSize: 11 }} />}
               {(valueMode === "both" || valueMode === "nominal") && <Line type="monotone" dataKey="nominal" stroke="#4ECDC4" strokeWidth={2.5} dot={false} name="Future $" />}
               {(valueMode === "both" || valueMode === "real") && <Line type="monotone" dataKey="real" stroke="#556FB5" strokeWidth={2.5} dot={false} name={`Today's $ (${i}% infl)`} />}
               <Line type="monotone" dataKey="contributions" stroke="#95A5A6" strokeWidth={1.5} strokeDasharray="4 4" dot={false} name="Contributions" />
-              {fireEnabled && fireTarget > 0 && <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmt(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />}
+              {fireEnabled && fireTarget > 0 && (
+                <Line type="monotone" dataKey="fireThresh" stroke="#F39C12" strokeWidth={2.5} strokeDasharray="6 3" dot={false} name="FI target" />
+              )}
             </LineChart>
           </ResponsiveContainer>
         </div>
