@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from "react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine, AreaChart, Area, Line, ComposedChart } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
@@ -122,11 +122,15 @@ export default function AdvancedForecastTab({
   const [fireEnabled, setFireEnabledRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; } });
   const setFireEnabled = (v) => { setFireEnabledRaw(v); try { localStorage.setItem("forecast-fire-enabled", v ? "1" : "0"); } catch {} };
 
-  const [fireMultiplier] = useState(() => { try { return localStorage.getItem("forecast-fire-multiplier") || "25"; } catch { return "25"; } });
+  // FIRE multiplier (× annual expenses). Editable on this tab so scenario
+  // planning is possible without bouncing back to Simple. Persists to the
+  // same localStorage key Simple reads from, so changes round-trip.
+  const [fireMultiplier, setFireMultiplierRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-multiplier") || "25"; } catch { return "25"; } });
+  const setFireMultiplier = (v) => { setFireMultiplierRaw(v); try { localStorage.setItem("forecast-fire-multiplier", String(v)); } catch {} };
 
   // FIRE derivations — minimal version of Simple's logic. Uses tExpW × 48
   // (paycheck-basis annual expenses) as the FIRE expense baseline; the
-  // contribSource / actuals override Simple offers will land in 2B if
+  // contribSource / actuals override Simple offers will land later if
   // wanted here too.
   const fireMultiplierNum = useMemo(() => {
     const v = evalF(fireMultiplier);
@@ -134,6 +138,7 @@ export default function AdvancedForecastTab({
   }, [fireMultiplier]);
   const fireAnnualExpenses = useMemo(() => tExpW * 48, [tExpW]);
   const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
+  const fireWithdrawalRate = useMemo(() => fireMultiplierNum > 0 ? 100 / fireMultiplierNum : 0, [fireMultiplierNum]);
 
   const accountsRaw = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
 
@@ -431,8 +436,15 @@ export default function AdvancedForecastTab({
       // IRA fields are person-scoped; "joint" IRAs aren't a thing legally so
       // we only auto-derive when owner is p1/p2 (joint IRA accounts fall
       // through to manual entry).
-      if (a.type === "ira_traditional") return cIraTradNum;
-      if (a.type === "ira_roth")        return cIraRothNum;
+      // GUARD: only auto-derive when the user has actually entered a non-zero
+      // IRA value on the Income tab. If the field is still at its default of
+      // "0", returning 0 here would shadow any pre-existing manual
+      // `contribAmount` on the account — silently zeroing out the user's
+      // retirement projection. Returning null falls through to the manual
+      // amount, preserving existing data. Once the user enters a real number
+      // on Income, auto-derivation kicks in.
+      if (a.type === "ira_traditional") return cIraTradNum > 0 ? cIraTradNum : null;
+      if (a.type === "ira_roth")        return cIraRothNum > 0 ? cIraRothNum : null;
     }
     if (a.owner === "p2") {
       if (a.type === "401k_pretax") {
@@ -441,8 +453,8 @@ export default function AdvancedForecastTab({
       }
       if (a.type === "401k_roth")  return kSalNum * k4roNum / 100;
       if (a.type === "401k_match") return kLump ? 0 : kMatchAnnual;
-      if (a.type === "ira_traditional") return kIraTradNum;
-      if (a.type === "ira_roth")        return kIraRothNum;
+      if (a.type === "ira_traditional") return kIraTradNum > 0 ? kIraTradNum : null;
+      if (a.type === "ira_roth")        return kIraRothNum > 0 ? kIraRothNum : null;
     }
     /* Joint HSA accounts: lump everything into "cash" by default. The user
        can flip individual rows to manual to allocate a portion to invested
@@ -613,6 +625,24 @@ export default function AdvancedForecastTab({
           <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
           <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
           <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
+          {fireEnabled && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+              title={"Multiplier × annual expenses = FI target (in today's $).\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>×</span>
+              <input
+                type="text"
+                value={fireMultiplier}
+                onChange={e => setFireMultiplier(e.target.value)}
+                onBlur={e => {
+                  // Snap to a sane number on blur. Empty string → reset to 25.
+                  const v = evalF(e.target.value);
+                  if (!isFinite(v) || v <= 0) setFireMultiplier("25");
+                  else setFireMultiplier(String(v));
+                }}
+                style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
+              <span style={{ fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>({fireWithdrawalRate.toFixed(1)}%)</span>
+            </span>
+          )}
           {fireEnabled && fireTarget > 0 && (
             <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }} title={`${fireMultiplierNum}× annual expenses (${fmt(fireAnnualExpenses)}/yr)`}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target:</span>
@@ -1063,15 +1093,15 @@ export default function AdvancedForecastTab({
           </div>
           <div style={{ width: "100%", height: 360 }}>
             <ResponsiveContainer>
-              <AreaChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr,#e0e0e0)" />
                 <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} label={{ value: "Years from now", position: "insideBottom", offset: -2, fontSize: 11, fill: "var(--tx3,#888)" }} />
                 <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
                   formatter={(v, k) => {
-                    if (k === "total") return [fmt(v), "Total"];
-                    if (k === "totalReal") return [fmt(v), "Total (Real)"];
+                    if (k === "total") return [fmt(v), "Total (nominal)"];
+                    if (k === "totalReal") return [fmt(v), "Total (today's $)"];
                     const a = accounts.find(x => x.id === k);
                     return [fmt(v), a ? deriveAccountName(a, p1Name, p2Name) : k];
                   }}
@@ -1081,12 +1111,29 @@ export default function AdvancedForecastTab({
                 {accounts.map(a => (
                   <Area key={a.id} type="monotone" dataKey={a.id} name={deriveAccountName(a, p1Name, p2Name)} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
                 ))}
+                {/* "Today's dollars" line — same series the Years-to-FI calc
+                    uses. Shown alongside the nominal stack so the FI line
+                    (which is in today's $) is comparable to a series in the
+                    same units. Without this overlay, the stacked-area total
+                    (nominal) appears to cross the FI line years before the
+                    Years-to-FI calc agrees, producing the "chart says reached,
+                    text says unreachable" mismatch. */}
+                {fireEnabled && fireTarget > 0 && (
+                  <Line type="monotone" dataKey="totalReal" name="Total (today's $)" stroke="#2C5F8D" strokeWidth={2.5} strokeDasharray="4 3" dot={false} activeDot={{ r: 5, fill: "#2C5F8D", stroke: "#2C5F8D" }} />
+                )}
                 {fireEnabled && fireTarget > 0 && (
                   <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmtCompact(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />
                 )}
-              </AreaChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
+          {fireEnabled && fireTarget > 0 && (
+            <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
+              The stacked areas show <strong style={{ color: "var(--tx2,#555)" }}>nominal</strong> account balances (future dollars).
+              The <strong style={{ color: "#2C5F8D" }}>blue dashed line</strong> shows your total in <strong>today's dollars</strong> (the FI target's units) —
+              that's the line that has to cross the orange FI line to actually reach FI in today's purchasing power.
+            </div>
+          )}
         </Card>
       )}
 
