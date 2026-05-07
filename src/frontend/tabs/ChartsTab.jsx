@@ -4,7 +4,13 @@ import { Card } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 import { buildMonthlyIncomeSeries, incomeCategories, windowRange } from "../utils/income.js";
 
-export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], incomeCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, st, restoreLiveState }) {
+export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, setMilestones, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats = [], transferCats = [], transactions = [], ewk, savSorted, tNW, tDW, tExpW, tSavW, remW, totalSavPlusRemW, savRateBase, setSavRateBase, includeEaip, setIncludeEaip, chartWeeks, setChartWeeks, chartTimeWindow = "all", setChartTimeWindow, catTot, typTot, PieTooltip, dragWrapRender, chartOrder, necDisMode, setNecDisMode, catHistMode, setCatHistMode, itemHistMode, setItemHistMode, catHistoryName, setCatHistoryName, itemHistoryName, setItemHistoryName, st, restoreLiveState }) {
+  // NOTE: configured incomeCats (from Categories tab) is intentionally NOT a
+  // prop here. The Income History card derives its category list from actual
+  // transaction data via incomeCategories() — what's "income" is anything
+  // positive that isn't expense/savings/transfer. This means brand-new income
+  // categories show up in the dropdown automatically. If we ever want the
+  // configured list to constrain the dropdown, plumb it back through.
   // Local UI state for the income history chart's category-type toggle.
   // "all" = Total line only; any other value = just that single category line.
   const [incomeTypeSel, setIncomeTypeSel] = useState("all");
@@ -69,7 +75,6 @@ export default function ChartsTab({ mob, C, p1Name, p2Name, tax, milestones, set
                 const notBudgeted = Math.max(0, Math.round(netInc) - expAnn - savAnn);
                 const mCEaip = s.cEaipNet !== undefined ? s.cEaipNet : curCEaipNet;
                 const mKEaip = s.kEaipNet !== undefined ? s.kEaipNet : curKEaipNet;
-                const mCEaipG = s.eaipGross !== undefined ? ((s.cEaipNet || 0) + ((s.eaipGross || 0) - (s.eaipNet || 0)) * ((s.cEaipNet || 0) / Math.max(s.eaipNet || 1, 1))) : 0;
                 // Per-person gross bonus: derive from milestone data
                 const cGrossBonus = includeEaip ? (s.cEaipPct !== undefined ? (s.cSalary || (s.cGrossW || 0) * 52) * (s.cEaipPct / 100) : (curCEaipNet > 0 ? C.cEaipGross : 0)) : 0;
                 const kGrossBonus = includeEaip ? (s.kEaipPct !== undefined ? (s.kSalary || (s.kGrossW || 0) * 52) * (s.kEaipPct / 100) : (curKEaipNet > 0 ? C.kEaipGross : 0)) : 0;

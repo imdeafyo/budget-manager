@@ -528,7 +528,11 @@ export default function AdvancedForecastTab({
      pure calc function. */
   const projAccounts = useMemo(
     () => accounts.map(a => ({ ...a, contribAmount: effectiveContribFor(a) })),
-    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual]
+    // All inputs read by autoContribFor / effectiveContribFor must be listed
+    // here, otherwise the projection silently goes stale when the user edits
+    // an upstream value (IRA $ on Income tab, transactions for cash-actuals,
+    // tSavW/remW for cash-budget source).
+    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW]
   );
 
   /* Run the projection. */
