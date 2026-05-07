@@ -138,7 +138,6 @@ export default function AdvancedForecastTab({
   }, [fireMultiplier]);
   const fireAnnualExpenses = useMemo(() => tExpW * 48, [tExpW]);
   const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
-  const fireWithdrawalRate = useMemo(() => fireMultiplierNum > 0 ? 100 / fireMultiplierNum : 0, [fireMultiplierNum]);
 
   const accountsRaw = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
 
@@ -509,21 +508,30 @@ export default function AdvancedForecastTab({
 
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.
-     Also includes the real total for FIRE crossover comparison. */
+     Also includes:
+       - `total` / `totalReal` — totals in nominal and real dollars
+       - `fireThresh` — the nominal-dollars FI target for that year, which is
+         `fireTarget × (1 + inflation)^y`. Plotted as a Line on the chart so
+         it visually matches the calc (nominal balance vs inflation-adjusted
+         target). Set to `null` when FIRE is off so the line doesn't render.
+  */
   const chartData = useMemo(() => {
+    const inflRate = (Number(inflationPct) || 0) / 100;
+    const showFire = fireEnabled && fireTarget > 0;
     return projection.years.map(row => {
       const point = {
         year: row.year,
         calendarYear: row.calendarYear,
         total: row.totals.nominal,
         totalReal: row.totals.real,
+        fireThresh: showFire ? fireTarget * Math.pow(1 + inflRate, row.year) : null,
       };
       for (const a of accounts) {
         point[a.id] = row.byAccount[a.id]?.nominal || 0;
       }
       return point;
     });
-  }, [projection, accounts]);
+  }, [projection, accounts, fireEnabled, fireTarget, inflationPct]);
 
   /* Color assignment per account. With Color by Owner the index is per-owner;
      with Color by Type the index is per-pool. */
@@ -571,23 +579,39 @@ export default function AdvancedForecastTab({
     "_other": "Cash / Taxable",
   };
 
-  /* FIRE crossover: when does the real total cross the FIRE target?
-     Returns null if not reached, 0 if already there, else fractional year. */
+  /* FIRE crossover: when does the nominal total cross the inflation-adjusted
+     FIRE target?
+     Why nominal-vs-inflated rather than real-vs-flat: the user's eye reads
+     the stacked-area chart as "when does my account balance reach my FI
+     number?" — but the chart shows nominal balances and the FI ReferenceLine
+     in this branch is a series of inflation-adjusted target values. Comparing
+     nominal balance to an inflation-adjusted target is mathematically
+     equivalent to comparing real balance to a flat target (the inflation
+     factor cancels), but it makes the chart and the math agree visually:
+     when the stack crosses the target line, "Years to FIRE" reflects exactly
+     that intersection. Returns null if not reached, 0 if already there, else
+     fractional year. */
   const yearsToFireAdv = useMemo(() => {
     if (!fireEnabled || !fireTarget || fireTarget <= 0) return null;
     const series = projection.years;
     if (!series.length) return null;
-    if (series[0].totals.real >= fireTarget) return 0;
+    const inflRate = (Number(inflationPct) || 0) / 100;
+    const targetAt = (y) => fireTarget * Math.pow(1 + inflRate, y);
+    if (series[0].totals.nominal >= targetAt(0)) return 0;
     for (let y = 1; y < series.length; y++) {
-      if (series[y].totals.real >= fireTarget) {
-        const prev = series[y - 1].totals.real;
-        const cur = series[y].totals.real;
-        const frac = cur > prev ? (fireTarget - prev) / (cur - prev) : 0;
+      const tgt = targetAt(y);
+      if (series[y].totals.nominal >= tgt) {
+        const prev = series[y - 1].totals.nominal;
+        const cur = series[y].totals.nominal;
+        // Linear interpolate the crossover within the year. Use the year-y
+        // target for the threshold — it's close enough since target also
+        // grows smoothly within the year.
+        const frac = cur > prev ? (tgt - prev) / (cur - prev) : 0;
         return (y - 1) + Math.max(0, Math.min(1, frac));
       }
     }
     return null;
-  }, [projection, fireEnabled, fireTarget]);
+  }, [projection, fireEnabled, fireTarget, inflationPct]);
 
   /* Look up the per-account current-year limit + ramp years for each
      account that participates in a pool. Used in the input row UI. */
@@ -640,7 +664,6 @@ export default function AdvancedForecastTab({
                   else setFireMultiplier(String(v));
                 }}
                 style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
-              <span style={{ fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>({fireWithdrawalRate.toFixed(1)}%)</span>
             </span>
           )}
           {fireEnabled && fireTarget > 0 && (
@@ -801,13 +824,37 @@ export default function AdvancedForecastTab({
                     <div style={{ gridColumn: mob ? "1/-1" : "auto" }}>
                       <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, fontWeight: 700, color: isOver ? "#E8573A" : "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
                         <span>Annual Contribution {isOver && "⚠"}</span>
+                        {/* Status pill: shows whether the value below comes
+                            from auto-derivation or a manual override. Click to
+                            switch back/forth. Always rendered when the type
+                            HAS an auto source (401k, HSA, IRA with Income
+                            value, cash w/ source). For unsupported types it's
+                            hidden — there's nothing to "auto" to. */}
                         {auto && (
                           <button
                             onClick={() => updateAccount(a.id, { contribOverride: !a.contribOverride })}
-                            title={isAutoMode ? "Auto: derived from Income tab (or recent transaction history for cash accounts). Click to switch to manual." : "Manual: enter your own number. Click to use auto-derived value."}
-                            style={{ padding: "1px 6px", fontSize: 9, fontWeight: 700, border: "none", borderRadius: 4, background: isAutoMode ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: isAutoMode ? "#fff" : "var(--tx3,#888)", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}
+                            title={isAutoMode ? "Auto: derived from Income tab (or recent transaction history for cash accounts). Click to switch to manual override." : "Manual: your typed value. Click to switch back to auto."}
+                            style={{ padding: "1px 6px", fontSize: 9, fontWeight: 700, border: "none", borderRadius: 4, background: isAutoMode ? "#4ECDC4" : "#F39C12", color: "#fff", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}
                           >
                             {isAutoMode ? "Auto" : "Manual"}
+                          </button>
+                        )}
+                        {/* Reset-to-Income button — only shows when (a) the
+                            row has an auto source available AND (b) the user
+                            has actively overridden it. One click flips off
+                            override AND copies the auto value into
+                            contribAmount, so re-flipping back to Manual later
+                            doesn't lose the snapshot in the input. */}
+                        {auto && !isAutoMode && (
+                          <button
+                            onClick={() => {
+                              const autoVal = autoContribFor(a) || 0;
+                              updateAccount(a.id, { contribOverride: false, contribAmount: autoVal });
+                            }}
+                            title="Reset to the auto-derived value from the Income tab."
+                            style={{ padding: "1px 6px", fontSize: 9, fontWeight: 700, border: "1px solid #4ECDC4", borderRadius: 4, background: "transparent", color: "#4ECDC4", cursor: "pointer", textTransform: "uppercase", letterSpacing: 0.5 }}
+                          >
+                            ↺ Reset
                           </button>
                         )}
                       </label>
@@ -815,18 +862,13 @@ export default function AdvancedForecastTab({
                           value between manual entry and "net savings over the
                           last N months from your transaction history." When
                           set to a non-manual mode, autoContribFor returns the
-                          computed value and the row's auto-derived display
-                          kicks in (just like 401k/HSA rows). */}
+                          computed value and Auto-mode displays it. */}
                       {a.type === "cash" && (
                         <div style={{ marginBottom: 4 }}>
                           <select
                             value={a.contribSource || "manual"}
                             onChange={e => {
                               const v = e.target.value;
-                              // Switching to actuals mode auto-flips contribOverride OFF so the
-                              // auto-derived value takes effect. Switching back to manual leaves
-                              // the override flag wherever it was — user can opt back to manual
-                              // by clicking Auto/Manual.
                               const patch = { contribSource: v };
                               if (v !== "manual") patch.contribOverride = false;
                               updateAccount(a.id, patch);
@@ -841,16 +883,33 @@ export default function AdvancedForecastTab({
                           </select>
                         </div>
                       )}
-                      {isAutoMode ? (
-                        <div style={{ padding: "6px 8px", background: "var(--input-bg,#f0f0f0)", border: "1px dashed var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, color: "var(--tx2,#555)", fontFamily: "monospace" }}
-                          title={a.type === "cash" && a.contribSource && a.contribSource !== "manual"
-                            ? `Net savings (income − expenses) over the last ${a.contribSource.replace("actual","")} months from your transactions, annualized. Transfers + marked-transfer rows excluded.`
-                            : "Auto-derived from your Income tab values."}>
-                          {fmt(autoContribFor(a) || 0)}
-                        </div>
-                      ) : (
-                        <NI value={String(a.contribAmount)} onChange={v => updateAccount(a.id, { contribAmount: evalF(v) })} onBlurResolve prefix="$" />
-                      )}
+                      {/* Always-editable contribution input. In Auto mode the
+                          input shows the derived value (read-only feel — typing
+                          immediately switches the row to Manual). In Manual
+                          mode the input is the override.
+
+                          Why the input is always rendered (vs the previous
+                          read-only chip when in Auto mode): scenario planning
+                          on this tab needs to be one-edit-away. The user can
+                          tweak any number to test a what-if without
+                          ceremony, and the ↺ Reset button takes them back
+                          to the Income-tab anchor. */}
+                      <NI
+                        value={isAutoMode ? String(autoContribFor(a) || 0) : String(a.contribAmount)}
+                        onChange={v => {
+                          // Typing in Auto mode flips to Manual automatically.
+                          // The patch sets both override + amount in one update
+                          // so Recharts/projection re-render once, not twice.
+                          const numeric = evalF(v);
+                          if (isAutoMode) {
+                            updateAccount(a.id, { contribOverride: true, contribAmount: numeric });
+                          } else {
+                            updateAccount(a.id, { contribAmount: numeric });
+                          }
+                        }}
+                        onBlurResolve
+                        prefix="$"
+                      />
                     </div>
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Annual Increase %</label>
@@ -1100,6 +1159,7 @@ export default function AdvancedForecastTab({
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
                   formatter={(v, k) => {
+                    if (k === "fireThresh") return [fmt(v), "FI target (year-y $)"];
                     if (k === "total") return [fmt(v), "Total (nominal)"];
                     if (k === "totalReal") return [fmt(v), "Total (today's $)"];
                     const a = accounts.find(x => x.id === k);
@@ -1111,27 +1171,21 @@ export default function AdvancedForecastTab({
                 {accounts.map(a => (
                   <Area key={a.id} type="monotone" dataKey={a.id} name={deriveAccountName(a, p1Name, p2Name)} stackId="1" fill={accountColors[a.id]} stroke={accountColors[a.id]} fillOpacity={0.7} />
                 ))}
-                {/* "Today's dollars" line — same series the Years-to-FI calc
-                    uses. Shown alongside the nominal stack so the FI line
-                    (which is in today's $) is comparable to a series in the
-                    same units. Without this overlay, the stacked-area total
-                    (nominal) appears to cross the FI line years before the
-                    Years-to-FI calc agrees, producing the "chart says reached,
-                    text says unreachable" mismatch. */}
+                {/* FI threshold as a rising line, not a flat ReferenceLine.
+                    The line value at year y is the FI target inflated to
+                    that year's dollars — same comparison the years-to-FI
+                    calc uses, so chart and text always agree. When the
+                    nominal stack crosses this line, the text card
+                    confirms the same crossover. */}
                 {fireEnabled && fireTarget > 0 && (
-                  <Line type="monotone" dataKey="totalReal" name="Total (today's $)" stroke="#2C5F8D" strokeWidth={2.5} strokeDasharray="4 3" dot={false} activeDot={{ r: 5, fill: "#2C5F8D", stroke: "#2C5F8D" }} />
-                )}
-                {fireEnabled && fireTarget > 0 && (
-                  <ReferenceLine y={fireTarget} stroke="#F39C12" strokeWidth={2} strokeDasharray="6 3" label={{ value: `FI: ${fmtCompact(fireTarget)}`, position: "insideTopRight", fill: "#F39C12", fontSize: 11, fontWeight: 700 }} />
+                  <Line type="monotone" dataKey="fireThresh" name="FI target" stroke="#F39C12" strokeWidth={2.5} strokeDasharray="6 3" dot={false} activeDot={{ r: 5, fill: "#F39C12", stroke: "#F39C12" }} />
                 )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
           {fireEnabled && fireTarget > 0 && (
             <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 8, lineHeight: 1.4, fontStyle: "italic" }}>
-              The stacked areas show <strong style={{ color: "var(--tx2,#555)" }}>nominal</strong> account balances (future dollars).
-              The <strong style={{ color: "#2C5F8D" }}>blue dashed line</strong> shows your total in <strong>today's dollars</strong> (the FI target's units) —
-              that's the line that has to cross the orange FI line to actually reach FI in today's purchasing power.
+              The orange dashed line is your FI target rising with inflation ({Number(inflationPct) || 0}%/yr) — that's how much your account needs in <em>that year's</em> dollars to deliver today's purchasing power. When the stacked total crosses this line, you're FI.
             </div>
           )}
         </Card>
