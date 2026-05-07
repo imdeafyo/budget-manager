@@ -53,7 +53,7 @@ export default function SettingsTab(props) {
     setTransferConfidenceThreshold,
     treatRefundsAsNetting = true,
     setTreatRefundsAsNetting,
-    dupScanDayWindow = 3,
+    dupScanDayWindow = 0,
     setDupScanDayWindow,
     dupScanAmountTolerance = 0.01,
     setDupScanAmountTolerance,

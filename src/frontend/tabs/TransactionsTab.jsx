@@ -21,6 +21,7 @@ import { fmt } from "../utils/calc.js";
 import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/budgetCompare.js";
 import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
+import { scanForDuplicates } from "../utils/duplicateScan.js";
 import ImportModal from "../components/ImportModal.jsx";
 
 const PRESETS = [
@@ -49,6 +50,10 @@ export default function TransactionsTab(props) {
     transferToleranceAmount = 0.01,
     transferToleranceDays = 2,
     transferConfidenceThreshold = 0,
+    dupScanDayWindow = 0,
+    dupScanAmountTolerance = 0.01,
+    dupScanDescriptionMode = "exact",
+    dupScanFirstWordCount = 2,
     txLoaded,
   } = props;
 
@@ -144,6 +149,13 @@ export default function TransactionsTab(props) {
   // Transfer detection modal — { pairs, selected: Set<pairKey> } while open, null otherwise.
   // pairKey = `${aId}|${bId}` — stable per candidate, survives re-sorts.
   const [transferModal, setTransferModal] = useState(null);
+
+  // Duplicate scan modal — { groups, selected: Set<txId>, scannedCount } while open.
+  // selected = txIds the user has marked for deletion. The default selection is
+  // "delete all but the earliest in each group" — that's the most common intent
+  // for a duplicate-cleanup workflow. Group-level dismiss removes a whole group
+  // from the modal without deleting anything (good for false positives).
+  const [dupScanModal, setDupScanModal] = useState(null);
 
   // Apply preset to date fields. Only acts on non-empty presets — clearing the
   // preset (which happens whenever the user edits a date input or the chart
@@ -626,6 +638,85 @@ export default function TransactionsTab(props) {
     setTransferModal(null);
   };
 
+  /* ── Duplicate scan handlers ──
+     openDupScan runs the scanner and opens the modal. Default selection is
+     "every member of every group EXCEPT the first (earliest)" so the natural
+     action — delete duplicates, keep the original — needs zero clicks for
+     simple groups. The user can adjust per-row before confirming. */
+  const openDupScan = () => {
+    const result = scanForDuplicates(transactions, {
+      dayWindow: dupScanDayWindow,
+      amountTolerance: dupScanAmountTolerance,
+      descriptionMode: dupScanDescriptionMode,
+      firstWordCount: dupScanFirstWordCount,
+    });
+    // Preselect: in each group, mark all but the first row for deletion.
+    const selected = new Set();
+    for (const g of result.groups) {
+      for (let i = 1; i < g.members.length; i++) {
+        selected.add(g.members[i].id);
+      }
+    }
+    setDupScanModal({ groups: result.groups, selected, scannedCount: result.scannedCount });
+  };
+
+  const dupScanToggleRow = (id) => {
+    setDupScanModal(m => {
+      if (!m) return m;
+      const next = new Set(m.selected);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return { ...m, selected: next };
+    });
+  };
+
+  /* Group-level helpers — apply to one group's members (excluding the first
+     row, since "keep all" / "delete all" need to leave the original alone). */
+  const dupScanSelectGroupRest = (groupKey) => {
+    setDupScanModal(m => {
+      if (!m) return m;
+      const g = m.groups.find(g => g.key === groupKey);
+      if (!g) return m;
+      const next = new Set(m.selected);
+      for (let i = 1; i < g.members.length; i++) next.add(g.members[i].id);
+      return { ...m, selected: next };
+    });
+  };
+  const dupScanDeselectGroup = (groupKey) => {
+    setDupScanModal(m => {
+      if (!m) return m;
+      const g = m.groups.find(g => g.key === groupKey);
+      if (!g) return m;
+      const next = new Set(m.selected);
+      for (const member of g.members) next.delete(member.id);
+      return { ...m, selected: next };
+    });
+  };
+  /* Dismiss a group — removes the whole group from the modal without
+     deleting anything. Useful for coincidental matches the user knows aren't
+     real duplicates (e.g. two unrelated $20 charges on the same day). */
+  const dupScanDismissGroup = (groupKey) => {
+    setDupScanModal(m => {
+      if (!m) return m;
+      const groups = m.groups.filter(g => g.key !== groupKey);
+      // Drop any selections from the dismissed group's rows.
+      const dismissedMembers = new Set();
+      const g = m.groups.find(gr => gr.key === groupKey);
+      if (g) for (const mem of g.members) dismissedMembers.add(mem.id);
+      const next = new Set();
+      for (const id of m.selected) if (!dismissedMembers.has(id)) next.add(id);
+      return { ...m, groups, selected: next };
+    });
+  };
+
+  const commitDupScanDelete = async () => {
+    if (!dupScanModal) return;
+    const ids = dupScanModal.selected;
+    if (!ids.size) { setDupScanModal(null); return; }
+    if (!window.confirm(`Delete ${ids.size} duplicate transaction${ids.size === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    await deleteTransactions(ids);
+    setDupScanModal(null);
+  };
+
   const handleUnpair = (tx) => {
     if (!tx) return;
     const partnerId = tx.custom_fields?._transfer_pair_id;
@@ -673,6 +764,13 @@ export default function TransactionsTab(props) {
                 title="Scan for paired transfers between accounts"
                 style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: "2px solid var(--bdr, #ccc)", borderRadius: 6, background: "transparent", userSelect: "none" }}>
                 🔀 Detect transfers{markedTransferCount > 0 ? ` · ${markedTransferCount}` : ""}
+              </span>
+            )}
+            {transactions.length > 1 && (
+              <span onClick={openDupScan}
+                title="Scan all transactions for cross-account duplicates. Configure thresholds on the Settings tab."
+                style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", cursor: "pointer", padding: "4px 10px", border: "2px solid var(--bdr, #ccc)", borderRadius: 6, background: "transparent", userSelect: "none" }}>
+                🔍 Scan duplicates
               </span>
             )}
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
@@ -976,6 +1074,24 @@ export default function TransactionsTab(props) {
           onClose={() => setTransferModal(null)}
           onConfirm={commitTransferPairs}
           onDismissSelected={dismissSelectedPairs}
+        />
+      )}
+
+      {dupScanModal && (
+        <DupScanModal
+          groups={dupScanModal.groups}
+          selected={dupScanModal.selected}
+          scannedCount={dupScanModal.scannedCount}
+          dayWindow={dupScanDayWindow}
+          amountTolerance={dupScanAmountTolerance}
+          descriptionMode={dupScanDescriptionMode}
+          firstWordCount={dupScanFirstWordCount}
+          onToggleRow={dupScanToggleRow}
+          onSelectGroupRest={dupScanSelectGroupRest}
+          onDeselectGroup={dupScanDeselectGroup}
+          onDismissGroup={dupScanDismissGroup}
+          onClose={() => setDupScanModal(null)}
+          onConfirm={commitDupScanDelete}
         />
       )}
 
@@ -1669,6 +1785,131 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
    checkbox; Confirm marks the checked pairs as transfers. Dismiss flags the
    checked pairs as "not a transfer, stop suggesting." The modal is purely
    presentational — the parent owns the state and commit logic. */
+/* ── Duplicate scan modal ──
+   Shows clusters of likely-duplicate transactions and lets the user pick
+   which to delete. The modal is purely presentational — all state lives in
+   the parent (dupScanModal) and is mutated through callbacks.
+
+   Layout: each group is a panel showing the matched rows. The earliest row
+   is visually marked as the "original" (it can still be ticked, but the
+   default selection skips it). Per-group actions:
+     • Select rest — tick all but the first
+     • Deselect — untick everything in the group
+     • Dismiss — remove the group from the modal entirely (false positive)
+
+   Master action: "Delete N selected" deletes every ticked row across all
+   groups. */
+function DupScanModal({ groups, selected, scannedCount, dayWindow, amountTolerance, descriptionMode, firstWordCount, onToggleRow, onSelectGroupRest, onDeselectGroup, onDismissGroup, onClose, onConfirm }) {
+  const totalGroups = groups.length;
+  const totalSelected = selected.size;
+
+  // Settings summary line — same shape as the Settings card summary so users
+  // can sanity-check what the scan was looking for.
+  const settingsSummary = (() => {
+    const days = Number(dayWindow) || 0;
+    const tol = Number(amountTolerance) || 0;
+    const desc = descriptionMode === "off" ? "any description"
+      : descriptionMode === "first-words" ? `first ${firstWordCount} words match`
+      : "exact description match";
+    return `${days === 0 ? "same day" : `±${days} day${days === 1 ? "" : "s"}`} · ±$${tol.toFixed(2)} · ${desc}`;
+  })();
+
+  return (
+    <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 820, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+        <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>
+          {totalGroups === 0
+            ? "No duplicates found"
+            : `Found ${totalGroups} duplicate group${totalGroups === 1 ? "" : "s"}`}
+        </h3>
+        <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginBottom: 4 }}>
+          Scanned {scannedCount.toLocaleString()} transaction{scannedCount === 1 ? "" : "s"} · {settingsSummary}
+        </div>
+        <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 12, lineHeight: 1.5 }}>
+          {totalGroups === 0
+            ? "Nothing matches your current settings. Loosen the date window, amount tolerance, or description mode on the Settings tab to catch more candidates."
+            : "The earliest row in each group is marked as Original and is unchecked by default — the natural action is 'delete the duplicates, keep the original.' Adjust per-row, dismiss false-positive groups, then commit."}
+        </div>
+
+        {totalGroups > 0 && (
+          <>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12, color: "var(--tx3, #888)", flexWrap: "wrap" }}>
+              <span><strong style={{ color: "var(--tx, #333)" }}>{totalSelected}</strong> row{totalSelected === 1 ? "" : "s"} marked for deletion across {totalGroups} group{totalGroups === 1 ? "" : "s"}</span>
+            </div>
+
+            <div style={{ flex: 1, minHeight: 200, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 8, padding: 4 }}>
+              {groups.map((group) => {
+                // Group-level state derived from the shared Set
+                const memberIds = group.members.map(m => m.id);
+                const ticked = memberIds.filter(id => selected.has(id)).length;
+                const allTicked = ticked === memberIds.length;
+                const noneTicked = ticked === 0;
+                return (
+                  <div key={group.key} style={{ marginBottom: 8, border: "1px solid var(--bdr2, #eee)", borderRadius: 6, background: "var(--card-bg, #fff)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid var(--bdr2, #eee)", background: "var(--input-bg, #fafafa)", borderRadius: "6px 6px 0 0" }}>
+                      <div style={{ flex: 1, fontSize: 12, color: "var(--tx2, #555)" }}>
+                        <strong>{group.members.length} rows</strong> · {fmt(group.members[0].amount)} · {group.members[0].description || <em style={{ color: "var(--tx3,#aaa)" }}>(no description)</em>}
+                      </div>
+                      <button onClick={() => onSelectGroupRest(group.key)} disabled={allTicked && !memberIds.some(id => !selected.has(id) && id !== memberIds[0])}
+                        title="Tick everything except the earliest row (the typical 'delete duplicates, keep original' action)"
+                        style={{ ...pillBtn(), opacity: allTicked ? 0.5 : 1 }}>
+                        Select rest
+                      </button>
+                      <button onClick={() => onDeselectGroup(group.key)} disabled={noneTicked}
+                        title="Untick everything in this group"
+                        style={{ ...pillBtn(), opacity: noneTicked ? 0.5 : 1 }}>
+                        Clear
+                      </button>
+                      <button onClick={() => onDismissGroup(group.key)}
+                        title="False positive — remove this whole group from the modal without deleting anything"
+                        style={pillBtn()}>
+                        Dismiss
+                      </button>
+                    </div>
+                    <div>
+                      {group.members.map((m, idx) => {
+                        const isFirst = idx === 0;
+                        const isChecked = selected.has(m.id);
+                        return (
+                          <label key={m.id}
+                            style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderBottom: idx === group.members.length - 1 ? "none" : "1px solid var(--bdr2, #f3f3f3)", fontSize: 12, color: "var(--tx, #333)", cursor: "pointer", background: isChecked ? "rgba(232, 87, 58, 0.06)" : "transparent" }}
+                            title={isFirst ? "Earliest row in group — typically the original" : "Likely duplicate"}
+                          >
+                            <input type="checkbox" checked={isChecked} onChange={() => onToggleRow(m.id)} />
+                            {isFirst && (
+                              <span style={{ fontSize: 9, fontWeight: 700, color: "#2ECC71", textTransform: "uppercase", letterSpacing: 0.5, padding: "2px 6px", border: "1px solid #2ECC71", borderRadius: 4 }}>Original</span>
+                            )}
+                            <span style={{ minWidth: 90, color: "var(--tx2, #555)", fontFamily: "monospace" }}>{m.date}</span>
+                            <span style={{ minWidth: 80, textAlign: "right", fontWeight: 600, color: m.amount < 0 ? "var(--tx, #333)" : "#2ECC71", fontFamily: "monospace" }}>{fmt(m.amount)}</span>
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.description || <em style={{ color: "var(--tx3,#aaa)" }}>(no description)</em>}</span>
+                            <span style={{ minWidth: 100, fontSize: 11, color: "var(--tx3, #888)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.account}>{m.account || "—"}</span>
+                            {m.category && <span style={{ fontSize: 10, padding: "2px 6px", background: "var(--input-bg, #f5f5f5)", borderRadius: 4, color: "var(--tx3, #888)" }}>{m.category}</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button onClick={onClose} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Close</button>
+          {totalGroups > 0 && (
+            <button onClick={onConfirm} disabled={totalSelected === 0}
+              style={{ ...btn("#E8573A", "#fff"), opacity: totalSelected === 0 ? 0.5 : 1, cursor: totalSelected === 0 ? "not-allowed" : "pointer" }}>
+              🗑 Delete {totalSelected} selected
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TransferPairsModal({ pairs, selected, includeDismissed, onToggleIncludeDismissed, onToggle, onSelectAll, onSelectNone, onClose, onConfirm, onDismissSelected }) {
   const checkedCount = selected.size;
   const totalCount = pairs.length;

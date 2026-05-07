@@ -284,7 +284,7 @@ export default function useAppState() {
      normalized desc to match (case + whitespace ignored, but reference
      numbers in the description matter — flip to "first-words" to ignore
      them). dupScanFirstWordCount only applies when mode is first-words. */
-  const [dupScanDayWindow, setDupScanDayWindow] = useState(3);
+  const [dupScanDayWindow, setDupScanDayWindow] = useState(0);
   const [dupScanAmountTolerance, setDupScanAmountTolerance] = useState(0.01);
   const [dupScanDescriptionMode, setDupScanDescriptionMode] = useState("exact");
   const [dupScanFirstWordCount, setDupScanFirstWordCount] = useState(2);

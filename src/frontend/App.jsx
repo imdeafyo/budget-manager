@@ -176,6 +176,10 @@ export default function App() {
           transferToleranceAmount={S.transferToleranceAmount}
           transferToleranceDays={S.transferToleranceDays}
           transferConfidenceThreshold={S.transferConfidenceThreshold}
+          dupScanDayWindow={S.dupScanDayWindow}
+          dupScanAmountTolerance={S.dupScanAmountTolerance}
+          dupScanDescriptionMode={S.dupScanDescriptionMode}
+          dupScanFirstWordCount={S.dupScanFirstWordCount}
           defaultTxPageSize={S.defaultTxPageSize}
           txLoaded={S.txLoaded}
         />}
