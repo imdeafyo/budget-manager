@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
+import log from "../utils/log.js";
 
 export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
   // Save Milestone modal — moved from ChartsTab. Opens when 📸 button is clicked.
@@ -10,8 +11,11 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
     const itemMs = {};
     (ewk || []).forEach(e => { itemMs[e.n] = { v: Math.round(e.wk * 48 * 100) / 100, t: e.t, c: e.c, f: e.f || "" }; });
     (savSorted || []).forEach(s => { itemMs[s.n] = { v: Math.round(s.wk * 48 * 100) / 100, t: "S", f: s.f || "" }; });
+    const newId = Date.now();
+    const dateUsed = msDate || new Date().toISOString().slice(0, 10);
+    const labelUsed = msLabel || "Milestone";
     setMilestones(prev => [...prev, {
-      id: Date.now(), date: msDate || new Date().toISOString().slice(0, 10), label: msLabel || "Milestone",
+      id: newId, date: dateUsed, label: labelUsed,
       grossW: _Cf.cw + _Cf.kw, netW: _Cf.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW_full,
       remW, savRate: _Cf.net > 0 ? (totalSavPlusRemW / _Cf.net * 100) : 0,
       savRateGross: (_Cf.cw + _Cf.kw) > 0 ? (totalSavPlusRemW / (_Cf.cw + _Cf.kw) * 100) : 0,
@@ -22,15 +26,19 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
       items: itemMs,
       fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats, transferCats, incomeCats, tax },
     }]);
+    log.info("milestone.save", { id: newId, date: dateUsed, label: labelUsed, itemCount: Object.keys(itemMs).length });
     setMsLabel(""); setMsDate("");
     // Pair every saved milestone with a backup-history row. Wait out the 600ms
     // auto-save debounce so the backup captures the freshly-saved state.
     setTimeout(() => {
+      log.info("milestone.backupTriggered", { id: newId, label: "manual+pre-milestone" });
       fetch("/api/history/snapshot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: "manual+pre-milestone" }),
-      }).catch(() => {});
+      }).then(r => {
+        if (!r.ok) log.warn("milestone.backupFailed", { id: newId, status: r.status });
+      }).catch(e => log.warn("milestone.backupFailed", { id: newId, message: String(e?.message || e) }));
     }, 800);
     setShowSaveMs(false);
   };

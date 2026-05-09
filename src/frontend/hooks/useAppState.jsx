@@ -470,8 +470,16 @@ export default function useAppState() {
     (async () => {
       try {
         const r = await fetch("/api/transactions").then(r => r.json());
-        if (r?.transactions) setTransactions(r.transactions);
-      } catch(e) { /* offline or no backend — fall back to empty */ }
+        if (r?.transactions) {
+          setTransactions(r.transactions);
+          log.info("tx.load", { count: r.transactions.length });
+        } else {
+          log.warn("tx.load.empty", { responseShape: Object.keys(r || {}) });
+        }
+      } catch(e) {
+        log.warn("tx.load.fail", { message: String(e?.message || e) });
+        /* offline or no backend — fall back to empty */
+      }
       setTxLoaded(true);
     })();
   }, []);
@@ -483,11 +491,18 @@ export default function useAppState() {
     setTransactions(prev => [...rows, ...prev]);
     if (MODE === "deploy") {
       try {
-        await fetch("/api/transactions", {
+        const res = await fetch("/api/transactions", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ transactions: rows }),
         });
-      } catch(e) { /* keep local state even if backend save failed */ }
+        if (!res.ok) log.warn("tx.add.fail", { status: res.status, count: rows.length });
+        else log.info("tx.add", { count: rows.length });
+      } catch(e) {
+        log.warn("tx.add.throw", { message: String(e?.message || e), count: rows.length });
+        /* keep local state even if backend save failed */
+      }
+    } else {
+      log.info("tx.add", { count: rows.length, mode: "generic" });
     }
     return rows;
   }, []);
@@ -497,11 +512,14 @@ export default function useAppState() {
     setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t));
     if (MODE === "deploy") {
       try {
-        await fetch(`/api/transactions/${tx.id}`, {
+        const res = await fetch(`/api/transactions/${tx.id}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ transaction: updated }),
         });
-      } catch(e) {}
+        if (!res.ok) log.warn("tx.update.fail", { status: res.status, id: tx.id });
+      } catch(e) {
+        log.warn("tx.update.throw", { message: String(e?.message || e), id: tx.id });
+      }
     }
   }, []);
 
@@ -510,11 +528,17 @@ export default function useAppState() {
     setTransactions(prev => prev.filter(t => !idSet.has(t.id)));
     if (MODE === "deploy" && ids.length) {
       try {
-        await fetch("/api/transactions", {
+        const res = await fetch("/api/transactions", {
           method: "DELETE", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids }),
         });
-      } catch(e) {}
+        if (!res.ok) log.warn("tx.delete.fail", { status: res.status, count: ids.length });
+        else log.info("tx.delete", { count: ids.length });
+      } catch(e) {
+        log.warn("tx.delete.throw", { message: String(e?.message || e), count: ids.length });
+      }
+    } else if (ids.length) {
+      log.info("tx.delete", { count: ids.length, mode: "generic" });
     }
   }, []);
 
@@ -522,11 +546,17 @@ export default function useAppState() {
     setTransactions(prev => prev.filter(t => t.import_batch_id !== batchId));
     if (MODE === "deploy") {
       try {
-        await fetch("/api/transactions", {
+        const res = await fetch("/api/transactions", {
           method: "DELETE", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ batch_id: batchId }),
         });
-      } catch(e) {}
+        if (!res.ok) log.warn("tx.deleteBatch.fail", { status: res.status, batchId });
+        else log.info("tx.deleteBatch", { batchId });
+      } catch(e) {
+        log.warn("tx.deleteBatch.throw", { message: String(e?.message || e), batchId });
+      }
+    } else {
+      log.info("tx.deleteBatch", { batchId, mode: "generic" });
     }
   }, []);
 
@@ -721,6 +751,7 @@ export default function useAppState() {
     const m = milestones[idx];
     const fs = m?.fullState;
     if (fs) {
+      log.info("milestone.restore", { idx, id: m.id, label: m.label, mode: "fullState" });
       if (fs.cSal !== undefined) setCS(fs.cSal); if (fs.kSal !== undefined) setKS(fs.kSal);
       if (fs.fil) setFil(fs.fil); if (fs.cEaip !== undefined) setCE(fs.cEaip); if (fs.kEaip !== undefined) setKE(fs.kEaip);
       if (fs.preDed) setPreDed(fs.preDed); if (fs.postDed) setPostDed(fs.postDed);
@@ -741,6 +772,7 @@ export default function useAppState() {
       if (fs.incomeCats) setIncomeCats(fs.incomeCats);
       if (fs.tax) setTax(fs.tax);
     } else if (m?.items) {
+      log.info("milestone.restore", { idx, id: m.id, label: m.label, mode: "itemsOnly", itemCount: Object.keys(m.items).length });
       const newExp = []; const newSav = []; const newCats = new Set(cats);
       Object.entries(m.items).forEach(([name, data]) => {
         if (data.c) newCats.add(data.c);

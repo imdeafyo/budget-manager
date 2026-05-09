@@ -1,5 +1,6 @@
 import { Card } from "../components/ui.jsx";
 import { fmt } from "../utils/calc.js";
+import log from "../utils/log.js";
 
 /* MilestonesSubtab — the "list mode" for Budget→Milestones.
    Moved verbatim from ChartsTab.jsx (formerly lines ~225–295) as part of the
@@ -50,7 +51,7 @@ export default function MilestonesSubtab({ mob, milestones, setMilestones, msHis
                 <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                   <button onClick={() => setViewingMs(ri)} style={{ padding: "3px 8px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>View</button>
                   {(s.fullState || s.items) && <button onClick={() => setRestoreConfirm(ri)} style={{ padding: "3px 6px", background: "none", border: "1px solid #F2A93B", borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: "pointer", color: "#F2A93B" }} title={s.fullState ? "Full restore" : "Restores items only"}>↩</button>}
-                  <button onClick={() => setMilestones(milestones.filter((_, j) => j !== ri))} style={{ padding: "3px 6px", background: "none", border: "1px solid var(--input-border, #ddd)", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
+                  <button onClick={() => { log.info("milestone.delete", { idx: ri, id: s.id, label: s.label }); setMilestones(milestones.filter((_, j) => j !== ri)); }} style={{ padding: "3px 6px", background: "none", border: "1px solid var(--input-border, #ddd)", borderRadius: 4, fontSize: 10, cursor: "pointer", color: "#ccc" }}>×</button>
                 </div>
               </div>
             );

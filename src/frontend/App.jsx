@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, Component } from "react";
 import { VisColsCtx } from "./components/ui.jsx";
 import useAppState from "./hooks/useAppState.jsx";
 import CategoriesTab from "./tabs/CategoriesTab.jsx";
@@ -12,12 +12,57 @@ import ForecastTab from "./tabs/ForecastTab.jsx";
 import AdvancedForecastTab from "./tabs/AdvancedForecastTab.jsx";
 import TransactionsTab from "./tabs/TransactionsTab.jsx";
 import SettingsTab from "./tabs/SettingsTab.jsx";
+import log from "./utils/log.js";
 
-
+/* ── ErrorBoundary ──
+   Catches uncaught render errors anywhere in the tree below it. Logs the
+   error + component stack to the diagnostics ring buffer (which auto-flushes
+   to localStorage on error so the log survives the crash) and shows a minimal
+   recovery UI with a reload button. Without this, a render bug presents as
+   a white screen with no signal. */
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    log.error("render.crash", {
+      message: String(error?.message || error),
+      stack: String(error?.stack || "").slice(0, 2000),
+      componentStack: String(info?.componentStack || "").slice(0, 2000),
+    });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "100vh", padding: 40, fontFamily: "'DM Sans',sans-serif", background: "#f5f5f5", color: "#333" }}>
+          <div style={{ maxWidth: 640, margin: "60px auto", background: "#fff", padding: 32, borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.08)" }}>
+            <h2 style={{ margin: "0 0 16px", color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Something broke.</h2>
+            <p style={{ margin: "0 0 16px", lineHeight: 1.5 }}>
+              The app hit an error while rendering. Your data is safe — saves are debounced and the last good state is on disk.
+              The error has been logged to diagnostics. Open Settings → Diagnostics after reload to copy the log.
+            </p>
+            <pre style={{ background: "#fafafa", padding: 12, borderRadius: 6, fontSize: 12, overflowX: "auto", color: "#666", maxHeight: 200 }}>
+              {String(this.state.error?.message || this.state.error)}
+            </pre>
+            <button onClick={() => window.location.reload()}
+              style={{ marginTop: 16, padding: "10px 20px", background: "#556FB5", color: "#fff", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 
 /* ══════════════════════════ MAIN APP ══════════════════════════ */
-export default function App() {
+function App() {
   const S = useAppState();
   const iconRef = useRef(null);
   const headerRef = useRef(null);
@@ -230,5 +275,17 @@ export default function App() {
       </div>
     </div>
     </VisColsCtx.Provider>
+  );
+}
+
+/* Default export wraps App in an ErrorBoundary so render crashes get logged
+   to diagnostics (which auto-flushes to localStorage on error) instead of
+   becoming a white screen. The boundary must live ABOVE the component that
+   throws — that's why we wrap here rather than inside App. */
+export default function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   );
 }

@@ -23,6 +23,7 @@ import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js
 import { buildCSV } from "../utils/csv.js";
 import { scanForDuplicates } from "../utils/duplicateScan.js";
 import ImportModal from "../components/ImportModal.jsx";
+import log from "../utils/log.js";
 
 const PRESETS = [
   { id: "",            label: "All time" },
@@ -602,8 +603,15 @@ export default function TransactionsTab(props) {
     // Confidence threshold filter — drops weakly-scored pairs from the modal
     // entirely so the user doesn't have to manually deselect them. 0 = keep all.
     const minConf = Math.max(0, Math.min(1, Number(transferConfidenceThreshold) || 0));
-    if (minConf <= 0) return allPairs;
-    return allPairs.filter(p => (p.confidence ?? 0) >= minConf);
+    const result = minConf <= 0 ? allPairs : allPairs.filter(p => (p.confidence ?? 0) >= minConf);
+    log.info("transfers.scan", {
+      txScanned: rows.length,
+      candidates: allPairs.length,
+      threshold: minConf,
+      kept: result.length,
+      includeDismissed: !!includeDismissed,
+    });
+    return result;
   };
 
   const openTransferDetection = () => {
@@ -624,6 +632,7 @@ export default function TransactionsTab(props) {
     const keep = pairs.filter(p => selected.has(`${p.a.id}|${p.b.id}`));
     if (!keep.length) { setTransferModal(null); return; }
     const pairIds = keep.map(p => ({ aId: p.a.id, bId: p.b.id }));
+    log.info("transfers.commit", { pairs: pairIds.length });
     setTransactions(prev => applyPairs(prev, pairIds));
     setTransferModal(null);
   };
@@ -634,6 +643,7 @@ export default function TransactionsTab(props) {
     const keep = pairs.filter(p => selected.has(`${p.a.id}|${p.b.id}`));
     if (!keep.length) { setTransferModal(null); return; }
     const pairIds = keep.map(p => ({ aId: p.a.id, bId: p.b.id }));
+    log.info("transfers.dismiss", { pairs: pairIds.length });
     setTransactions(prev => applyDismissals(prev, pairIds));
     setTransferModal(null);
   };

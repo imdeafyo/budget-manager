@@ -3,7 +3,7 @@ import { Card, SH } from "../components/ui.jsx";
 import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils/transactions.js";
 import { newRule, compileRule, moveRule, applyRulesToAll } from "../utils/rules.js";
 import { summarizeState, diffSummaries } from "../utils/history.js";
-import { getEvents as logGetEvents, clear as logClear, exportAll as logExportAll } from "../utils/log.js";
+import { getEvents as logGetEvents, clear as logClear, exportAll as logExportAll, default as log } from "../utils/log.js";
 
 /* ── CollapsibleCard ──
    Card with a clickable header that toggles the body open/closed. Persists
@@ -709,6 +709,12 @@ function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionC
     if (!confirm(msg)) return;
     const { transactions: updated, stats } = applyRulesToAll(transactions, enabled);
     setTransactions(updated);
+    log.info("rules.applyAll", {
+      enabledRules: enabled.length,
+      totalRules: rules.length,
+      transactions: transactions.length,
+      matched: stats.matched,
+    });
     setSweepResult({ matched: stats.matched, total: transactions.length });
     setTimeout(() => setSweepResult(null), 6000);
   };

@@ -8,6 +8,7 @@ import {
 import { newId } from "../utils/transactions.js";
 import { applyRulesToTransaction } from "../utils/rules.js";
 import { fmt } from "../utils/calc.js";
+import log from "../utils/log.js";
 
 /* ══════════════════════════ IMPORT MODAL ══════════════════════════
    Four steps:
@@ -87,6 +88,13 @@ export default function ImportModal(props) {
       const sig = headerSignature(headers);
       const match = findProfileByHeaders(importProfiles, sig);
 
+      log.info("import.parse", {
+        fileName: file.name,
+        rows: rows.length,
+        cols: headers.length,
+        matchedProfile: match?.name || null,
+      });
+
       if (match) {
         // Defensive: if the bank changed their export format, the saved
         // dateFormat may no longer parse the samples. Try to auto-redetect.
@@ -130,6 +138,7 @@ export default function ImportModal(props) {
 
       setStep(STEP_MAPPING);
     } catch (e) {
+      log.warn("import.parse.fail", { fileName: file.name, message: String(e?.message || e) });
       setParseError("Couldn't read this file: " + (e?.message || String(e)));
     }
   };
@@ -144,6 +153,12 @@ export default function ImportModal(props) {
     flagged.forEach((r, i) => { if (r.status === "duplicate") initialSkip.add(i); });
     setPreview(flagged);
     setSkipSet(initialSkip);
+    log.info("import.preview", {
+      total: flagged.length,
+      ok: flagged.filter(r => r.status === "ok").length,
+      duplicates: flagged.filter(r => r.status === "duplicate").length,
+      errors: flagged.filter(r => r.status === "error").length,
+    });
     setStep(STEP_PREVIEW);
   };
 
@@ -173,8 +188,16 @@ export default function ImportModal(props) {
       rowsToAdd.push(row);
     });
 
+    log.info("import.commit.start", {
+      kept: rowsToAdd.length,
+      skipped: preview.length - rowsToAdd.length,
+      rulesApplied: !!(transactionRules && transactionRules.length),
+      rulesOverride,
+    });
+
     if (rowsToAdd.length) {
       try { await addTransactions(rowsToAdd); } catch (e) {
+        log.error("import.commit.fail", { message: String(e?.message || e), count: rowsToAdd.length });
         alert("Failed to add transactions: " + (e?.message || String(e)));
         setCommitting(false);
         setStep(STEP_PREVIEW);
@@ -213,6 +236,7 @@ export default function ImportModal(props) {
       }
     }
 
+    log.info("import.commit.done", { added: rowsToAdd.length, batchId: rowsToAdd.length ? batchId : null });
     onClose({ added: rowsToAdd.length, batchId: rowsToAdd.length ? batchId : null });
   };
 
