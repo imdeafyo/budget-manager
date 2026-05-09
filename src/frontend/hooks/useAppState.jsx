@@ -3,6 +3,7 @@ import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PR
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
+import log from "../utils/log.js";
 import { useM } from "../components/ui.jsx";
 
 /* ── Runtime mode. "deploy" uses /api/transactions; "generic" bundles
@@ -73,7 +74,9 @@ export default function useAppState() {
       // When switching away from budget, drop viewingMs.
       const ms = t === "budget" && bSub === "milestones" ? viewingMs : null;
       if (t !== "budget") setViewingMsRaw(null);
-      history.pushState({ tab: t, sub: t === "budget" ? bSub : cSub, ms }, "", buildHash(t, bSub, cSub, ms));
+      const newHash = buildHash(t, bSub, cSub, ms);
+      log.info("route.setTab", { from: location.hash, to: newHash });
+      history.pushState({ tab: t, sub: t === "budget" ? bSub : cSub, ms }, "", newHash);
     }
     skipPush.current = false;
   }, [budgetSubtab, chartsSubtab, viewingMs]);
@@ -83,14 +86,18 @@ export default function useAppState() {
     const ms = sub === "milestones" ? viewingMs : null;
     if (sub !== "milestones") setViewingMsRaw(null);
     if (!skipPush.current) {
-      history.pushState({ tab: "budget", sub, ms }, "", buildHash("budget", sub, chartsSubtab, ms));
+      const newHash = buildHash("budget", sub, chartsSubtab, ms);
+      log.info("route.budgetSub", { from: location.hash, to: newHash });
+      history.pushState({ tab: "budget", sub, ms }, "", newHash);
     }
     skipPush.current = false;
   }, [chartsSubtab, viewingMs]);
   const setChartsSubtab = useCallback((sub) => {
     setChartsSubtabRaw(sub);
     if (!skipPush.current) {
-      history.pushState({ tab: "charts", sub, ms: null }, "", buildHash("charts", budgetSubtab, sub, null));
+      const newHash = buildHash("charts", budgetSubtab, sub, null);
+      log.info("route.chartsSub", { from: location.hash, to: newHash });
+      history.pushState({ tab: "charts", sub, ms: null }, "", newHash);
     }
     skipPush.current = false;
   }, [budgetSubtab]);
@@ -101,7 +108,9 @@ export default function useAppState() {
     if (!skipPush.current) {
       const t = v !== null ? "budget" : tab;
       const bSub = v !== null ? "milestones" : budgetSubtab;
-      history.pushState({ tab: t, sub: t === "budget" ? bSub : chartsSubtab, ms: v }, "", buildHash(t, bSub, chartsSubtab, v));
+      const newHash = buildHash(t, bSub, chartsSubtab, v);
+      log.info("route.viewingMs", { from: location.hash, to: newHash, ms: v });
+      history.pushState({ tab: t, sub: t === "budget" ? bSub : chartsSubtab, ms: v }, "", newHash);
     }
     skipPush.current = false;
   }, [tab, budgetSubtab, chartsSubtab]);
@@ -115,6 +124,7 @@ export default function useAppState() {
     }
     const onPop = (e) => {
       const s = e.state;
+      log.info("route.popstate", { hash: location.hash, hasState: !!s, tab: s?.tab, sub: s?.sub, ms: s?.ms });
       skipPush.current = true;
       if (s && VALID_TABS.includes(s.tab)) {
         setTabRaw(s.tab);
@@ -289,6 +299,23 @@ export default function useAppState() {
   const [dupScanDescriptionMode, setDupScanDescriptionMode] = useState("exact");
   const [dupScanFirstWordCount, setDupScanFirstWordCount] = useState(2);
 
+  /* Diagnostics — controls the in-app ring buffer logger (utils/log.js).
+     `enabled` gates whether log.* calls actually capture. `persist` writes
+     the buffer to localStorage so reloads + crashes preserve recent events.
+     `maxEvents` caps buffer size (1–5000). `minLevel` drops events below
+     the threshold at the source. Settings → Diagnostics exposes all four. */
+  const [diagnostics, setDiagnostics] = useState({
+    enabled: true,
+    persist: true,
+    maxEvents: 500,
+    minLevel: "info",
+  });
+
+  /* Keep utils/log.js in sync with the user's diagnostics settings. Runs on
+     mount with defaults, then on every change. The first call also triggers
+     the localStorage load + beforeunload attach inside log.js. */
+  useEffect(() => { log.configure(diagnostics); }, [diagnostics]);
+
   /* Forecast advanced-mode state. `accounts` is the user-defined account
      list (see defaultForecastAccounts in taxDB.js for shape and defaults).
      `hsaCoverage` is the household-level HSA coverage type used by the
@@ -334,13 +361,24 @@ export default function useAppState() {
   useEffect(() => { (async () => {
     try {
       const res = await fetch("/api/state");
-      if (!res.ok) { console.error("State load failed:", res.status); return; }
+      if (!res.ok) {
+        console.error("State load failed:", res.status);
+        log.error("state.load.fail", { status: res.status });
+        return;
+      }
       const r = await res.json();
       if (r?.state) {
         const d = r.state;
         /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */
         if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; }
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount };
+        log.info("state.load", {
+          source: "api",
+          size: JSON.stringify(d).length,
+          milestoneCount: Array.isArray(d.milestones) ? d.milestones.length : 0,
+          ruleCount: Array.isArray(d.transactionRules) ? d.transactionRules.length : 0,
+          legacySnapshotsField: d.snapshots !== undefined,
+        });
+        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,diagnostics:setDiagnostics };
         /* Skip-undefined: a saved state may have a key set explicitly to
            `undefined` from an earlier serialization quirk. Calling
            `setForecast(undefined)` would wipe the defaults; same risk for
@@ -370,9 +408,10 @@ export default function useAppState() {
       setLoaded(true);
     } catch(e) {
       console.error("State load threw:", e);
+      log.error("state.load.throw", { message: String(e?.message || e) });
     }
   })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,forecast]);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,diagnostics,forecast]);
   /* Auto-save with hash-based no-op guard.
      - Gated on `loaded` (silent-wipe fix from earlier session — don't push
        defaults if the load hasn't completed).
@@ -402,13 +441,23 @@ export default function useAppState() {
         // future skip-comparisons.
         if (lastSavedHashRef.current === null) {
           lastSavedHashRef.current = payload;
+          log.info("state.save.baseline", { size: payload.length });
           return;
         }
         // Subsequent saves: skip if payload identical to last sync.
         if (payload === lastSavedHashRef.current) return;
+        const sizeDelta = payload.length - lastSavedHashRef.current.length;
         const res = await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload });
-        if (res.ok) lastSavedHashRef.current = payload;
-      } catch(e) { /* network errors are recoverable on next change */ }
+        if (res.ok) {
+          lastSavedHashRef.current = payload;
+          log.info("state.save", { size: payload.length, delta: sizeDelta });
+        } else {
+          log.warn("state.save.fail", { status: res.status, size: payload.length });
+        }
+      } catch(e) {
+        log.warn("state.save.throw", { message: String(e?.message || e) });
+        /* network errors are recoverable on next change */
+      }
     }, 600);
     return () => clearTimeout(t);
   }, [st, loaded]);
@@ -895,6 +944,7 @@ export default function useAppState() {
     dupScanAmountTolerance, setDupScanAmountTolerance,
     dupScanDescriptionMode, setDupScanDescriptionMode,
     dupScanFirstWordCount, setDupScanFirstWordCount,
+    diagnostics, setDiagnostics,
     forecast, setForecast,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,

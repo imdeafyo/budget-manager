@@ -223,6 +223,8 @@ export default function App() {
           setDupScanDescriptionMode={S.setDupScanDescriptionMode}
           dupScanFirstWordCount={S.dupScanFirstWordCount}
           setDupScanFirstWordCount={S.setDupScanFirstWordCount}
+          diagnostics={S.diagnostics}
+          setDiagnostics={S.setDiagnostics}
           deleteImportBatch={S.deleteImportBatch}
         />}
       </div>

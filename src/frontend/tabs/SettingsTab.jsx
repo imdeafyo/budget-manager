@@ -3,6 +3,7 @@ import { Card, SH } from "../components/ui.jsx";
 import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils/transactions.js";
 import { newRule, compileRule, moveRule, applyRulesToAll } from "../utils/rules.js";
 import { summarizeState, diffSummaries } from "../utils/history.js";
+import { getEvents as logGetEvents, clear as logClear, exportAll as logExportAll } from "../utils/log.js";
 
 /* ── CollapsibleCard ──
    Card with a clickable header that toggles the body open/closed. Persists
@@ -61,6 +62,8 @@ export default function SettingsTab(props) {
     setDupScanDescriptionMode,
     dupScanFirstWordCount = 2,
     setDupScanFirstWordCount,
+    diagnostics = { enabled: true, persist: true, maxEvents: 500, minLevel: "info" },
+    setDiagnostics,
     deleteImportBatch,
   } = props;
 
@@ -571,6 +574,8 @@ export default function SettingsTab(props) {
       </CollapsibleCard>
 
       <BackupHistoryCard mob={mob} />
+
+      <DiagnosticsCard diagnostics={diagnostics} setDiagnostics={setDiagnostics} />
     </>
   );
 }
@@ -994,6 +999,215 @@ function amountLabel(conv) {
     "separate": "separate debit/credit",
     "type-column": "amount + type column",
   }[conv] || conv;
+}
+
+/* ── DiagnosticsCard ──
+   Settings panel for the in-app ring buffer logger (utils/log.js). Lets
+   the user toggle capture, configure persistence and cap, view recent
+   events, and copy the full buffer to clipboard for pasting into a bug
+   report. Polls log.getEvents() once per second while the card is open
+   so events from elsewhere in the app appear without manual refresh. */
+function DiagnosticsCard({ diagnostics, setDiagnostics }) {
+  const [events, setEvents] = useState([]);
+  const [filterLevel, setFilterLevel] = useState("info");
+  const [expandedIdx, setExpandedIdx] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem("budget-settings-open:diagnostics") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("budget-settings-open:diagnostics", open ? "1" : "0"); } catch {}
+  }, [open]);
+
+  // Poll for events while the card is open. 1s is fast enough that bursts
+  // (e.g. an import) appear smoothly, slow enough to be cheap.
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => setEvents(logGetEvents({ level: filterLevel, limit: 50 }));
+    refresh();
+    const t = setInterval(refresh, 1000);
+    return () => clearInterval(t);
+  }, [open, filterLevel]);
+
+  const update = (patch) => setDiagnostics(prev => ({ ...prev, ...patch }));
+
+  const handleCopy = async () => {
+    try {
+      const json = logExportAll();
+      await navigator.clipboard.writeText(json);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Fallback: if clipboard API blocked, dump to a download.
+      const blob = new Blob([logExportAll()], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `budget-diagnostics-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const handleClear = () => {
+    if (!confirm("Clear all diagnostic events? This cannot be undone.")) return;
+    logClear();
+    setEvents([]);
+  };
+
+  const total = events.length;
+  const summary = `${diagnostics.enabled ? "on" : "off"} · ${total} recent event${total === 1 ? "" : "s"} shown`;
+
+  // Reusable inner: matches the CollapsibleCard pattern in this file but
+  // declared inline so the polling state can live alongside the open state.
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }}>
+        <span style={{ fontSize: 14, color: "var(--tx2, #555)", width: 16, display: "inline-block", textAlign: "center", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▶</span>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 1.5 }}>Diagnostics</div>
+          {!open && <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 2 }}>{summary}</div>}
+        </div>
+      </div>
+      {open && (
+        <div style={{ marginTop: 14 }}>
+          <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+            In-app event log for debugging. Events capture state load/save activity, hash route changes,
+            and errors. Click <b>Copy all</b> when reporting a bug to grab the full buffer for pasting into chat.
+            Logs persist across reloads when persistence is on.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "10px 16px", alignItems: "center", marginBottom: 14, maxWidth: 520 }}>
+            <label style={{ fontSize: 13, color: "var(--tx, #333)", cursor: "pointer" }}>
+              <input type="checkbox" checked={!!diagnostics.enabled}
+                onChange={e => update({ enabled: e.target.checked })}
+                style={{ marginRight: 8 }} />
+              Logging enabled
+            </label>
+            <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>
+              {diagnostics.enabled ? "Capturing events" : "All log calls are no-ops"}
+            </span>
+
+            <label style={{ fontSize: 13, color: "var(--tx, #333)", cursor: "pointer" }}>
+              <input type="checkbox" checked={!!diagnostics.persist}
+                onChange={e => update({ persist: e.target.checked })}
+                style={{ marginRight: 8 }} />
+              Persist across reloads
+            </label>
+            <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>
+              Writes to localStorage (debounced 1s, errors flush immediately)
+            </span>
+
+            <label style={{ fontSize: 13, color: "var(--tx, #333)" }}>
+              Max events
+            </label>
+            <input type="number" min={100} max={5000} step={100}
+              value={diagnostics.maxEvents}
+              onChange={e => {
+                const v = parseInt(e.target.value, 10);
+                if (Number.isFinite(v)) update({ maxEvents: Math.max(100, Math.min(5000, v)) });
+              }}
+              style={{ ...inp(120) }} />
+
+            <label style={{ fontSize: 13, color: "var(--tx, #333)" }}>
+              Min level
+            </label>
+            <select value={diagnostics.minLevel}
+              onChange={e => update({ minLevel: e.target.value })}
+              style={{ ...inp(140) }}>
+              <option value="info">info (all events)</option>
+              <option value="warn">warn (skip info)</option>
+              <option value="error">error (only errors)</option>
+            </select>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+            <button onClick={handleCopy} style={btn("var(--accent, #E8573A)", "#fff")}>
+              📋 Copy all
+            </button>
+            <button onClick={handleClear} style={btn("var(--bg2, #f0f0f0)", "var(--tx, #333)")}>
+              🗑 Clear
+            </button>
+            <span style={{ fontSize: 12, color: "var(--tx3, #888)", marginLeft: 4 }}>
+              Show:
+            </span>
+            <select value={filterLevel} onChange={e => setFilterLevel(e.target.value)}
+              style={{ ...inp(120) }}>
+              <option value="info">All</option>
+              <option value="warn">Warn + Error</option>
+              <option value="error">Error only</option>
+            </select>
+            {copied && <span style={{ fontSize: 12, color: "#2ECC71" }}>Copied to clipboard ✓</span>}
+          </div>
+
+          {events.length === 0 && (
+            <div style={{ fontSize: 13, color: "var(--tx3, #888)", padding: "12px 0" }}>
+              No events captured yet at this filter level. Try interacting with the app, or lower the
+              "Show" filter.
+            </div>
+          )}
+
+          {events.length > 0 && (
+            <div style={{ overflowX: "auto", maxHeight: 360, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 6 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
+                <thead style={{ position: "sticky", top: 0, background: "var(--card-bg, #fff)" }}>
+                  <tr style={{ borderBottom: "2px solid var(--bdr, #ccc)" }}>
+                    <th style={{ ...th, width: 110 }}>Time</th>
+                    <th style={{ ...th, width: 60 }}>Level</th>
+                    <th style={th}>Event</th>
+                    <th style={th}>Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {events.slice().reverse().map((e, i) => {
+                    const idx = events.length - 1 - i;
+                    const isExpanded = expandedIdx === idx;
+                    const dataPreview = e.data == null ? "—"
+                      : typeof e.data === "object" ? JSON.stringify(e.data)
+                      : String(e.data);
+                    const truncated = dataPreview.length > 80 && !isExpanded;
+                    const levelColor = e.level === "error" ? "#E8573A"
+                      : e.level === "warn" ? "#F2A93B"
+                      : "var(--tx3, #888)";
+                    return (
+                      <tr key={`${e.ts}_${idx}`}
+                        onClick={() => setExpandedIdx(isExpanded ? null : idx)}
+                        style={{ borderBottom: "1px solid var(--bdr2, #eee)", cursor: "pointer" }}>
+                        <td style={{ ...td, color: "var(--tx3, #888)" }}>{fmtTimeMs(e.ts)}</td>
+                        <td style={{ ...td, color: levelColor, fontWeight: 600 }}>{e.level}</td>
+                        <td style={{ ...td, color: "var(--tx, #333)" }}>{e.event}</td>
+                        <td style={{ ...td, color: "var(--tx2, #555)", whiteSpace: isExpanded ? "pre-wrap" : "nowrap", maxWidth: isExpanded ? "none" : 360, overflow: "hidden", textOverflow: "ellipsis", wordBreak: isExpanded ? "break-all" : "normal" }}>
+                          {isExpanded && typeof e.data === "object" && e.data != null
+                            ? JSON.stringify(e.data, null, 2)
+                            : truncated ? dataPreview.slice(0, 80) + "…" : dataPreview}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p style={{ fontSize: 11, color: "var(--tx3, #888)", marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+            Showing the most recent {events.length} of up to {diagnostics.maxEvents}. "Copy all" exports
+            the full buffer regardless of filter. Most recent at top.
+          </p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* Format a millisecond timestamp as HH:MM:SS.mmm — compact, monospaced for
+   alignment in the diagnostics table. Ignores date because all events
+   shown are from the current session window. */
+function fmtTimeMs(ts) {
+  try {
+    const d = new Date(ts);
+    const pad = (n, w = 2) => String(n).padStart(w, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+  } catch { return String(ts); }
 }
 
 function formatTimestamp(iso) {
