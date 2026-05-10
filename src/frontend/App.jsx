@@ -1,4 +1,4 @@
-import { useRef, Component } from "react";
+import { useRef, useMemo, Component } from "react";
 import { VisColsCtx } from "./components/ui.jsx";
 import useAppState from "./hooks/useAppState.jsx";
 import CategoriesTab from "./tabs/CategoriesTab.jsx";
@@ -67,6 +67,16 @@ function App() {
   const iconRef = useRef(null);
   const headerRef = useRef(null);
 
+  // Tab badge: count of transactions with no category. Mirrors the in-tab
+  // counter on the Transactions toolbar (`!t.category`) so both readouts
+  // agree. Rows with splits still count here even though splits carry the
+  // allocations — keeping it simple and consistent with what the toolbar
+  // already shows. Hidden when zero.
+  const uncatTabCount = useMemo(
+    () => (S.transactions || []).filter(t => !t.category).length,
+    [S.transactions]
+  );
+
   return (
     <VisColsCtx.Provider value={S.visCols}>
     <div style={{ minHeight: "100vh", background: S.bg, fontFamily: "'DM Sans',sans-serif", color: S.tx }}>
@@ -114,7 +124,15 @@ function App() {
             <button style={S.ts(S.tab === "taxes")} onClick={() => S.setTab("taxes")}>Tax Rates</button>
             <button style={S.ts(S.tab === "settings")} onClick={() => S.setTab("settings")}>Income</button>
             <button style={S.ts(S.tab === "budget")} onClick={() => S.setTab("budget")}>Budget</button>
-            <button style={S.ts(S.tab === "transactions")} onClick={() => S.setTab("transactions")}>Transactions</button>
+            <button style={S.ts(S.tab === "transactions")} onClick={() => S.setTab("transactions")}>
+              Transactions
+              {uncatTabCount > 0 && (
+                <span
+                  title={`${uncatTabCount} uncategorized transaction${uncatTabCount === 1 ? "" : "s"}`}
+                  style={{ marginLeft: 6, padding: "1px 7px", background: "rgba(232, 87, 58, 0.18)", color: "#E8573A", borderRadius: 999, fontSize: 10, fontWeight: 700, verticalAlign: "middle" }}
+                >{uncatTabCount}</span>
+              )}
+            </button>
             <button style={S.ts(S.tab === "charts")} onClick={() => S.setTab("charts")}>Charts</button>
             <button style={S.ts(S.tab === "cats")} onClick={() => S.setTab("cats")}>Categories</button>
             <button style={S.ts(S.tab === "prefs")} onClick={() => S.setTab("prefs")}>Settings</button>
