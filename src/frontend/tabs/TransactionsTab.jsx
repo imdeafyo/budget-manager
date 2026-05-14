@@ -177,6 +177,26 @@ export default function TransactionsTab(props) {
     setDateTo(r.dateTo);
   }, [preset]);
 
+  // A Set of transfer category names so we can style/exclude transfer rows.
+  // Kept as state-derived so changes in Categories tab reflect immediately.
+  // Declared up here (rather than next to its siblings further down) because
+  // outliersMap needs it, and outliersMap needs to exist before visibleRows
+  // can reference it — otherwise the useMemo deps array hits a temporal
+  // dead zone on first render.
+  const transferCatSet = useMemo(() => new Set(transferCats || []), [transferCats]);
+
+  // ── Outlier detection ──
+  // Per-category MAD-based detection across the full transaction set. Memoised
+  // on transactions + transferCatSet so it doesn't recompute on every filter
+  // change (only when the underlying data shifts). The map is keyed by tx.id
+  // for O(1) lookup in row rendering and the visibleRows filter pipeline.
+  // MUST be declared above visibleRows — see comment on transferCatSet.
+  const outliersMap = useMemo(
+    () => detectOutliers(transactions, { transferCatSet }),
+    [transactions, transferCatSet]
+  );
+  const outlierCount = outliersMap.size;
+
   // Sorted + filtered rows
   const visibleRows = useMemo(() => {
     const filtered = applyFilters(transactions, {
@@ -262,20 +282,8 @@ export default function TransactionsTab(props) {
     return [...s].sort();
   }, [cats, savCats, transferCats, incomeCats, transactions]);
 
-  // A Set of transfer category names so we can style/exclude transfer rows.
-  // Kept as state-derived so changes in Categories tab reflect immediately.
-  const transferCatSet = useMemo(() => new Set(transferCats || []), [transferCats]);
-
-  // ── Outlier detection ──
-  // Per-category MAD-based detection across the full transaction set. Memoised
-  // on transactions + transferCatSet so it doesn't recompute on every filter
-  // change (only when the underlying data shifts). The map is keyed by tx.id
-  // for O(1) lookup in row rendering and the visibleRows filter pipeline.
-  const outliersMap = useMemo(
-    () => detectOutliers(transactions, { transferCatSet }),
-    [transactions, transferCatSet]
-  );
-  const outlierCount = outliersMap.size;
+  // A Set of transfer category names so we can style/exclude transfer rows
+  // is declared higher up — see the block above visibleRows.
 
   // Summary stats for the filtered view
   const filteredTotal = useMemo(() => visibleRows.reduce((s, t) => s + Number(t.amount), 0), [visibleRows]);
