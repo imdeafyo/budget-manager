@@ -32,6 +32,33 @@ function CollapsibleCard({ id, title, summary, children, style }) {
   );
 }
 
+/* ── SectionHeader ──
+   A label that visually groups Settings sections beneath it. Not a Card —
+   sits between cards as a heading, with a thin divider rule. Keeps the
+   Settings tab navigable instead of being one long undifferentiated scroll. */
+function SectionHeader({ title, hint, mob }) {
+  return (
+    <div style={{
+      marginTop: 32,
+      marginBottom: 4,
+      paddingLeft: 4,
+      borderBottom: "1px solid var(--bdr2, #e8e8e8)",
+      paddingBottom: 8,
+    }}>
+      <div style={{
+        fontSize: mob ? 14 : 16,
+        fontWeight: 700,
+        fontFamily: "'Fraunces',serif",
+        color: "var(--tx, #333)",
+        letterSpacing: 0.2,
+      }}>{title}</div>
+      {hint && (
+        <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 2 }}>{hint}</div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsTab(props) {
   const {
     mob,
@@ -62,6 +89,8 @@ export default function SettingsTab(props) {
     setDupScanDescriptionMode,
     dupScanFirstWordCount = 2,
     setDupScanFirstWordCount,
+    outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
+    setOutlierSettings,
     diagnostics = { enabled: true, persist: true, maxEvents: 500, minLevel: "info" },
     setDiagnostics,
     deleteImportBatch,
@@ -166,6 +195,8 @@ export default function SettingsTab(props) {
         <h2 style={{ margin: "0 0 8px", fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: mob ? 20 : 26, color: "var(--tx, #333)" }}>Settings</h2>
         <div style={{ fontSize: 12, color: "var(--tx3, #999)" }}>Preferences for transaction handling and display.</div>
       </Card>
+
+      <SectionHeader title="Transactions" hint="How the transactions table looks and behaves." mob={mob} />
 
       <CollapsibleCard
         id="rowcap"
@@ -280,6 +311,8 @@ export default function SettingsTab(props) {
         </div>
       </CollapsibleCard>
 
+      <SectionHeader title="Imports & matching" hint="CSV import behavior, rules, and duplicate scanning." mob={mob} />
+
       <CollapsibleCard
         id="profiles"
         title="Saved import profiles"
@@ -323,116 +356,6 @@ export default function SettingsTab(props) {
           transactions={transactions}
           setTransactions={setTransactions}
         />
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        id="transfers"
-        title="Transfer detection"
-        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"} · min ${Math.round((Number(transferConfidenceThreshold) || 0) * 100)}% confidence${dismissedCount ? ` · ${dismissedCount} dismissed` : ""}`}
-        style={{ marginTop: 16 }}>
-        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
-          Transfers are matching pairs of transactions across different accounts — money you moved between
-          your own accounts, not spending or income. The detector scans for opposing amounts on dates close
-          together and lets you confirm each pair before committing. Tune the tolerances here if your bank
-          posts the two sides of a transfer a few days apart or with small fee differences.
-        </p>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
-          <div>
-            <label style={lbl()}>Amount tolerance</label>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±$</span>
-              <input type="number" min="0" step="0.01" value={transferToleranceAmount}
-                onChange={e => setTransferToleranceAmount(parseFloat(e.target.value) || 0)}
-                style={inp(100)} />
-            </div>
-            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
-              How far apart the two amounts can be before they're no longer a match.
-            </div>
-          </div>
-          <div>
-            <label style={lbl()}>Date tolerance</label>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±</span>
-              <input type="number" min="0" step="1" value={transferToleranceDays}
-                onChange={e => setTransferToleranceDays(parseInt(e.target.value, 10) || 0)}
-                style={inp(70)} />
-              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>days</span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
-              How many days apart the two sides of a transfer can post.
-            </div>
-          </div>
-          {/* Confidence threshold — pairs below this score are dropped from the
-              detection modal entirely. The modal already shows scores per pair;
-              this just lets you say "don't even bother me with the weak ones." */}
-          <div>
-            <label style={lbl()}>Min confidence</label>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="number" min="0" max="100" step="5"
-                value={Math.round((Number(transferConfidenceThreshold) || 0) * 100)}
-                onChange={e => {
-                  const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
-                  if (setTransferConfidenceThreshold) setTransferConfidenceThreshold(pct / 100);
-                }}
-                style={inp(70)} />
-              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>%</span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
-              Each candidate gets a 0–100% score combining how close the amounts and
-              dates are (cross-account pairs score slightly higher than same-account).
-              Pairs below this threshold are hidden from the detection modal. 0% shows
-              every candidate; raise it if your detection results are noisy.
-            </div>
-          </div>
-        </div>
-        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
-          Run detection from the Transactions tab — click <strong>🔀 Detect transfers</strong> in the toolbar.
-          Rows you confirm are flagged (and excluded from spending totals). Rows you dismiss are remembered
-          so they won't resurface as candidates on future runs.
-        </div>
-
-        {/* Dismissed-row reset — escape hatch when you accidentally dismiss or unpair. */}
-        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                Dismissed rows
-              </div>
-              <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 4, lineHeight: 1.5 }}>
-                {dismissedCount === 0
-                  ? "No rows are currently dismissed."
-                  : `${dismissedCount} row${dismissedCount === 1 ? " is" : "s are"} excluded from detection because you dismissed or unpaired them. Use this button if you unpaired something by mistake.`}
-              </div>
-            </div>
-            <button onClick={resetAllDismissed} disabled={dismissedCount === 0}
-              style={{ ...btn("var(--card-bg, #fff)", dismissedCount === 0 ? "var(--tx3, #aaa)" : "#556FB5"), border: `1px solid ${dismissedCount === 0 ? "var(--bdr, #ccc)" : "#556FB5"}`, opacity: dismissedCount === 0 ? 0.6 : 1, cursor: dismissedCount === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
-              ↺ Reset all dismissed
-            </button>
-          </div>
-        </div>
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        id="refunds"
-        title="Refund handling"
-        summary={treatRefundsAsNetting ? "Refunds reduce category spend" : "Refunds treated as income"}
-        style={{ marginTop: 16 }}>
-        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
-          A refund is a positive-amount transaction sitting in an expense category — for example, a $40 credit
-          from Amazon in your "Shopping" category. With netting on (the default), that $40 buys back $40 of
-          your Shopping budget. With it off, the refund is treated as household income instead. Netting
-          matches how most people mentally account for returns.
-        </p>
-        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--tx, #333)" }}>
-          <input type="checkbox" checked={treatRefundsAsNetting}
-            onChange={e => setTreatRefundsAsNetting(e.target.checked)} />
-          Treat positive amounts in expense categories as refunds (reduce the category's spend)
-        </label>
-        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
-          This affects how the budget-vs-actual comparison (Phase 6) calculates per-category spending.
-          It doesn't change the raw transaction rows — they're still stored with their original amounts and
-          categories. Rows marked as transfers are always excluded from refund calculations.
-        </div>
       </CollapsibleCard>
 
       <CollapsibleCard
@@ -572,6 +495,181 @@ export default function SettingsTab(props) {
           </div>
         )}
       </CollapsibleCard>
+
+
+      <SectionHeader title="Detection" hint="How transactions are matched up, flagged, and netted." mob={mob} />
+
+      <CollapsibleCard
+        id="transfers"
+        title="Transfer detection"
+        summary={`±$${Number(transferToleranceAmount).toFixed(2)} · ±${transferToleranceDays} day${transferToleranceDays === 1 ? "" : "s"} · min ${Math.round((Number(transferConfidenceThreshold) || 0) * 100)}% confidence${dismissedCount ? ` · ${dismissedCount} dismissed` : ""}`}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          Transfers are matching pairs of transactions across different accounts — money you moved between
+          your own accounts, not spending or income. The detector scans for opposing amounts on dates close
+          together and lets you confirm each pair before committing. Tune the tolerances here if your bank
+          posts the two sides of a transfer a few days apart or with small fee differences.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
+          <div>
+            <label style={lbl()}>Amount tolerance</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±$</span>
+              <input type="number" min="0" step="0.01" value={transferToleranceAmount}
+                onChange={e => setTransferToleranceAmount(parseFloat(e.target.value) || 0)}
+                style={inp(100)} />
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              How far apart the two amounts can be before they're no longer a match.
+            </div>
+          </div>
+          <div>
+            <label style={lbl()}>Date tolerance</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>±</span>
+              <input type="number" min="0" step="1" value={transferToleranceDays}
+                onChange={e => setTransferToleranceDays(parseInt(e.target.value, 10) || 0)}
+                style={inp(70)} />
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>days</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              How many days apart the two sides of a transfer can post.
+            </div>
+          </div>
+          {/* Confidence threshold — pairs below this score are dropped from the
+              detection modal entirely. The modal already shows scores per pair;
+              this just lets you say "don't even bother me with the weak ones." */}
+          <div>
+            <label style={lbl()}>Min confidence</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="number" min="0" max="100" step="5"
+                value={Math.round((Number(transferConfidenceThreshold) || 0) * 100)}
+                onChange={e => {
+                  const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+                  if (setTransferConfidenceThreshold) setTransferConfidenceThreshold(pct / 100);
+                }}
+                style={inp(70)} />
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>%</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4 }}>
+              Each candidate gets a 0–100% score combining how close the amounts and
+              dates are (cross-account pairs score slightly higher than same-account).
+              Pairs below this threshold are hidden from the detection modal. 0% shows
+              every candidate; raise it if your detection results are noisy.
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          Run detection from the Transactions tab — click <strong>🔀 Detect transfers</strong> in the toolbar.
+          Rows you confirm are flagged (and excluded from spending totals). Rows you dismiss are remembered
+          so they won't resurface as candidates on future runs.
+        </div>
+
+        {/* Dismissed-row reset — escape hatch when you accidentally dismiss or unpair. */}
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Dismissed rows
+              </div>
+              <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 4, lineHeight: 1.5 }}>
+                {dismissedCount === 0
+                  ? "No rows are currently dismissed."
+                  : `${dismissedCount} row${dismissedCount === 1 ? " is" : "s are"} excluded from detection because you dismissed or unpaired them. Use this button if you unpaired something by mistake.`}
+              </div>
+            </div>
+            <button onClick={resetAllDismissed} disabled={dismissedCount === 0}
+              style={{ ...btn("var(--card-bg, #fff)", dismissedCount === 0 ? "var(--tx3, #aaa)" : "#556FB5"), border: `1px solid ${dismissedCount === 0 ? "var(--bdr, #ccc)" : "#556FB5"}`, opacity: dismissedCount === 0 ? 0.6 : 1, cursor: dismissedCount === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+              ↺ Reset all dismissed
+            </button>
+          </div>
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="refunds"
+        title="Refund handling"
+        summary={treatRefundsAsNetting ? "Refunds reduce category spend" : "Refunds treated as income"}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          A refund is a positive-amount transaction sitting in an expense category — for example, a $40 credit
+          from Amazon in your "Shopping" category. With netting on (the default), that $40 buys back $40 of
+          your Shopping budget. With it off, the refund is treated as household income instead. Netting
+          matches how most people mentally account for returns.
+        </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--tx, #333)" }}>
+          <input type="checkbox" checked={treatRefundsAsNetting}
+            onChange={e => setTreatRefundsAsNetting(e.target.checked)} />
+          Treat positive amounts in expense categories as refunds (reduce the category's spend)
+        </label>
+        <div style={{ marginTop: 12, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          This affects how the budget-vs-actual comparison (Phase 6) calculates per-category spending.
+          It doesn't change the raw transaction rows — they're still stored with their original amounts and
+          categories. Rows marked as transfers are always excluded from refund calculations.
+        </div>
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="outliers"
+        title="Outlier detection"
+        summary={outlierSettings.enabled
+          ? `${outlierSettings.sensitivity} sensitivity · floor $${Number(outlierSettings.minAbsoluteDelta) || 0}`
+          : "Disabled"}
+        style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+          Flags transactions whose amount is unusually large for their category. Useful for spotting a single
+          weird charge in a sea of normal ones — a $650 Costco run amid $90 grocery shops, say. The badge on
+          the Transactions toolbar (⚠) shows the count and toggles a filter when clicked. Detection uses the
+          per-category median and median absolute deviation (MAD), so a few outliers can't mask themselves
+          the way they would with mean + standard deviation.
+        </p>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--tx, #333)", marginBottom: 14 }}>
+          <input type="checkbox" checked={outlierSettings.enabled !== false}
+            onChange={e => setOutlierSettings && setOutlierSettings({ ...outlierSettings, enabled: e.target.checked })} />
+          Show outlier badge and inline markers on the Transactions tab
+        </label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-start" }}>
+          <div>
+            <label style={lbl()}>Sensitivity</label>
+            <select value={outlierSettings.sensitivity || "normal"}
+              onChange={e => setOutlierSettings && setOutlierSettings({ ...outlierSettings, sensitivity: e.target.value })}
+              disabled={outlierSettings.enabled === false}
+              style={{ padding: "4px 10px", fontSize: 13, borderRadius: 6, border: "1px solid var(--input-border, #e0e0e0)", background: "var(--input-bg, #fafafa)", color: "var(--input-color, #333)", fontFamily: "'DM Sans',sans-serif", cursor: outlierSettings.enabled === false ? "not-allowed" : "pointer" }}>
+              <option value="low">Low — only the wildest</option>
+              <option value="normal">Normal (default)</option>
+              <option value="high">High — catch more</option>
+            </select>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4, maxWidth: 280, lineHeight: 1.5 }}>
+              How statistically extreme a value has to be (relative to its category) before it flags.
+              Higher catches more borderline cases.
+            </div>
+          </div>
+          <div>
+            <label style={lbl()}>Dollar floor</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>$</span>
+              <input type="number" min="0" step="10"
+                value={outlierSettings.minAbsoluteDelta ?? 50}
+                onChange={e => setOutlierSettings && setOutlierSettings({ ...outlierSettings, minAbsoluteDelta: Math.max(0, parseFloat(e.target.value) || 0) })}
+                disabled={outlierSettings.enabled === false}
+                style={inp(90)} />
+              <span style={{ fontSize: 13, color: "var(--tx3, #888)" }}>over median</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--tx3, #999)", marginTop: 4, maxWidth: 280, lineHeight: 1.5 }}>
+              A transaction has to be at least this many dollars above its category's typical amount,
+              regardless of sensitivity. Stops a $120 grocery run from flagging on an $80 median.
+              Set to 0 for pure statistical detection.
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: 14, fontSize: 12, color: "var(--tx3, #888)", lineHeight: 1.5 }}>
+          Categories with fewer than 5 transactions are skipped (no meaningful baseline). Transfers and
+          split-parent rows are always excluded. Refunds (positive amounts in mostly-expense categories)
+          are excluded from both the baseline and from being flagged themselves.
+        </div>
+      </CollapsibleCard>
+
+      <SectionHeader title="System" hint="Backups, diagnostics, and other plumbing." mob={mob} />
 
       <BackupHistoryCard mob={mob} />
 

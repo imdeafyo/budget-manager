@@ -299,6 +299,19 @@ export default function useAppState() {
   const [dupScanDescriptionMode, setDupScanDescriptionMode] = useState("exact");
   const [dupScanFirstWordCount, setDupScanFirstWordCount] = useState(2);
 
+  /* Outlier detection settings. `enabled` is the master switch (shows the ⚠
+     badge + filter on the Transactions toolbar). `sensitivity` maps to the
+     statistical k via kFromSensitivity in utils/outliers.js. `minAbsoluteDelta`
+     is the dollar floor — a transaction must exceed its category median by
+     at least this many dollars to flag, which kills false positives in
+     low-dollar categories (a $120 grocery on an $80 median is statistically
+     extreme but not actionable). */
+  const [outlierSettings, setOutlierSettings] = useState({
+    enabled: true,
+    sensitivity: "normal",
+    minAbsoluteDelta: 50,
+  });
+
   /* Diagnostics — controls the in-app ring buffer logger (utils/log.js).
      `enabled` gates whether log.* calls actually capture. `persist` writes
      the buffer to localStorage so reloads + crashes preserve recent events.
@@ -378,7 +391,7 @@ export default function useAppState() {
           ruleCount: Array.isArray(d.transactionRules) ? d.transactionRules.length : 0,
           legacySnapshotsField: d.snapshots !== undefined,
         });
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,diagnostics:setDiagnostics };
+        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,outlierSettings:setOutlierSettings,diagnostics:setDiagnostics };
         /* Skip-undefined: a saved state may have a key set explicitly to
            `undefined` from an earlier serialization quirk. Calling
            `setForecast(undefined)` would wipe the defaults; same risk for
@@ -411,7 +424,7 @@ export default function useAppState() {
       log.error("state.load.throw", { message: String(e?.message || e) });
     }
   })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,diagnostics,forecast]);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast]);
   /* Auto-save with hash-based no-op guard.
      - Gated on `loaded` (silent-wipe fix from earlier session — don't push
        defaults if the load hasn't completed).
@@ -976,6 +989,7 @@ export default function useAppState() {
     dupScanAmountTolerance, setDupScanAmountTolerance,
     dupScanDescriptionMode, setDupScanDescriptionMode,
     dupScanFirstWordCount, setDupScanFirstWordCount,
+    outlierSettings, setOutlierSettings,
     diagnostics, setDiagnostics,
     forecast, setForecast,
     txLoaded,

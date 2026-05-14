@@ -243,6 +243,7 @@ function App() {
           dupScanAmountTolerance={S.dupScanAmountTolerance}
           dupScanDescriptionMode={S.dupScanDescriptionMode}
           dupScanFirstWordCount={S.dupScanFirstWordCount}
+          outlierSettings={S.outlierSettings}
           defaultTxPageSize={S.defaultTxPageSize}
           txLoaded={S.txLoaded}
         />}
@@ -286,6 +287,8 @@ function App() {
           setDupScanDescriptionMode={S.setDupScanDescriptionMode}
           dupScanFirstWordCount={S.dupScanFirstWordCount}
           setDupScanFirstWordCount={S.setDupScanFirstWordCount}
+          outlierSettings={S.outlierSettings}
+          setOutlierSettings={S.setOutlierSettings}
           diagnostics={S.diagnostics}
           setDiagnostics={S.setDiagnostics}
           deleteImportBatch={S.deleteImportBatch}

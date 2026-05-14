@@ -9,10 +9,14 @@
    - MAD is robust: a few extreme values don't move the median or the
      median absolute deviation around it.
 
-   Threshold: |amount| > median + k * MAD (k defaults to 3.5).
+   Threshold: |amount| > max(median + k * MAD, median + minAbsoluteDelta).
    This is a one-sided check on magnitude — we only flag transactions that
    are larger than typical, not smaller. A $5 grocery run isn't notable;
    a $500 one is.
+
+   The absolute floor (minAbsoluteDelta, default $50) prevents noise in
+   low-dollar categories: a $120 grocery run might be statistically extreme
+   if the median is $80, but $40 above median isn't actionable.
 
    Edge cases handled here:
    - Categories with fewer than `minSampleSize` transactions are skipped
@@ -52,25 +56,53 @@ export function mad(values, med) {
   return median(deviations);
 }
 
+/* Sensitivity → k mapping. The user-facing dial is a three-level choice
+   (Low / Normal / High) rather than a raw number, because "k" is meaningless
+   to most people. Higher sensitivity = lower k = flag more transactions.
+   Numbers chosen so Normal matches the prior hardcoded default. */
+export const SENSITIVITY_K = {
+  low: 5.0,     // catches only the wildest outliers
+  normal: 3.5,  // sensible default (matches old behavior)
+  high: 2.5,    // catches more borderline cases
+};
+
+export function kFromSensitivity(sensitivity) {
+  return SENSITIVITY_K[sensitivity] ?? SENSITIVITY_K.normal;
+}
+
 const DEFAULT_OPTS = {
   k: 3.5,
   minSampleSize: 5,
-  madFloorRatio: 0.05, // when MAD = 0, fall back to 5% of the median
+  madFloorRatio: 0.05,   // when MAD = 0, fall back to 5% of the median
+  // Absolute floor: a transaction must exceed median by at LEAST this many
+  // dollars to be flagged, regardless of how many MADs out it is. Defaults
+  // to $50 — keeps the algorithm from getting noisy in low-dollar
+  // categories where a $120 grocery run technically clears the statistical
+  // bar but doesn't actually warrant attention.
+  minAbsoluteDelta: 50,
 };
 
 /* Detect outliers across a transaction array.
 
    Options:
    - k:                threshold multiplier on MAD. Default 3.5.
+                       Prefer setting via `sensitivity` for user-facing UI.
+   - sensitivity:      "low" | "normal" | "high" — convenience alternative to
+                       `k`. Takes precedence over `k` if provided.
    - minSampleSize:    skip categories with fewer than N transactions. Default 5.
    - madFloorRatio:    when MAD = 0, use this fraction of the median as the
                        MAD fallback. Default 0.05 (5%).
+   - minAbsoluteDelta: absolute-dollar floor — txn must exceed median by at
+                       least this many dollars to flag. Default 50.
+                       Set to 0 to use pure statistical detection.
    - transferCatSet:   Set<string> of category names to skip entirely.
 
    Returns: Map<txId, { score, median, mad, threshold, amount, sampleSize, category }>
 */
 export function detectOutliers(transactions, opts = {}) {
-  const { k, minSampleSize, madFloorRatio } = { ...DEFAULT_OPTS, ...opts };
+  const merged = { ...DEFAULT_OPTS, ...opts };
+  if (opts.sensitivity) merged.k = kFromSensitivity(opts.sensitivity);
+  const { k, minSampleSize, madFloorRatio, minAbsoluteDelta } = merged;
   const transferCatSet = opts.transferCatSet instanceof Set
     ? opts.transferCatSet
     : new Set(opts.transferCatSet || []);
@@ -122,7 +154,14 @@ export function detectOutliers(transactions, opts = {}) {
     // No signal at all — both centre and spread are zero.
     if (med === 0 && madValue === 0) continue;
 
-    const threshold = med + k * madValue;
+    const statThreshold = med + k * madValue;
+    // Apply absolute floor: even if a value is statistically extreme, don't
+    // flag it unless it's at least `minAbsoluteDelta` above the median in
+    // raw dollars. This is what keeps a $120 grocery transaction from being
+    // flagged when the typical grocery run is $80 — yes, it's MADs out, but
+    // $40 over isn't actionable.
+    const absFloorThreshold = med + (minAbsoluteDelta || 0);
+    const threshold = Math.max(statThreshold, absFloorThreshold);
 
     for (const r of baseline) {
       if (r.abs > threshold) {

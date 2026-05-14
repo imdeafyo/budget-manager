@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectOutliers, filterOutliers, median, mad } from "./outliers.js";
+import { detectOutliers, filterOutliers, median, mad, kFromSensitivity, SENSITIVITY_K } from "./outliers.js";
 
 /* Helper: build a transaction with sensible defaults. */
 const tx = (id, category, amount, extra = {}) => ({
@@ -228,7 +228,9 @@ describe("detectOutliers", () => {
         tx("c", "Sub", -10), tx("d", "Sub", -10),
         tx("e", "Sub", -10), tx("f", "Sub", -50),
       ];
-      const map = detectOutliers(txs);
+      // minAbsoluteDelta: 0 to isolate MAD-fallback behavior from the
+      // separate absolute-dollar floor that protects low-value categories.
+      const map = detectOutliers(txs, { minAbsoluteDelta: 0 });
       expect(map.has("f")).toBe(true);
     });
 
@@ -254,7 +256,7 @@ describe("detectOutliers", () => {
         tx("c", "Sub", -10), tx("d", "Sub", -10),
         tx("e", "Sub", -10), tx("f", "Sub", -28),
       ];
-      const result = detectOutliers(txs, { madFloorRatio: 0.5 });
+      const result = detectOutliers(txs, { madFloorRatio: 0.5, minAbsoluteDelta: 0 });
       expect(result.has("f")).toBe(true);
     });
 
@@ -288,7 +290,10 @@ describe("detectOutliers", () => {
         tx("r3", "Rent", -2000), tx("r4", "Rent", -2000),
         tx("r5", "Rent", -2000),
       ];
-      const map = detectOutliers(txs);
+      // minAbsoluteDelta: 0 — this test is about per-category isolation,
+      // not the absolute floor. With the default $50 floor, the $50 coffee
+      // (median ~$5) is $45 over median, which wouldn't clear it.
+      const map = detectOutliers(txs, { minAbsoluteDelta: 0 });
       expect(map.has("c_big")).toBe(true);
       // Rent is consistent — no outliers
       expect(map.has("r1")).toBe(false);
@@ -397,6 +402,127 @@ describe("detectOutliers", () => {
       ];
       const map = detectOutliers(txs);
       expect(map.has("costco")).toBe(true);
+    });
+  });
+
+  describe("sensitivity preset", () => {
+    it("kFromSensitivity returns the expected k for each level", () => {
+      expect(kFromSensitivity("low")).toBe(SENSITIVITY_K.low);
+      expect(kFromSensitivity("normal")).toBe(SENSITIVITY_K.normal);
+      expect(kFromSensitivity("high")).toBe(SENSITIVITY_K.high);
+    });
+
+    it("falls back to normal for unknown values", () => {
+      expect(kFromSensitivity("wat")).toBe(SENSITIVITY_K.normal);
+      expect(kFromSensitivity(undefined)).toBe(SENSITIVITY_K.normal);
+      expect(kFromSensitivity(null)).toBe(SENSITIVITY_K.normal);
+    });
+
+    it("low < normal < high in catch-count (lower k flags more)", () => {
+      expect(SENSITIVITY_K.high).toBeLessThan(SENSITIVITY_K.normal);
+      expect(SENSITIVITY_K.normal).toBeLessThan(SENSITIVITY_K.low);
+    });
+
+    it("sensitivity option takes precedence over k", () => {
+      // Set k=10 (very strict) but sensitivity=high (k=2.5) — sensitivity wins.
+      // Build a category where the spike clears k=2.5 but not k=10.
+      // Median 100, MAD ~5 → high threshold = 100 + 2.5*5 = 112.5
+      // Strict (k=10) threshold = 100 + 10*5 = 150. A 130 spike flags under
+      // high, not under strict.
+      const txs = [
+        tx("a", "X", -100), tx("b", "X", -100), tx("c", "X", -105),
+        tx("d", "X", -95),  tx("e", "X", -100), tx("f", "X", -130),
+      ];
+      const result = detectOutliers(txs, { sensitivity: "high", k: 10, minAbsoluteDelta: 0 });
+      expect(result.has("f")).toBe(true);
+    });
+
+    it("low sensitivity ignores borderline cases that normal would flag", () => {
+      // Baseline: 10 values at 100, MAD will be 0 → MAD floor kicks in:
+      // madValue = 100 * 0.05 = 5.
+      // Normal (k=3.5) → threshold 100 + 3.5*5 = 117.5
+      // Low    (k=5.0) → threshold 100 + 5.0*5 = 125
+      // A value of 120 flags under normal but not under low.
+      const txs = [
+        tx("a", "X", -100), tx("b", "X", -100), tx("c", "X", -100),
+        tx("d", "X", -100), tx("e", "X", -100), tx("f", "X", -120),
+      ];
+      const normal = detectOutliers(txs, { sensitivity: "normal", minAbsoluteDelta: 0 });
+      const low = detectOutliers(txs, { sensitivity: "low", minAbsoluteDelta: 0 });
+      expect(normal.has("f")).toBe(true);
+      expect(low.has("f")).toBe(false);
+    });
+  });
+
+  describe("minAbsoluteDelta (absolute floor)", () => {
+    it("does not flag a $120 grocery run when median is $80 (default $50 floor)", () => {
+      // The exact false-positive case that motivated the floor. Median $80,
+      // very tight spread, $120 is statistically MADs-out but only $40 over.
+      const txs = [
+        tx("g1", "Groceries", -80), tx("g2", "Groceries", -82),
+        tx("g3", "Groceries", -78), tx("g4", "Groceries", -81),
+        tx("g5", "Groceries", -79), tx("g6", "Groceries", -120),
+      ];
+      const map = detectOutliers(txs);
+      expect(map.has("g6")).toBe(false);
+    });
+
+    it("flags a $200 grocery run with the same baseline (clearly over $50)", () => {
+      const txs = [
+        tx("g1", "Groceries", -80), tx("g2", "Groceries", -82),
+        tx("g3", "Groceries", -78), tx("g4", "Groceries", -81),
+        tx("g5", "Groceries", -79), tx("g6", "Groceries", -200),
+      ];
+      const map = detectOutliers(txs);
+      expect(map.has("g6")).toBe(true);
+    });
+
+    it("custom minAbsoluteDelta of 100 suppresses a $150 spike on $80 baseline", () => {
+      const txs = [
+        tx("g1", "Groceries", -80), tx("g2", "Groceries", -82),
+        tx("g3", "Groceries", -78), tx("g4", "Groceries", -81),
+        tx("g5", "Groceries", -79), tx("g6", "Groceries", -150),
+      ];
+      const map = detectOutliers(txs, { minAbsoluteDelta: 100 });
+      expect(map.has("g6")).toBe(false);
+    });
+
+    it("minAbsoluteDelta of 0 disables the floor (pure stats)", () => {
+      // Same fixture as the suppressed case above, but with floor off.
+      const txs = [
+        tx("g1", "Groceries", -80), tx("g2", "Groceries", -82),
+        tx("g3", "Groceries", -78), tx("g4", "Groceries", -81),
+        tx("g5", "Groceries", -79), tx("g6", "Groceries", -120),
+      ];
+      const map = detectOutliers(txs, { minAbsoluteDelta: 0 });
+      expect(map.has("g6")).toBe(true);
+    });
+
+    it("floor does not interfere with high-magnitude categories", () => {
+      // Rent: median $2000, spike to $3500. Statistically out, $1500 over —
+      // floor of $50 is irrelevant.
+      const txs = [
+        tx("r1", "Rent", -2000), tx("r2", "Rent", -2000),
+        tx("r3", "Rent", -2000), tx("r4", "Rent", -2000),
+        tx("r5", "Rent", -2000), tx("r6", "Rent", -3500),
+      ];
+      const map = detectOutliers(txs);
+      expect(map.has("r6")).toBe(true);
+    });
+
+    it("threshold metadata reflects whichever floor is binding", () => {
+      // Tight grocery baseline ($80 median, very small MAD). Statistical
+      // threshold << median + 50, so the absolute floor controls. The
+      // recorded threshold should equal median + 50 = 130.
+      const txs = [
+        tx("g1", "Groceries", -80), tx("g2", "Groceries", -80),
+        tx("g3", "Groceries", -80), tx("g4", "Groceries", -80),
+        tx("g5", "Groceries", -80), tx("g6", "Groceries", -200),
+      ];
+      const map = detectOutliers(txs);
+      const info = map.get("g6");
+      expect(info).toBeDefined();
+      expect(info.threshold).toBe(130);
     });
   });
 });

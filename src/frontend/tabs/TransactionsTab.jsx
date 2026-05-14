@@ -56,6 +56,7 @@ export default function TransactionsTab(props) {
     dupScanAmountTolerance = 0.01,
     dupScanDescriptionMode = "exact",
     dupScanFirstWordCount = 2,
+    outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
     txLoaded,
   } = props;
 
@@ -187,13 +188,22 @@ export default function TransactionsTab(props) {
 
   // ── Outlier detection ──
   // Per-category MAD-based detection across the full transaction set. Memoised
-  // on transactions + transferCatSet so it doesn't recompute on every filter
-  // change (only when the underlying data shifts). The map is keyed by tx.id
+  // on transactions + transferCatSet + outlierSettings so it recomputes when
+  // the user adjusts sensitivity/floor in Settings. The map is keyed by tx.id
   // for O(1) lookup in row rendering and the visibleRows filter pipeline.
+  // When `enabled` is false the map is empty (no badge, no inline markers,
+  // no filter), but we still construct the memo so dependent code paths
+  // don't have to guard on undefined.
   // MUST be declared above visibleRows — see comment on transferCatSet.
   const outliersMap = useMemo(
-    () => detectOutliers(transactions, { transferCatSet }),
-    [transactions, transferCatSet]
+    () => outlierSettings.enabled
+      ? detectOutliers(transactions, {
+          transferCatSet,
+          sensitivity: outlierSettings.sensitivity,
+          minAbsoluteDelta: outlierSettings.minAbsoluteDelta,
+        })
+      : new Map(),
+    [transactions, transferCatSet, outlierSettings.enabled, outlierSettings.sensitivity, outlierSettings.minAbsoluteDelta]
   );
   const outlierCount = outliersMap.size;
 
