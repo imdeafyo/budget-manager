@@ -22,6 +22,7 @@ import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/b
 import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
 import { scanForDuplicates } from "../utils/duplicateScan.js";
+import { detectOutliers } from "../utils/outliers.js";
 import ImportModal from "../components/ImportModal.jsx";
 import log from "../utils/log.js";
 
@@ -75,6 +76,12 @@ export default function TransactionsTab(props) {
   const [acctSel, setAcctSel] = useState([]);
   const [amtMin, setAmtMin] = useState("");
   const [amtMax, setAmtMax] = useState("");
+  // Outliers-only filter — when on, the table is narrowed to transactions
+  // flagged by detectOutliers(). Toggled from the badge in the toolbar; the
+  // map itself is computed once from the full transaction set (not filtered)
+  // so the baseline reflects "what's normal for this category" globally
+  // rather than recomputing inside an already-narrowed view.
+  const [outliersOnly, setOutliersOnly] = useState(false);
   const [sortField, setSortField] = useState("date");
   const [sortDir, setSortDir] = useState("desc");
   const [selected, setSelected] = useState(new Set());
@@ -179,11 +186,14 @@ export default function TransactionsTab(props) {
       amountMin: amtMin !== "" ? Number(amtMin) : undefined,
       amountMax: amtMax !== "" ? Number(amtMax) : undefined,
     });
-    return sortTransactions(filtered, sortField, sortDir);
-  }, [transactions, dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
+    const narrowed = outliersOnly
+      ? filtered.filter(t => outliersMap.has(t.id))
+      : filtered;
+    return sortTransactions(narrowed, sortField, sortDir);
+  }, [transactions, dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir, outliersOnly, outliersMap]);
 
   // Reset page on filter changes
-  useEffect(() => { setPage(0); }, [dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir]);
+  useEffect(() => { setPage(0); }, [dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir, outliersOnly]);
 
   const pageRows = useMemo(() => {
     if (pageSize === Infinity) return visibleRows;
@@ -255,6 +265,17 @@ export default function TransactionsTab(props) {
   // A Set of transfer category names so we can style/exclude transfer rows.
   // Kept as state-derived so changes in Categories tab reflect immediately.
   const transferCatSet = useMemo(() => new Set(transferCats || []), [transferCats]);
+
+  // ── Outlier detection ──
+  // Per-category MAD-based detection across the full transaction set. Memoised
+  // on transactions + transferCatSet so it doesn't recompute on every filter
+  // change (only when the underlying data shifts). The map is keyed by tx.id
+  // for O(1) lookup in row rendering and the visibleRows filter pipeline.
+  const outliersMap = useMemo(
+    () => detectOutliers(transactions, { transferCatSet }),
+    [transactions, transferCatSet]
+  );
+  const outlierCount = outliersMap.size;
 
   // Summary stats for the filtered view
   const filteredTotal = useMemo(() => visibleRows.reduce((s, t) => s + Number(t.amount), 0), [visibleRows]);
@@ -414,6 +435,7 @@ export default function TransactionsTab(props) {
   const clearFilters = () => {
     setPreset(""); setDateFrom(""); setDateTo(""); setSearch("");
     setCatSel([]); setAcctSel([]); setAmtMin(""); setAmtMax("");
+    setOutliersOnly(false);
     // The chart's per-line category narrow is part of the visible filter
     // surface even though it lives next to the chart — wipe it too so the
     // page genuinely "clears."
@@ -748,13 +770,32 @@ export default function TransactionsTab(props) {
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
           <div>
             <h2 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: mob ? 20 : 26, color: "var(--tx, #333)" }}>Transactions</h2>
-            {uncategorizedCount > 0 && (
+            {(uncategorizedCount > 0 || outlierCount > 0) && (
               <div style={{ fontSize: 12, color: "var(--tx3, #999)", marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <span style={{ padding: "2px 8px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 10, fontWeight: 600 }}>{uncategorizedCount} uncategorized</span>
-                {compare?.uncategorized && (
+                {uncategorizedCount > 0 && (
+                  <span style={{ padding: "2px 8px", background: "rgba(232, 87, 58, 0.12)", color: "#E8573A", borderRadius: 10, fontWeight: 600 }}>{uncategorizedCount} uncategorized</span>
+                )}
+                {uncategorizedCount > 0 && compare?.uncategorized && (
                   <span title="Uncategorized transactions falling inside the selected period"
                     style={{ padding: "2px 8px", background: "rgba(242, 169, 59, 0.15)", color: "#B4791F", borderRadius: 10, fontWeight: 600 }}>
                     {compare.uncategorized.count} in period · {fmt(compare.uncategorized.actual)}
+                  </span>
+                )}
+                {outlierCount > 0 && (
+                  <span onClick={() => setOutliersOnly(v => !v)}
+                    title={outliersOnly
+                      ? "Showing only outlier transactions — click to clear the filter"
+                      : "Click to filter the table to outliers only. Outliers are transactions whose amount is unusually large for their category (per-category median + MAD)."}
+                    style={{
+                      padding: "2px 8px",
+                      background: outliersOnly ? "#F2A93B" : "rgba(242, 169, 59, 0.15)",
+                      color: outliersOnly ? "#fff" : "#B4791F",
+                      borderRadius: 10,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      userSelect: "none",
+                    }}>
+                    ⚠ {outlierCount} {outlierCount === 1 ? "outlier" : "outliers"}{outliersOnly ? " · filtering" : ""}
                   </span>
                 )}
               </div>
@@ -855,7 +896,7 @@ export default function TransactionsTab(props) {
               view. Especially important after a line-chart click, since that
               filters by date but doesn't open the Filters drawer, so without
               this link the user can't undo the filter without opening Filters. */}
-          {(preset || dateFrom || dateTo || search || catSel.length || acctSel.length || amtMin !== "" || amtMax !== "" || chartCategory) && (
+          {(preset || dateFrom || dateTo || search || catSel.length || acctSel.length || amtMin !== "" || amtMax !== "" || outliersOnly || chartCategory) && (
             <button onClick={clearFilters}
               style={{ background: "none", border: "none", color: "#556FB5", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: 0, textDecoration: "underline" }}>
               ✕ Clear filters
@@ -956,6 +997,7 @@ export default function TransactionsTab(props) {
                   onOpenSplitEditor={(t) => setSplitEditorTx(t)}
                   onUnpair={handleUnpair}
                   forceExpandSplits={expandAllSplits}
+                  outlierInfo={outliersMap.get(tx.id) || null}
                 />
               ))}
               {hasMoreRows && (
@@ -1115,7 +1157,7 @@ export default function TransactionsTab(props) {
 }
 
 /* ── Individual row ── */
-function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, onUnpair, forceExpandSplits }) {
+function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, onUnpair, forceExpandSplits, outlierInfo }) {
   const [editing, setEditing] = useState(null); // field name currently being edited
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -1169,7 +1211,7 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
         </td>
         {visibleColumns.map(col => (
           <td key={col.id} style={{ ...td(), textAlign: col.type === "number" ? "right" : "left" }} onDoubleClick={() => startEdit(col.id)}>
-            {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize)}
+            {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize, outlierInfo)}
           </td>
         ))}
         <td style={td()}>
@@ -1228,7 +1270,7 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
   );
 }
 
-function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize) {
+function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize, outlierInfo) {
   if (col.id === "category") {
     const hasSplits = Array.isArray(tx.splits) && tx.splits.length > 0;
     if (hasSplits) {
@@ -1292,6 +1334,26 @@ function renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, al
     const v = tx.custom_fields?.[col.id];
     if (v === undefined || v === null || v === "") return <span style={{ color: "var(--tx3, #ccc)" }}>—</span>;
     return <span>{String(v)}</span>;
+  }
+  if (col.id === "description") {
+    const desc = tx.description;
+    const node = desc
+      ? <span>{String(desc)}</span>
+      : <span style={{ color: "var(--tx3, #ccc)" }}>—</span>;
+    if (outlierInfo) {
+      // Marker inline with the description. The tooltip explains why the
+      // row was flagged in plain language so the user can decide whether
+      // it's worth investigating.
+      const tip = `Outlier: ${fmt(outlierInfo.amount)} is unusually large for ${outlierInfo.category}. Typical amount is around ${fmt(outlierInfo.median)} (based on ${outlierInfo.sampleSize} transactions).`;
+      return (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span title={tip}
+            style={{ fontSize: 11, color: "#B4791F", cursor: "help", userSelect: "none" }}>⚠</span>
+          {node}
+        </span>
+      );
+    }
+    return node;
   }
   const v = tx[col.id];
   if (v === undefined || v === null || v === "") return <span style={{ color: "var(--tx3, #ccc)" }}>—</span>;
