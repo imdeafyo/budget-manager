@@ -113,6 +113,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+    # delete-package-versions@v5 still ships a Node 20 bundle. GitHub flips
+    # the JS-action default to Node 24 on 2026-06-02 and removes Node 20 on
+    # 2026-09-16. Opt in early so we don't get a deprecation warning on
+    # every run. Remove this when the action ships a v6 / Node 24 release.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
     - name: Prune old GHCR versions
       uses: actions/delete-package-versions@v5
