@@ -1,11 +1,7 @@
 /* src/lib/logger.js — Pino logger setup + slow-query pool wrapper.
 
-   Phase 6.5b-A. Always emits raw JSON to stdout. (The original implementation
-   ran pino-pretty in dev via a worker-thread transport, which hung every
-   request when the worker failed to init inside the slim container — see
-   2026-05-17 incident. Pipe `kubectl logs` through pino-pretty on the CLI if
-   you want colorized local output.) File rotation / PVC plumbing lands in
-   6.5b-B.
+   Phase 6.5b-A. JSON output in production, pretty-print in development. Logs
+   to stdout only; file rotation / PVC plumbing lands in 6.5b-B.
 
    Slow-query wrapper: any pool.query() (or client.query() from pool.connect())
    that runs longer than SLOW_QUERY_MS gets a warn log with the SQL text +
@@ -16,18 +12,27 @@
 
 const pino = require('pino');
 
-const level = process.env.LOG_LEVEL || 'info';
+const isProd = process.env.NODE_ENV === 'production';
+const level = process.env.LOG_LEVEL || (isProd ? 'info' : 'debug');
 
 const logger = pino({
   level,
-  // Always emit raw JSON to stdout. The pino-pretty transport runs in a worker
-  // thread and pipes log lines over a socket; if that worker fails to init
-  // inside a slim container, every log call from the main thread hangs and
-  // every middleware-logging request hangs with it. JSON is grep-friendly and
-  // works in every environment — readability in dev terminals isn't worth the
-  // failure mode. Pipe to `pino-pretty` on the CLI locally if needed.
+  // In dev we route through pino-pretty for readable output. In prod we emit
+  // raw JSON so log shippers / `kubectl logs` get parseable records.
+  ...(isProd
+    ? {}
+    : {
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: true,
+            translateTime: 'SYS:HH:MM:ss.l',
+            ignore: 'pid,hostname',
+          },
+        },
+      }),
+  // Redact common credential paths if they ever appear in metadata.
   redact: {
-    // Redact common credential paths if they ever appear in metadata.
     paths: ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.token'],
     censor: '[redacted]',
   },
