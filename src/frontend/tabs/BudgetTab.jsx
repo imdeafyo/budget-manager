@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 import log from "../utils/log.js";
-import apiFetch from "../utils/apiFetch.js";
 
 export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
   // Save Milestone modal — moved from ChartsTab. Opens when 📸 button is clicked.
@@ -33,12 +32,12 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
     // auto-save debounce so the backup captures the freshly-saved state.
     setTimeout(() => {
       log.info("milestone.backupTriggered", { id: newId, label: "manual+pre-milestone" });
-      apiFetch("/api/history/snapshot", {
+      fetch("/api/history/snapshot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: "manual+pre-milestone" }),
       }).then(r => {
-        if (!r.ok) log.warn("milestone.backupFailed", { id: newId, status: r.status, reqId: r.reqId });
+        if (!r.ok) log.warn("milestone.backupFailed", { id: newId, status: r.status });
       }).catch(e => log.warn("milestone.backupFailed", { id: newId, message: String(e?.message || e) }));
     }, 800);
     setShowSaveMs(false);
