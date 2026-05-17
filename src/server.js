@@ -26,10 +26,19 @@ app.set('etag', false);
 app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 
-const pool = wrapPoolWithSlowQueryLog(new Pool({
-  connectionString: process.env.DATABASE_URL,
+// Connection config: prefer DATABASE_URL if set, otherwise let pg pick up the
+// standard PGHOST/PGUSER/PGPASSWORD/PGDATABASE/PGPORT env vars on its own.
+// Passing `connectionString: undefined` explicitly is NOT the same as omitting
+// it — newer pg versions stop falling through to env vars in that case, which
+// makes the pool default to localhost:5432 and hang every query forever. Spent
+// an evening on this 2026-05-17; don't reintroduce the empty-string shortcut.
+const poolConfig = {
   ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : false,
-}), logger);
+};
+if (process.env.DATABASE_URL) {
+  poolConfig.connectionString = process.env.DATABASE_URL;
+}
+const pool = wrapPoolWithSlowQueryLog(new Pool(poolConfig), logger);
 
 // Auto-create tables
 pool.query(`
