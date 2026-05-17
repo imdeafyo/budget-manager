@@ -45,6 +45,32 @@ function replace(file, search, replacement) {
   }
 }
 
+// Strict in-memory string patch. Throws on miss so a refactor that changes the
+// call shape (e.g. fetch → apiFetch, or splitting a one-liner into multi-line)
+// can't silently produce a broken generic build. The prior approach used
+// String.replace directly, which no-ops on miss — that meant load + save
+// patches could silently regress without anyone noticing until the generic
+// HTML was actually opened.
+function patchStrict(source, search, replacement, label) {
+  if (typeof search === "string") {
+    if (!source.includes(search)) {
+      throw new Error(`patchStrict: '${label}' could not find target.\n  Looking for: ${search.slice(0, 200)}`);
+    }
+    return source.replace(search, replacement);
+  }
+  // regex
+  if (!search.test(source)) {
+    throw new Error(`patchStrict: '${label}' regex did not match.\n  Pattern: ${search}`);
+  }
+  return source.replace(search, replacement);
+}
+
+function escapeRegex(s) {
+  // Escape regex metacharacters in a literal string fragment so it can be
+  // safely concatenated into a RegExp.
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ── 0. Clean & copy ──
 console.log("→ Copying src/frontend to temp build dir...");
 if (fs.existsSync(TMP)) fs.rmSync(TMP, { recursive: true });
@@ -63,54 +89,83 @@ let hook = read(hookFile);
 // block-replacing the whole effect with a hardcoded map, which silently drifted
 // out of sync as new fields were added (transferCats, transactionRules, and the
 // transfer-tolerance/refund settings all stopped loading for that reason).
-hook = hook.replace(
-  'await fetch("/api/state").then(r => r.json())',
-  `await (async () => {
-    let raw = null;
-    try { raw = localStorage.getItem("budget-data"); } catch {}
-    if (!raw) {
-      const ta = document.getElementById("budget-data");
-      if (ta && ta.textContent) raw = ta.textContent.trim();
-    }
-    if (!raw) return null;
-    try { return { state: JSON.parse(raw) }; } catch(e) { console.error("Load error:", e); return null; }
-  })()`
+//
+// After Phase 6.5b-A the load shape changed from
+//   const r = await fetch("/api/state").then(r => r.json());
+// to a three-line apiFetch + res.ok check + res.json(). We replace the whole
+// trio with a localStorage reader that constructs an `r` of the same shape.
+// patchStrict throws on miss so a future call-shape refactor fails the build
+// instead of silently shipping a broken HTML.
+hook = patchStrict(hook,
+  `const res = await apiFetch("/api/state");
+      if (!res.ok) {
+        console.error("State load failed:", res.status);
+        log.error("state.load.fail", { status: res.status, reqId: res.reqId });
+        return;
+      }
+      const r = await res.json();`,
+  `const r = await (async () => {
+        let raw = null;
+        try { raw = localStorage.getItem("budget-data"); } catch {}
+        if (!raw) {
+          const ta = document.getElementById("budget-data");
+          if (ta && ta.textContent) raw = ta.textContent.trim();
+        }
+        if (!raw) return null;
+        try { return { state: JSON.parse(raw) }; } catch(e) { console.error("Load error:", e); return null; }
+      })();`,
+  "1a: state-load → localStorage reader"
 );
 
-// 1a-bis. Generic mode has no separate /api/transactions effect (MODE=generic
-// neutralizes it), so we also set txLoaded from the state-load effect.
-hook = hook.replace(
-  'setLoaded(true); })(); }, []);',
-  'setLoaded(true); setTxLoaded(true); })(); }, []);'
-);
+// (Note: a former "1a-bis" patch tried to also call setTxLoaded(true) from
+// the state-load effect, but that's redundant — the transactions-load effect
+// at the next useEffect early-returns with setTxLoaded(true) when MODE !==
+// "deploy", which 1c2 below ensures is the case in generic builds.)
 
 // 1a-ter. The deploy-mode loader map doesn't include `transactions` (deploy
 // loads them separately from /api/transactions). Generic mode bundles them
 // into the same localStorage blob, so we inject the setter here. This is the
 // ONE field that legitimately differs between modes.
-hook = hook.replace(
+hook = patchStrict(hook,
   'p2Name:setP2Name,transactionColumns:setTransactionColumns',
-  'p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns'
+  'p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns',
+  "1a-ter: add transactions to setter map"
 );
 
-// 1b. Replace API save with localStorage save
-const apiSaveRe = /useEffect\(\(\) => \{ const t = setTimeout\(async \(\) => \{ try \{ await fetch\("\/api\/state"[\s\S]*?\}, \[st\]\);/;
-hook = hook.replace(apiSaveRe, `useEffect(() => {
+// 1b. Replace API save with localStorage save. The save effect spans many
+// lines in source. We anchor on `apiFetch("/api/state", { method: "PUT"` to
+// disambiguate from the GET-shaped load effect, then expand outward.
+//
+// Phase 6.5b-A history: the save effect grew a `!loaded` guard (state-wipe
+// fix) and `reqId` log fields. The prior regex was too narrow to tolerate
+// either; this one matches whatever sits between the apiFetch PUT call and
+// the closing dependency array.
+const saveStart = `useEffect(() => {
+    if (!loaded) return;`;
+const saveEnd = `}, [st, loaded]);`;
+const apiSaveRe = new RegExp(
+  // Match from the useEffect header through the closing dep array. We don't
+  // need to enumerate the body — just confirm a PUT to /api/state sits inside,
+  // which is the disambiguator from the load effect.
+  escapeRegex(saveStart) + '[\\s\\S]*?apiFetch\\("/api/state",\\s*\\{\\s*method:\\s*"PUT"[\\s\\S]*?' + escapeRegex(saveEnd)
+);
+hook = patchStrict(hook, apiSaveRe, `useEffect(() => {
     if (!loaded) return;
     const t = setTimeout(() => {
       try { localStorage.setItem("budget-data", JSON.stringify(st)); } catch(e) { console.error("Save error:", e); }
     }, 600);
     return () => clearTimeout(t);
-  }, [st, loaded]);`);
+  }, [st, loaded]);`, "1b: state-save → localStorage save");
 
 // 1c. Add stRef right after the st useMemo line
-hook = hook.replace(
+hook = patchStrict(hook,
   /const st = useMemo\(\(\) => \(\{.*?\]\);/s,
-  (match) => match + `\n  const stRef = useRef(st);\n  useEffect(() => { stRef.current = st; }, [st]);`
+  (match) => match + `\n  const stRef = useRef(st);\n  useEffect(() => { stRef.current = st; }, [st]);`,
+  "1c: add stRef after st useMemo"
 );
 
 // 1c2. Swap MODE = "deploy" → "generic" so the CRUD helpers skip fetch() calls
-hook = hook.replace(/const MODE = "deploy";/, 'const MODE = "generic";');
+hook = patchStrict(hook, /const MODE = "deploy";/, 'const MODE = "generic";', "1c2: MODE → generic");
 
 // 1c3. Include transactions in the st useMemo so it round-trips through
 // localStorage + textarea. We append it to both the object literal and the

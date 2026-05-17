@@ -12,6 +12,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 COPY src/server.js src/
+COPY src/lib/ src/lib/
 COPY --from=frontend-build /build/dist src/public/
 EXPOSE 3000
 USER node

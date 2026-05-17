@@ -3,8 +3,17 @@ const compression = require('compression');
 const path = require('path');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const { logger, wrapPoolWithSlowQueryLog } = require('./lib/logger');
+const { requestId } = require('./lib/requestId');
+const { httpLog } = require('./lib/httpLog');
 
 const app = express();
+// Phase 6.5b-A logging chain. Order matters: requestId must run first so
+// downstream middleware + handlers can use req.log; httpLog wraps res.end so
+// it sees the final status + body size; compression and body parsing come
+// after so their work is also timed.
+app.use(requestId(logger));
+app.use(httpLog());
 // Disable Express's default ETag generator. Its default mode hashes the full
 // response body, which on the 9 MB transactions endpoint adds latency and
 // also defeats our manual short-circuit ETag below (Express would replace
@@ -17,10 +26,10 @@ app.set('etag', false);
 app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 
-const pool = new Pool({
+const pool = wrapPoolWithSlowQueryLog(new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : false,
-});
+}), logger);
 
 // Auto-create tables
 pool.query(`
@@ -68,7 +77,7 @@ pool.query(`
   CREATE INDEX IF NOT EXISTS idx_tx_user_category ON transactions(user_id, category);
   CREATE INDEX IF NOT EXISTS idx_tx_user_account ON transactions(user_id, account);
   CREATE INDEX IF NOT EXISTS idx_tx_user_batch ON transactions(user_id, import_batch_id);
-`).then(() => console.log('Schema ready')).catch(err => console.error('Schema error:', err.message));
+`).then(() => logger.info('schema ready')).catch(err => logger.error({ err: err.message }, 'schema error'));
 
 // API routes
 app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
@@ -77,20 +86,57 @@ app.get('/api/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
     const r = await pool.query('SELECT state, updated_at FROM budget_state WHERE user_id = $1', [userId]);
-    res.json(r.rows[0] || null);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const row = r.rows[0] || null;
+    if (row) {
+      const st = row.state || {};
+      req.log.info({
+        userId,
+        bodySize: row.state ? Buffer.byteLength(JSON.stringify(row.state), 'utf8') : 0,
+        expCount: Array.isArray(st.exp) ? st.exp.length : 0,
+        savCount: Array.isArray(st.sav) ? st.sav.length : 0,
+        msCount: Array.isArray(st.milestones) ? st.milestones.length
+               : Array.isArray(st.snapshots) ? st.snapshots.length : 0,
+      }, 'state.load');
+    } else {
+      req.log.info({ userId, empty: true }, 'state.load');
+    }
+    res.json(row);
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'state.load.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.put('/api/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
   try {
+    const state = req.body.state;
+    // State-shape tripwire — log only, no blocking. Phase 6.5b-A scope is
+    // observability; deciding whether/how to block on suspicious shapes is
+    // a follow-up after we see logs in practice.
+    const stateJson = JSON.stringify(state);
+    const sizeBytes = Buffer.byteLength(stateJson, 'utf8');
+    const shape = {
+      userId,
+      bodySize: sizeBytes,
+      expCount: state && Array.isArray(state.exp) ? state.exp.length : 0,
+      savCount: state && Array.isArray(state.sav) ? state.sav.length : 0,
+      msCount: state && Array.isArray(state.milestones) ? state.milestones.length
+             : state && Array.isArray(state.snapshots) ? state.snapshots.length : 0,
+    };
+    req.log.info(shape, 'state.save.received');
+
     const r = await pool.query(
       `INSERT INTO budget_state (user_id, state, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET state = $2, updated_at = NOW() RETURNING updated_at`,
-      [userId, JSON.stringify(req.body.state)]
+      [userId, stateJson]
     );
+    req.log.info({ ...shape, updated_at: r.rows[0].updated_at }, 'state.save.committed');
     res.json({ ok: true, updated_at: r.rows[0].updated_at });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'state.save.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/tax-years{/:userId}', async (req, res) => {
@@ -236,6 +282,7 @@ app.get('/api/transactions{/:userId}', async (req, res) => {
     if (req.headers['if-none-match'] === etag) {
       res.set('ETag', etag);
       res.set('Cache-Control', 'private, must-revalidate');
+      req.log.info({ userId, n, path: 'fast-304', etag }, 'tx.load');
       return res.status(304).end();
     }
 
@@ -247,8 +294,12 @@ app.get('/api/transactions{/:userId}', async (req, res) => {
     );
     res.set('ETag', etag);
     res.set('Cache-Control', 'private, must-revalidate');
+    req.log.info({ userId, n, path: 'full', rows: r.rowCount, etag }, 'tx.load');
     res.json({ transactions: r.rows.map(rowToTx), count: r.rowCount });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'tx.load.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST — bulk insert (used by CSV import in Phase 4b; also manual add for single row)
@@ -280,6 +331,7 @@ app.post('/api/transactions{/:userId}', async (req, res) => {
         );
       }
       await client.query('COMMIT');
+      req.log.info({ userId, count: transactions.length }, 'tx.insert');
       res.json({ ok: true, inserted: transactions.length });
     } catch (err) {
       await client.query('ROLLBACK');
@@ -287,7 +339,10 @@ app.post('/api/transactions{/:userId}', async (req, res) => {
     } finally {
       client.release();
     }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'tx.insert.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // PUT — update single transaction
@@ -298,8 +353,12 @@ app.put('/api/transactions/:id{/:userId}', async (req, res) => {
   if (!tx || tx.id !== id) return res.status(400).json({ error: 'transaction.id must match url id' });
   try {
     await insertTransaction(userId, { ...tx, updated_at: new Date().toISOString() });
+    req.log.info({ userId, id }, 'tx.update');
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, id, err: err.message }, 'tx.update.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // DELETE — one, or a batch, or all (via ?batch=id or ?all=1)
@@ -312,6 +371,7 @@ app.delete('/api/transactions{/:userId}', async (req, res) => {
         `DELETE FROM transactions WHERE user_id = $1 AND import_batch_id = $2`,
         [userId, batch_id]
       );
+      req.log.info({ userId, batch_id, deleted: r.rowCount }, 'tx.delete.batch');
       return res.json({ ok: true, deleted: r.rowCount });
     }
     if (Array.isArray(ids) && ids.length) {
@@ -319,10 +379,14 @@ app.delete('/api/transactions{/:userId}', async (req, res) => {
         `DELETE FROM transactions WHERE user_id = $1 AND id = ANY($2::uuid[])`,
         [userId, ids]
       );
+      req.log.info({ userId, requested: ids.length, deleted: r.rowCount }, 'tx.delete');
       return res.json({ ok: true, deleted: r.rowCount });
     }
     return res.status(400).json({ error: 'provide ids[] or batch_id' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'tx.delete.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Query builder endpoint — Phase 4c. Stub returns a helpful error for now.
@@ -501,14 +565,14 @@ function startHistoryCron() {
     for (const userId of CRON_USERS) {
       try {
         const r = await takeSnapshot(userId);
-        if (r.inserted) console.log(`[history] snapshot user=${userId} label=${r.label} pruned=${r.pruned}`);
+        if (r.inserted) logger.info({ userId, label: r.label, pruned: r.pruned }, 'history.snapshot.cron');
       } catch (err) {
-        console.error('[history] cron error:', err.message);
+        logger.error({ err: err.message }, 'history.cron.error');
       }
     }
   }, CRON_INTERVAL_MS);
   // Also fire once shortly after startup so a fresh deploy gets an immediate baseline.
-  setTimeout(() => takeSnapshot('default').catch(e => console.error('[history] startup snapshot:', e.message)), 5000);
+  setTimeout(() => takeSnapshot('default').catch(e => logger.error({ err: e.message }, 'history.startup.snapshot.fail')), 5000);
 }
 
 /* ── History API endpoints ── */
@@ -529,8 +593,12 @@ app.get('/api/history{/:userId}', async (req, res) => {
       'SELECT COUNT(*)::int AS n FROM budget_state_history WHERE user_id = $1',
       [userId]
     );
+    req.log.info({ userId, returned: r.rows.length, total: totalRes.rows[0].n, limit, offset }, 'history.list');
     res.json({ rows: r.rows, total: totalRes.rows[0].n, limit, offset });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'history.list.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Fetch a single history row's full state (for preview).
@@ -543,9 +611,16 @@ app.get('/api/history/:id/state{/:userId}', async (req, res) => {
       'SELECT id, label, saved_at, state_size_bytes, state FROM budget_state_history WHERE user_id = $1 AND id = $2',
       [userId, id]
     );
-    if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    if (r.rows.length === 0) {
+      req.log.warn({ userId, id }, 'history.get.not_found');
+      return res.status(404).json({ error: 'not found' });
+    }
+    req.log.info({ userId, id, sizeBytes: r.rows[0].state_size_bytes }, 'history.get');
     res.json(r.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, id, err: err.message }, 'history.get.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Manual snapshot. Optional body: { label: "..." } overrides the default "manual" label.
@@ -556,8 +631,12 @@ app.post('/api/history/snapshot{/:userId}', async (req, res) => {
   const labelOverride = (req.body && typeof req.body.label === 'string') ? req.body.label.slice(0, 200) : 'manual';
   try {
     const r = await takeSnapshot(userId, { forcedLabel: labelOverride });
+    req.log.info({ userId, label: labelOverride, inserted: r.inserted, reason: r.reason, pruned: r.pruned }, 'history.snapshot.manual');
     res.json(r);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, err: err.message }, 'history.snapshot.manual.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Restore. Takes a "pre-restore" labeled snapshot first so the restore is itself reversible.
@@ -568,20 +647,27 @@ app.post('/api/history/:id/restore{/:userId}', async (req, res) => {
   try {
     // Pre-restore safety snapshot. Best-effort — if it fails, log but proceed.
     try { await takeSnapshot(userId, { forcedLabel: 'pre-restore' }); }
-    catch (e) { console.error('[history] pre-restore snapshot failed:', e.message); }
+    catch (e) { req.log.error({ userId, err: e.message }, 'history.pre-restore.fail'); }
 
     const r = await pool.query(
       'SELECT state FROM budget_state_history WHERE user_id = $1 AND id = $2',
       [userId, id]
     );
-    if (r.rows.length === 0) return res.status(404).json({ error: 'not found' });
+    if (r.rows.length === 0) {
+      req.log.warn({ userId, id }, 'history.restore.not_found');
+      return res.status(404).json({ error: 'not found' });
+    }
     await pool.query(
       `INSERT INTO budget_state (user_id, state, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET state = $2, updated_at = NOW()`,
       [userId, JSON.stringify(r.rows[0].state)]
     );
+    req.log.info({ userId, id }, 'history.restore');
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, id, err: err.message }, 'history.restore.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Delete a history row (lets the user clear out a manual snapshot they don't want).
@@ -594,8 +680,12 @@ app.delete('/api/history/:id{/:userId}', async (req, res) => {
       'DELETE FROM budget_state_history WHERE user_id = $1 AND id = $2',
       [userId, id]
     );
+    req.log.info({ userId, id, deleted: r.rowCount }, 'history.delete');
     res.json({ ok: true, deleted: r.rowCount });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    req.log.error({ userId, id, err: err.message }, 'history.delete.fail');
+    res.status(500).json({ error: err.message });
+  }
 });
 
 
@@ -605,6 +695,6 @@ app.get('/*splat', (req, res) => res.sendFile(path.join(__dirname, 'public', 'in
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Budget Manager running on port ${PORT}`);
+  logger.info({ port: PORT, env: process.env.NODE_ENV || 'development' }, 'server.listen');
   startHistoryCron();
 });

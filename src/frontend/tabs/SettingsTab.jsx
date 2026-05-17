@@ -4,6 +4,7 @@ import { BUILTIN_COLUMNS, addColumn, removeColumn, renameColumn } from "../utils
 import { newRule, compileRule, moveRule, applyRulesToAll } from "../utils/rules.js";
 import { summarizeState, diffSummaries } from "../utils/history.js";
 import { getEvents as logGetEvents, clear as logClear, exportAll as logExportAll, default as log } from "../utils/log.js";
+import apiFetch from "../utils/apiFetch.js";
 
 /* ── CollapsibleCard ──
    Card with a clickable header that toggles the body open/closed. Persists
@@ -1350,7 +1351,7 @@ function BackupHistoryCard({ mob }) {
   const fetchRows = async (off = 0) => {
     setLoading(true); setError("");
     try {
-      const r = await fetch(`/api/history?limit=${limit}&offset=${off}`).then(r => r.json());
+      const r = await apiFetch(`/api/history?limit=${limit}&offset=${off}`).then(r => r.json());
       if (r.error) throw new Error(r.error);
       setRows(r.rows || []);
       setTotal(r.total || 0);
@@ -1364,7 +1365,7 @@ function BackupHistoryCard({ mob }) {
   const handleSnapshotNow = async () => {
     setBusy(true); setError("");
     try {
-      const r = await fetch("/api/history/snapshot", { method: "POST" }).then(r => r.json());
+      const r = await apiFetch("/api/history/snapshot", { method: "POST" }).then(r => r.json());
       if (r.error) throw new Error(r.error);
       if (!r.inserted) setError(`No snapshot taken: ${r.reason}`);
       await fetchRows(0);
@@ -1376,8 +1377,8 @@ function BackupHistoryCard({ mob }) {
     setBusy(true); setError("");
     try {
       const [oneRes, currentRes] = await Promise.all([
-        fetch(`/api/history/${row.id}/state`).then(r => r.json()),
-        fetch("/api/state").then(r => r.json()),
+        apiFetch(`/api/history/${row.id}/state`).then(r => r.json()),
+        apiFetch("/api/state").then(r => r.json()),
       ]);
       if (oneRes.error) throw new Error(oneRes.error);
       const candidate = oneRes.state;
@@ -1395,7 +1396,7 @@ function BackupHistoryCard({ mob }) {
   const handleRestore = async (id) => {
     setBusy(true); setError("");
     try {
-      const r = await fetch(`/api/history/${id}/restore`, { method: "POST" }).then(r => r.json());
+      const r = await apiFetch(`/api/history/${id}/restore`, { method: "POST" }).then(r => r.json());
       if (r.error) throw new Error(r.error);
       setRestoreId(null);
       setPreview(null);
@@ -1408,7 +1409,7 @@ function BackupHistoryCard({ mob }) {
     if (!confirm("Delete this backup row? This cannot be undone.")) return;
     setBusy(true); setError("");
     try {
-      const r = await fetch(`/api/history/${id}`, { method: "DELETE" }).then(r => r.json());
+      const r = await apiFetch(`/api/history/${id}`, { method: "DELETE" }).then(r => r.json());
       if (r.error) throw new Error(r.error);
       await fetchRows(offset);
     } catch (e) { setError(e.message || "Delete failed"); }

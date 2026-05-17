@@ -4,6 +4,7 @@ import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getSt
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
 import log from "../utils/log.js";
+import apiFetch from "../utils/apiFetch.js";
 import { useM } from "../components/ui.jsx";
 
 /* ── Runtime mode. "deploy" uses /api/transactions; "generic" bundles
@@ -373,10 +374,10 @@ export default function useAppState() {
   const lastSavedHashRef = useRef(null);
   useEffect(() => { (async () => {
     try {
-      const res = await fetch("/api/state");
+      const res = await apiFetch("/api/state");
       if (!res.ok) {
         console.error("State load failed:", res.status);
-        log.error("state.load.fail", { status: res.status });
+        log.error("state.load.fail", { status: res.status, reqId: res.reqId });
         return;
       }
       const r = await res.json();
@@ -390,6 +391,7 @@ export default function useAppState() {
           milestoneCount: Array.isArray(d.milestones) ? d.milestones.length : 0,
           ruleCount: Array.isArray(d.transactionRules) ? d.transactionRules.length : 0,
           legacySnapshotsField: d.snapshots !== undefined,
+          reqId: res.reqId,
         });
         const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,outlierSettings:setOutlierSettings,diagnostics:setDiagnostics };
         /* Skip-undefined: a saved state may have a key set explicitly to
@@ -460,12 +462,12 @@ export default function useAppState() {
         // Subsequent saves: skip if payload identical to last sync.
         if (payload === lastSavedHashRef.current) return;
         const sizeDelta = payload.length - lastSavedHashRef.current.length;
-        const res = await fetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload });
+        const res = await apiFetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload });
         if (res.ok) {
           lastSavedHashRef.current = payload;
-          log.info("state.save", { size: payload.length, delta: sizeDelta });
+          log.info("state.save", { size: payload.length, delta: sizeDelta, reqId: res.reqId });
         } else {
-          log.warn("state.save.fail", { status: res.status, size: payload.length });
+          log.warn("state.save.fail", { status: res.status, size: payload.length, reqId: res.reqId });
         }
       } catch(e) {
         log.warn("state.save.throw", { message: String(e?.message || e) });
@@ -482,12 +484,13 @@ export default function useAppState() {
     if (MODE !== "deploy") { setTxLoaded(true); return; }
     (async () => {
       try {
-        const r = await fetch("/api/transactions").then(r => r.json());
+        const res = await apiFetch("/api/transactions");
+        const r = await res.json();
         if (r?.transactions) {
           setTransactions(r.transactions);
-          log.info("tx.load", { count: r.transactions.length });
+          log.info("tx.load", { count: r.transactions.length, reqId: res.reqId });
         } else {
-          log.warn("tx.load.empty", { responseShape: Object.keys(r || {}) });
+          log.warn("tx.load.empty", { responseShape: Object.keys(r || {}), reqId: res.reqId });
         }
       } catch(e) {
         log.warn("tx.load.fail", { message: String(e?.message || e) });
@@ -504,12 +507,12 @@ export default function useAppState() {
     setTransactions(prev => [...rows, ...prev]);
     if (MODE === "deploy") {
       try {
-        const res = await fetch("/api/transactions", {
+        const res = await apiFetch("/api/transactions", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ transactions: rows }),
         });
-        if (!res.ok) log.warn("tx.add.fail", { status: res.status, count: rows.length });
-        else log.info("tx.add", { count: rows.length });
+        if (!res.ok) log.warn("tx.add.fail", { status: res.status, count: rows.length, reqId: res.reqId });
+        else log.info("tx.add", { count: rows.length, reqId: res.reqId });
       } catch(e) {
         log.warn("tx.add.throw", { message: String(e?.message || e), count: rows.length });
         /* keep local state even if backend save failed */
@@ -525,11 +528,11 @@ export default function useAppState() {
     setTransactions(prev => prev.map(t => t.id === tx.id ? updated : t));
     if (MODE === "deploy") {
       try {
-        const res = await fetch(`/api/transactions/${tx.id}`, {
+        const res = await apiFetch(`/api/transactions/${tx.id}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ transaction: updated }),
         });
-        if (!res.ok) log.warn("tx.update.fail", { status: res.status, id: tx.id });
+        if (!res.ok) log.warn("tx.update.fail", { status: res.status, id: tx.id, reqId: res.reqId });
       } catch(e) {
         log.warn("tx.update.throw", { message: String(e?.message || e), id: tx.id });
       }
@@ -541,12 +544,12 @@ export default function useAppState() {
     setTransactions(prev => prev.filter(t => !idSet.has(t.id)));
     if (MODE === "deploy" && ids.length) {
       try {
-        const res = await fetch("/api/transactions", {
+        const res = await apiFetch("/api/transactions", {
           method: "DELETE", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids }),
         });
-        if (!res.ok) log.warn("tx.delete.fail", { status: res.status, count: ids.length });
-        else log.info("tx.delete", { count: ids.length });
+        if (!res.ok) log.warn("tx.delete.fail", { status: res.status, count: ids.length, reqId: res.reqId });
+        else log.info("tx.delete", { count: ids.length, reqId: res.reqId });
       } catch(e) {
         log.warn("tx.delete.throw", { message: String(e?.message || e), count: ids.length });
       }
@@ -559,12 +562,12 @@ export default function useAppState() {
     setTransactions(prev => prev.filter(t => t.import_batch_id !== batchId));
     if (MODE === "deploy") {
       try {
-        const res = await fetch("/api/transactions", {
+        const res = await apiFetch("/api/transactions", {
           method: "DELETE", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ batch_id: batchId }),
         });
-        if (!res.ok) log.warn("tx.deleteBatch.fail", { status: res.status, batchId });
-        else log.info("tx.deleteBatch", { batchId });
+        if (!res.ok) log.warn("tx.deleteBatch.fail", { status: res.status, batchId, reqId: res.reqId });
+        else log.info("tx.deleteBatch", { batchId, reqId: res.reqId });
       } catch(e) {
         log.warn("tx.deleteBatch.throw", { message: String(e?.message || e), batchId });
       }
