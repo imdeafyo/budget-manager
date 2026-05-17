@@ -20,7 +20,7 @@ Three built-in themes, toggled in the header:
 * 🌙 **Dark** — dark mode
 * 🌸 **WAF** (Wife Approval Factor) — sage green and muted stone tones, designed to look good on a shared screen
 
-## Architecture
+## Architecture 
 
 ```
 src/frontend/
