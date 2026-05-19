@@ -11,6 +11,8 @@
   "dependencies": {
     "compression": "^1.7.5",
     "express": "^5.2.1",
-    "pg": "^8.20.0"
+    "pg": "^8.20.0",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3"
   }
 }
