@@ -76,9 +76,9 @@ function wrapPoolWithSlowQueryLog(pool, log = logger) {
     return result;
   };
 
-  const origConnect = pool.connect.bind(pool);
-  pool.connect = async function patchedConnect(...args) {
-    const client = await origConnect(...args);
+  // Wrap a client.query so slow queries inside a transaction block also log.
+  function wrapClient(client) {
+    if (!client || typeof client.query !== 'function' || client.__sqlWrapped) return client;
     const cQuery = client.query.bind(client);
     client.query = function patchedClientQuery(...qa) {
       const started = Date.now();
@@ -102,7 +102,29 @@ function wrapPoolWithSlowQueryLog(pool, log = logger) {
       }
       return result;
     };
+    client.__sqlWrapped = true;
     return client;
+  }
+
+  const origConnect = pool.connect.bind(pool);
+  pool.connect = function patchedConnect(...args) {
+    // Callback form: pool.connect((err, client, release) => {…}).
+    // Intercept the callback so we can wrap the client before user code sees it.
+    if (typeof args[0] === 'function') {
+      const userCb = args[0];
+      return origConnect((err, client, release) => {
+        if (!err) wrapClient(client);
+        return userCb(err, client, release);
+      });
+    }
+    // Promise form: returns a Promise<Client>. Wrap the client when it resolves.
+    // If the underlying call returns undefined (some pg variants under specific
+    // conditions), pass that through unchanged rather than crashing.
+    const ret = origConnect(...args);
+    if (ret && typeof ret.then === 'function') {
+      return ret.then((client) => wrapClient(client));
+    }
+    return ret;
   };
 
   return pool;
