@@ -30,6 +30,17 @@ jobs:
         working-directory: src/frontend
         run: npm ci
 
+      - name: Install root deps
+        # Needed for the server-side test suite, which requires('pg') and
+        # the project's own src/lib/* modules (logger pulls in pino).
+        run: npm ci
+
       - name: Run tests
         working-directory: src/frontend
         run: npm test
+
+      - name: Run server-side regression tests
+        # Pins the prod-boot pool wrapper fix + future server-side regressions.
+        # Runs from repo root; src/lib pulls in pg and pino from the root
+        # package.json (installed in the step above).
+        run: node --test src/lib/*.test.js

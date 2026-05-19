@@ -80,7 +80,28 @@ pool.query(`
   .catch(err => logger.error({ event: 'db.schema.error', err: err.message }, 'Schema error'));
 
 // API routes
-app.get('/api/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+// /api/health verifies the DB pool can actually answer a query within 2s.
+// Returns 503 on failure so Kubernetes liveness/readiness probes mark the
+// pod unhealthy when the DB is unreachable, rather than reporting ok purely
+// from the Node process being alive (the previous behavior, which was a lie:
+// it returned 200 even when the DB had been down for hours).
+app.get('/api/health', async (req, res) => {
+  const start = Date.now();
+  try {
+    // Timeout via Promise.race — pg's own query timeout would also work,
+    // but Promise.race keeps the failure path simple and means we don't
+    // care which layer (network, pool, server) is the slow one.
+    const queryPromise = pool.query('SELECT 1 AS ok');
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('health check db timeout')), 2000)
+    );
+    await Promise.race([queryPromise, timeoutPromise]);
+    res.json({ status: 'ok', db: 'ok', durationMs: Date.now() - start, time: new Date().toISOString() });
+  } catch (err) {
+    req.log.warn({ event: 'health.fail', err: err.message, durationMs: Date.now() - start }, 'Health check failed');
+    res.status(503).json({ status: 'degraded', db: 'unreachable', error: err.message, durationMs: Date.now() - start, time: new Date().toISOString() });
+  }
+});
 
 app.get('/api/state{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
