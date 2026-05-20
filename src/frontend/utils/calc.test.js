@@ -992,3 +992,157 @@ describe("cashBudgetContribution — Advanced cash-budget source math", () => {
     expect(a).toBe(b);
   });
 });
+
+/* ── Phase X-A: appliedEndingEvents — ending obligations integration ── */
+
+describe("forecastGrowthAccounts — appliedEndingEvents (ending obligations)", () => {
+  const baseOpts = {
+    baseYear: 2026,
+    inflationPct: 0,
+    p1BirthYear: 1985,
+    p2BirthYear: 1990,
+    hsaCoverage: "family",
+    getPoolLimit,
+    accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+  };
+
+  it("with no events, behavior is identical to the no-events call", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 10000, annualReturn: 5, contribAmount: 6000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const withoutEvents = forecastGrowthAccounts(accounts, 10, baseOpts);
+    const withEmpty = forecastGrowthAccounts(accounts, 10, { ...baseOpts, appliedEndingEvents: [] });
+    expect(withEmpty.years[10].totals.nominal).toBeCloseTo(withoutEvents.years[10].totals.nominal, 6);
+    expect(withEmpty.years[10].byAccount.cash.contribution).toBeCloseTo(withoutEvents.years[10].byAccount.cash.contribution, 6);
+  });
+
+  it("event in year 1 month 6 boosts year 1 contribution by half a year's worth", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    /* $200/mo freed cash starting at absolute month 7 (mid year 1).
+       Months 7..12 → 6 months × $200 = $1200 extra.
+       Year 1 total contribution should be 1200 (base) + 1200 (events) = 2400. */
+    const events = [{ accountId: "cash", monthIndex: 7, monthlyDelta: 200 }];
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, appliedEndingEvents: events });
+    expect(r.years[1].byAccount.cash.contribution).toBeCloseTo(2400, 6);
+    // Year 2 should have full year of events on top: 1200 + 12*200 = 3600
+    expect(r.years[2].byAccount.cash.contribution).toBeCloseTo(3600, 6);
+  });
+
+  it("event accumulates with subsequent events on the same account", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    /* Two loans paid off: $100/mo starts at month 13, +$300/mo more starts at month 25.
+       Year 1: no events → 0. Year 2: full year at $100 → 1200.
+       Year 3: full year at $100 + $300 = $400/mo → 4800. */
+    const events = [
+      { accountId: "cash", monthIndex: 13, monthlyDelta: 100 },
+      { accountId: "cash", monthIndex: 25, monthlyDelta: 300 },
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, appliedEndingEvents: events });
+    expect(r.years[1].byAccount.cash.contribution).toBeCloseTo(0, 6);
+    expect(r.years[2].byAccount.cash.contribution).toBeCloseTo(1200, 6);
+    expect(r.years[3].byAccount.cash.contribution).toBeCloseTo(4800, 6);
+  });
+
+  it("events on one account don't affect a different account", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+      { id: "other", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 600, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 1, monthlyDelta: 100 }];
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, appliedEndingEvents: events });
+    // other should be unaffected
+    expect(r.years[1].byAccount.other.contribution).toBeCloseTo(600, 6);
+    expect(r.years[2].byAccount.other.contribution).toBeCloseTo(600, 6);
+    // cash should have base + 12 months of events each year
+    expect(r.years[1].byAccount.cash.contribution).toBeCloseTo(1200 + 1200, 6);
+  });
+
+  it("eventDelta in accountSeries reflects only the event-driven portion", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 13, monthlyDelta: 100 }]; // starts year 2
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, appliedEndingEvents: events });
+    expect(r.accountSeries.cash[1].eventDelta).toBeCloseTo(0, 6);
+    expect(r.accountSeries.cash[2].eventDelta).toBeCloseTo(1200, 6);
+  });
+
+  it("totals reflect event-driven contributions", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 1, monthlyDelta: 100 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedEndingEvents: events });
+    // Year 1: 1200 base + 1200 events = 2400 total contributions
+    expect(r.years[1].totals.contributions).toBeCloseTo(2400, 6);
+    // Balance with zero return = contributions = 2400
+    expect(r.years[1].totals.nominal).toBeCloseTo(2400, 6);
+  });
+
+  it("negative monthlyDelta (starts scaffolding) reduces contribution", () => {
+    const accounts = [
+      { id: "savings", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    // -100/mo starting at month 1, +100/mo kicks back in at month 13 — simulates "starts" effect
+    const events = [
+      { accountId: "savings", monthIndex: 1, monthlyDelta: -100 },
+      { accountId: "savings", monthIndex: 13, monthlyDelta: 100 },
+    ];
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, appliedEndingEvents: events });
+    // Year 1: 1200 - 1200 = 0
+    expect(r.years[1].byAccount.savings.contribution).toBeCloseTo(0, 6);
+    // Year 2: 1200 - 1200 + 1200 = 1200 (back to base)
+    expect(r.years[2].byAccount.savings.contribution).toBeCloseTo(1200, 6);
+  });
+
+  it("events targeting unknown account ids are silently ignored", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "phantom", monthIndex: 1, monthlyDelta: 999 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedEndingEvents: events });
+    expect(r.years[1].byAccount.cash.contribution).toBeCloseTo(1200, 6);
+  });
+
+  it("events fire at correct months regardless of input order", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    /* Unsorted events: month 25 listed before month 13. Function must
+       internally sort to fire them in the right order. */
+    const events = [
+      { accountId: "cash", monthIndex: 25, monthlyDelta: 300 },
+      { accountId: "cash", monthIndex: 13, monthlyDelta: 100 },
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, appliedEndingEvents: events });
+    expect(r.years[2].byAccount.cash.contribution).toBeCloseTo(1200, 6);
+    expect(r.years[3].byAccount.cash.contribution).toBeCloseTo(4800, 6);
+  });
+
+  it("event-driven contributions compound: balance reflects mid-year cash flow growth", () => {
+    const accounts = [
+      { id: "cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 12, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    // $100/mo starting at absolute month 1, 1 year horizon, 12% annual return = 1% monthly
+    const events = [{ accountId: "cash", monthIndex: 1, monthlyDelta: 100 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedEndingEvents: events });
+    /* Monthly compounding at exactly 1%/mo of $100/mo for 12 months.
+       The forecast uses Math.pow(1+r, 1/12)-1 for monthly rate; with
+       r=0.12 that's 0.009489 (less than 0.01). FV of annuity at that
+       rate over 12 months: 100 * ((1.009489^12 - 1) / 0.009489)
+                          = 100 * ((1.12 - 1) / 0.009489)
+                          = 100 * (0.12 / 0.009489)
+                          ≈ 1264.62 */
+    const balance = r.years[1].byAccount.cash.nominal;
+    expect(balance).toBeGreaterThan(1264);
+    expect(balance).toBeLessThan(1266);
+    // Total contributed = $1200 (12 × $100)
+    expect(r.years[1].byAccount.cash.contribution).toBeCloseTo(1200, 6);
+    // Balance > contributions because of growth
+    expect(balance).toBeGreaterThan(1200);
+  });
+});

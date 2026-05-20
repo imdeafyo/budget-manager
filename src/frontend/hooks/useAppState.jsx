@@ -346,6 +346,13 @@ export default function useAppState() {
        at which the IRS has actually raised 401(k) and HSA limits. Set
        to 0 to freeze limits at today's values. */
     limitGrowthPct: 2.5,
+    /* Phase X-A: ending obligations. Array of { id, itemRef, destAccountId,
+       effect, mode, endsOn, balance?, annualRate? } describing budget
+       lines that will end at a future date, with the freed-up cash
+       redirected to a forecast account. Empty by default — UI surfaces
+       a section in AdvancedForecastTab to add/edit/delete. See
+       utils/endingItems.js for shape and resolveEndingEvents semantics. */
+    endingItems: [],
   }));
   const [txLoaded, setTxLoaded] = useState(false);
 
@@ -415,6 +422,14 @@ export default function useAppState() {
             // clause, a partial save would zero the Advanced tab.
             if (!Array.isArray(d.forecast.accounts) || d.forecast.accounts.length === 0) {
               merged.accounts = prev?.accounts || defaultForecastAccounts();
+            }
+            /* endingItems (Phase X-A): if saved value is missing or not
+               an array, fall back to []. Saves predating Phase X-A
+               simply won't have this field — the shallow spread above
+               keeps prev's [] in that case, but we add this guard so a
+               malformed (non-array) saved value can't poison state. */
+            if (!Array.isArray(d.forecast.endingItems)) {
+              merged.endingItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
             }
             return merged;
           });

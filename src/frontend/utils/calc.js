@@ -301,6 +301,26 @@ export function forecastGrowthAccounts(accounts, years, opts) {
        and HSA to $50; rounding all to $500 is a fine projection
        simplification). */
     limitGrowthPct = 0,
+    /* Optional pre-resolved ending events (Phase X-A — Advanced ending
+       obligations). Each event { accountId, monthIndex, monthlyDelta }
+       adds (or subtracts, if negative) `monthlyDelta` to that account's
+       monthly contribution starting at the absolute month index given
+       (1-indexed, where 12 = end of year 1). Events accumulate — by
+       month 24, the account's monthly contribution is the base PLUS
+       the sum of all monthlyDeltas with monthIndex <= 24.
+
+       Events are NOT subject to pool caps in X-A: the freed cash from
+       an ending budget item is already "post-budget" money, and the
+       intended destination is typically an uncapped cash/taxable
+       account. If the destination IS a capped account (e.g. directing
+       a paid-off loan into a 401(k)), the pool cap math runs on the
+       base annual contribution only — overflow modeling is a Phase X-B
+       item. Document with a UI warning when destAccountId points to a
+       capped pool.
+
+       Resolved by `resolveEndingEvents` in utils/endingItems.js — see
+       there for the data model + semantics. */
+    appliedEndingEvents = [],
   } = opts || {};
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -364,6 +384,36 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     },
   }];
   const poolWarnings = [];
+
+  /* Pre-group ending events by accountId for fast lookup in the inner
+     monthly loop. Each account's events are kept sorted ascending by
+     monthIndex (resolveEndingEvents guarantees this in its output, but
+     we don't trust opts) so we can walk them with a single index per
+     account, never re-scanning the whole list. */
+  const eventsForAcct = {};
+  if (Array.isArray(appliedEndingEvents)) {
+    for (const e of appliedEndingEvents) {
+      if (!e || !e.accountId) continue;
+      if (!eventsForAcct[e.accountId]) eventsForAcct[e.accountId] = [];
+      eventsForAcct[e.accountId].push({
+        monthIndex: Number(e.monthIndex) || 0,
+        monthlyDelta: Number(e.monthlyDelta) || 0,
+      });
+    }
+    for (const k of Object.keys(eventsForAcct)) {
+      eventsForAcct[k].sort((a, b) => a.monthIndex - b.monthIndex);
+    }
+  }
+  /* Per-account cursor into eventsForAcct[id]: how many events have
+     already been folded into the running "extra monthly delta" for that
+     account. We walk the cursor forward as the absolute month index
+     advances. */
+  const eventCursor = {};
+  const extraMonthlyDelta = {}; // running additive contribution from fired events
+  for (const a of accounts) {
+    eventCursor[a.id] = 0;
+    extraMonthlyDelta[a.id] = 0;
+  }
 
   for (let y = 1; y <= years; y++) {
     const calendarYear = baseYear + y;
@@ -441,35 +491,62 @@ export function forecastGrowthAccounts(accounts, years, opts) {
       const r = (Number(a.annualReturn) || 0) / 100;
       const monthlyR = Math.pow(1 + r, 1 / 12) - 1;
       const yearAnnual = finalContrib[a.id];
-      const monthlyC = yearAnnual / 12;
+      const baseMonthlyC = yearAnnual / 12;
       let bal = balances[a.id];
+      /* Track the EVENT-DRIVEN contribution separately from the base.
+         The base is `yearAnnual` (already rounded to whatever precision
+         the caller passed in); we don't want to recompute it as the
+         sum of twelve `yearAnnual/12` slices because that introduces
+         float drift in the contributions row even when no events fire.
+         Event contribution is the only thing accumulated month-by-month;
+         total reported contribution = yearAnnual + eventYearContrib. */
+      let eventYearContrib = 0;
+      const acctEvents = eventsForAcct[a.id];
       for (let m = 0; m < 12; m++) {
-        bal = bal * (1 + monthlyR) + monthlyC;
+        const absMonth = (y - 1) * 12 + m + 1; // 1-indexed absolute month
+        if (acctEvents) {
+          while (
+            eventCursor[a.id] < acctEvents.length &&
+            acctEvents[eventCursor[a.id]].monthIndex <= absMonth
+          ) {
+            extraMonthlyDelta[a.id] += acctEvents[eventCursor[a.id]].monthlyDelta;
+            eventCursor[a.id] += 1;
+          }
+        }
+        const effectiveMonthly = baseMonthlyC + extraMonthlyDelta[a.id];
+        bal = bal * (1 + monthlyR) + effectiveMonthly;
+        eventYearContrib += extraMonthlyDelta[a.id];
       }
+      const yearActualContrib = yearAnnual + eventYearContrib;
       balances[a.id] = bal;
-      cumContribs[a.id] += yearAnnual;
+      cumContribs[a.id] += yearActualContrib;
       const real = bal / Math.pow(1 + i, y);
       const wasCapped = (desired[a.id] - finalContrib[a.id]) > 0.01;
       accountSeries[a.id].push({
         year: y,
         balance: bal,
         real,
-        contribution: yearAnnual,
+        contribution: yearActualContrib,
         contribCum: cumContribs[a.id],
         capped: wasCapped,
         desiredContribution: desired[a.id],
+        /* Diagnostic: how much of `contribution` came from ending-item
+           events (positive = inflow from a paid-off obligation;
+           negative = "starts" scaffolding suppressing base). Zero when
+           no events have fired for this account yet. */
+        eventDelta: eventYearContrib,
       });
-      byAccount[a.id] = { nominal: bal, real, contribution: yearAnnual, contribCum: cumContribs[a.id] };
+      byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id] };
 
       const poolName = accountTypeToPool[a.type] || "taxable";
       if (!byPool[poolName]) byPool[poolName] = { nominal: 0, real: 0, contribution: 0 };
       byPool[poolName].nominal += bal;
       byPool[poolName].real += real;
-      byPool[poolName].contribution += yearAnnual;
+      byPool[poolName].contribution += yearActualContrib;
 
       totalNominal += bal;
       totalReal += real;
-      totalContrib += yearAnnual;
+      totalContrib += yearActualContrib;
     }
 
     yearRows.push({
