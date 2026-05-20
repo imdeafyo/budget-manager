@@ -504,3 +504,35 @@ export function yearsToHitPoolLimit(base, annualIncreasePct, limit, maxYears = 1
   }
   return null;
 }
+
+/* Annual cash-budget contribution figure used by the Advanced Forecast
+   "Source: Budget" mode on cash/savings accounts. Mirrors Simple's
+   budgetAnnualContribution algebra exactly, MINUS the retirement adders
+   (Advanced models retirement accounts as their own separate contribution
+   lines, so folding them into cash would double-count).
+
+   Formula:
+     income_annual   = cNet (weekly net paycheck) × forecastWeeks
+     expenses_annual = tExpW (weekly expense base) × 48
+     bonus_addon     = includeBonus ? eaipNet : 0
+     result          = income_annual − expenses_annual + bonus_addon
+
+   Why expenses use 48 even when weeks=52: budgeted expenses are fixed costs
+   denominated in the 48-paycheck cadence (see Y48/Y52 toggle in the budget
+   tab). The 4 "extra" weeks of income at weeks=52 don't have offsetting
+   budgeted expenses, so they flow into savings. Same convention as Simple.
+
+   Identity check: at weeks=48, no bonus, the formula reduces to
+     (cNet − tExpW) × 48 = (tSavW + remW) × 48
+   matching the prior hard-coded Advanced formula. */
+export function cashBudgetContribution(opts) {
+  const cNet = Number(opts?.cNet) || 0;
+  const tExpW = Number(opts?.tExpW) || 0;
+  const weeks = Number(opts?.forecastWeeks) || 48;
+  const eaipNet = Number(opts?.eaipNet) || 0;
+  const includeBonus = !!opts?.includeBonus;
+  const incomeAnnual = cNet * weeks;
+  const expensesAnnual = tExpW * 48;
+  const bonus = includeBonus ? eaipNet : 0;
+  return Math.max(0, incomeAnnual - expensesAnnual + bonus);
+}

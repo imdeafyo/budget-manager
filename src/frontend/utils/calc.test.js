@@ -4,6 +4,7 @@ import {
   calcStateTax, getStateMarg, toWk, fromWk, recalcMilestonePure,
   forecastGrowth, yearsToTarget,
   forecastGrowthAccounts, yearsToHitPoolLimit,
+  cashBudgetContribution,
   fmtCompact
 } from "../utils/calc.js";
 import { TAX_DB, STATE_BRACKETS, getPoolLimit, ACCOUNT_TYPE_TO_POOL, IRA_LIMITS, HSA_LIMITS_SELF, CATCHUP_401K } from "../data/taxDB.js";
@@ -907,5 +908,87 @@ describe("fmtCompact — abbreviated currency for axis labels", () => {
   it("handles non-finite gracefully", () => {
     expect(fmtCompact(null)).toBe("$0");
     expect(fmtCompact(undefined)).toBe("$0");
+  });
+});
+
+describe("cashBudgetContribution — Advanced cash-budget source math", () => {
+  /* Identity check: at 48 weeks with no bonus, the formula must reduce to
+     the prior hard-coded (tSavW + remW) × 48 figure. We verify this via the
+     algebraic equivalent: cNet = tExpW + tSavW + remW, so
+     cNet × 48 − tExpW × 48 = (tSavW + remW) × 48. */
+  it("at 48 weeks with no bonus, equals (cNet − tExpW) × 48", () => {
+    const result = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 48, eaipNet: 5000, includeBonus: false,
+    });
+    expect(result).toBe((2000 - 1200) * 48); // (tSavW + remW) × 48 = 800 × 48 = 38400
+  });
+
+  it("at 52 weeks, the 4 extra weeks of income flow to savings", () => {
+    const result = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 52, eaipNet: 0, includeBonus: false,
+    });
+    // 2000 × 52 − 1200 × 48 = 104000 − 57600 = 46400
+    expect(result).toBe(46400);
+    // Sanity: 52-week figure should be exactly 4 × cNet larger than 48-week
+    const at48 = cashBudgetContribution({ cNet: 2000, tExpW: 1200, forecastWeeks: 48 });
+    expect(result - at48).toBe(4 * 2000);
+  });
+
+  it("expenses do NOT scale with the weeks toggle (always × 48)", () => {
+    // If expenses scaled with weeks, the 52-week figure would be cNet*52 - tExpW*52
+    // = (cNet - tExpW) × 52. Verify that's NOT what happens.
+    const result = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 52, includeBonus: false,
+    });
+    expect(result).not.toBe((2000 - 1200) * 52);
+    // It should be cNet*52 - tExpW*48
+    expect(result).toBe(2000 * 52 - 1200 * 48);
+  });
+
+  it("includeBonus adds eaipNet to the result", () => {
+    const without = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 48, eaipNet: 7500, includeBonus: false,
+    });
+    const withBonus = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 48, eaipNet: 7500, includeBonus: true,
+    });
+    expect(withBonus - without).toBe(7500);
+  });
+
+  it("eaipNet is ignored when includeBonus is false", () => {
+    const a = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 48, eaipNet: 0, includeBonus: false,
+    });
+    const b = cashBudgetContribution({
+      cNet: 2000, tExpW: 1200, forecastWeeks: 48, eaipNet: 99999, includeBonus: false,
+    });
+    expect(a).toBe(b);
+  });
+
+  it("clamps negative results to zero (expenses exceed income)", () => {
+    const result = cashBudgetContribution({
+      cNet: 500, tExpW: 1200, forecastWeeks: 48, includeBonus: false,
+    });
+    // 500*48 - 1200*48 = -33600 → clamped to 0
+    expect(result).toBe(0);
+  });
+
+  it("handles missing/undefined inputs as zeros", () => {
+    expect(cashBudgetContribution({})).toBe(0);
+    expect(cashBudgetContribution()).toBe(0);
+    expect(cashBudgetContribution({ cNet: 1000 })).toBe(1000 * 48); // expenses default to 0
+  });
+
+  it("coerces string inputs", () => {
+    const result = cashBudgetContribution({
+      cNet: "2000", tExpW: "1200", forecastWeeks: "48", eaipNet: "5000", includeBonus: true,
+    });
+    expect(result).toBe((2000 - 1200) * 48 + 5000);
+  });
+
+  it("defaults forecastWeeks to 48 when not provided", () => {
+    const a = cashBudgetContribution({ cNet: 2000, tExpW: 1200 });
+    const b = cashBudgetContribution({ cNet: 2000, tExpW: 1200, forecastWeeks: 48 });
+    expect(a).toBe(b);
   });
 });
