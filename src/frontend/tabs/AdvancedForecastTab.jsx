@@ -111,8 +111,10 @@ export default function AdvancedForecastTab({
   // months)" contribution source on cash/savings accounts.
   transactions = [], cats = [], savCats = [], transferCats = [],
   // C bundle (from useAppState) — needs `net` (weekly paycheck net) and
-  // `eaipNet` (annual net bonus across both people) for the 48-vs-52-paycheck
-  // and Bonus toggles on the cash-budget contribution source.
+  // C bundle (from useAppState) — needs `net` (weekly paycheck net) and
+  // `eaipNet` (annual net bonus across both people) to drive the cash-budget
+  // contribution source on cash/savings accounts. The per-account
+  // contribSource dropdown (e.g., "budget-52-bonus") picks the math.
   C = {},
 }) {
   // Cross-view shared state — read/written via the same keys Simple uses so
@@ -125,24 +127,6 @@ export default function AdvancedForecastTab({
   // reads from, so changes round-trip between subtabs.
   const [inflationPct, setInflationPctRaw] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
   const setInflationPct = (v) => { setInflationPctRaw(v); try { localStorage.setItem("forecast-inflation", String(v)); } catch {} };
-
-  // Paycheck cadence override — 48 paychecks (matches the rest of the app's
-  // budget cadence) or 52 calendar weeks (more honest for compound growth).
-  // Shares the same localStorage key as Simple so the two views stay in sync.
-  // Default 52 (calendar) to match Simple's default.
-  const [forecastWeeks, setForecastWeeksRaw] = useState(() => {
-    try { const v = Number(localStorage.getItem("forecast-weeks")); return v === 48 || v === 52 ? v : 52; } catch { return 52; }
-  });
-  const setForecastWeeks = (v) => { setForecastWeeksRaw(v); try { localStorage.setItem("forecast-weeks", String(v)); } catch {} };
-
-  // Bonus inclusion — same localStorage key as Simple so the two views
-  // round-trip. Default OFF (conservative). Affects only the cash-budget
-  // contribution source on cash/savings accounts; retirement accounts in
-  // Advanced are salary-deferral driven and don't model bonus deferrals.
-  const [forecastBonus, setForecastBonusRaw] = useState(() => {
-    try { return localStorage.getItem("forecast-bonus") === "1"; } catch { return false; }
-  });
-  const setForecastBonus = (v) => { setForecastBonusRaw(v); try { localStorage.setItem("forecast-bonus", v ? "1" : "0"); } catch {} };
 
   const [fireEnabled, setFireEnabledRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; } });
   const setFireEnabled = (v) => { setFireEnabledRaw(v); try { localStorage.setItem("forecast-fire-enabled", v ? "1" : "0"); } catch {} };
@@ -528,43 +512,61 @@ export default function AdvancedForecastTab({
        Punting this — needs a tax-rate input + clearer UX around what's
        pre-tax vs post-tax. Worth a separate session.
 
-       Bonus contributions (cEaip / kEaip): the toolbar "Bonus" toggle adds
-       C.eaipNet to the cash-budget contribution source on cash/savings
-       accounts (mirrors Simple's behavior). Retirement accounts (401k, IRA,
-       HSA) here are salary-deferral / annual-amount driven and don't model
-       per-account bonus deferrals — designing a per-account bonus allocation
-       UI (e.g., "send X% of bonus to 401k, rest to taxable") is a future
-       backlog item. Today, toggling Bonus ON only changes cash-budget
-       accounts' contribution figure. */
+       Bonus contributions (cEaip / kEaip): cash/savings accounts can pick
+       a "+ bonus" budget variant in the contribSource dropdown, which adds
+       C.eaipNet to that account's annual contribution. Retirement accounts
+       (401k, IRA, HSA) here are salary-deferral / annual-amount driven and
+       don't model per-account bonus deferrals — designing a per-account
+       bonus allocation UI (e.g., "send X% of bonus to 401k, rest to
+       taxable") is a future backlog item. Today, choosing a "+ bonus"
+       budget variant on a cash account only adds bonus dollars to that
+       cash account. */
     if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
     if (a.type === "hsa_invested" && a.owner === "joint") return 0;
     if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
-    // Cash account contribution source — three modes besides manual:
-    //  • "budget"   = (C.net × forecastWeeks) − (tExpW × 48) + optional bonus.
-    //                 Matches Simple's budgetAnnualContribution algebra
-    //                 exactly (minus retirement adders, since Advanced
-    //                 models retirement as separate account lines).
-    //                 Identity: at 48 weeks with no bonus, this reduces to
-    //                 (tSavW + remW) × 48 — the prior hard-coded formula.
-    //                 Single household-level number split across cash
-    //                 accounts is NOT done here — each cash account with
-    //                 budget source gets the SAME number, which is wrong
-    //                 if the user has multiple cash accounts. Document
-    //                 in the dropdown title.
-    //  • "actualN"  = net savings over the last N months from transactions.
-    //                 The bonus toggle does not affect actualN — the
-    //                 transactions log already reflects what actually
-    //                 happened (bonus paychecks included or not).
+    /* Cash account contribution source — four "budget" variants and three
+       "actual" windows besides manual:
+         • "budget-48"            = (C.net × 48) − (tExpW × 48), the prior
+                                    hard-coded formula. Algebra check:
+                                    cNet − tExpW = tSavW + remW, so this
+                                    reduces to (tSavW + remW) × 48.
+         • "budget-48-bonus"      = budget-48 + C.eaipNet
+         • "budget-52"            = (C.net × 52) − (tExpW × 48). The 4
+                                    "extra" calendar weeks of paychecks at
+                                    52wk don't have offsetting budgeted
+                                    expenses, so they flow to cash.
+         • "budget-52-bonus"      = budget-52 + C.eaipNet
+         • "actual3/6/12"         = net savings over the last N months
+                                    from transactions, annualized. The
+                                    transactions log already reflects what
+                                    happened (bonus paychecks included or
+                                    not), so there's no bonus variant here.
+
+       Legacy: pre-rename saves stored "budget" (no weeks/bonus suffix).
+       That value behaves identically to "budget-48" — read-only shim, no
+       write-back, same pattern used for snapshots → milestones.
+
+       Note: each cash account with a budget source gets the SAME number,
+       which is wrong if the user has multiple cash accounts. Documented
+       in the dropdown title; allocation-aware variant is a backlog item. */
     if (a.type === "cash" && a.contribSource && a.contribSource !== "manual") {
-      if (a.contribSource === "budget") {
+      const src = a.contribSource;
+      // Budget variants — parse the source string to drive the helper.
+      // Legacy "budget" reads as "budget-48" (no bonus, paycheck cadence).
+      if (src === "budget" || src.startsWith("budget-")) {
+        const weeks = src === "budget" ? 48
+                    : src.startsWith("budget-52") ? 52
+                    : 48;
+        const includeBonus = src.endsWith("-bonus");
         return cashBudgetContribution({
           cNet: C?.net,
           tExpW,
-          forecastWeeks,
+          forecastWeeks: weeks,
           eaipNet: C?.eaipNet,
-          includeBonus: forecastBonus,
+          includeBonus,
         });
       }
+      // Actuals — annualized net savings from transactions over N months.
       const v = cashActualByAccount[a.id];
       return typeof v === "number" ? v : 0;
     }
@@ -588,8 +590,9 @@ export default function AdvancedForecastTab({
     // All inputs read by autoContribFor / effectiveContribFor must be listed
     // here, otherwise the projection silently goes stale when the user edits
     // an upstream value (IRA $ on Income tab, transactions for cash-actuals,
-    // tSavW/remW for cash-budget source, forecastWeeks/forecastBonus toggles).
-    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet, forecastWeeks, forecastBonus]
+    // tSavW/remW for cash-budget source). C.net and C.eaipNet drive the
+    // cash-budget variants; tExpW is the expense baseline.
+    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet]
   );
 
   /* Run the projection. */
@@ -766,34 +769,6 @@ export default function AdvancedForecastTab({
             }}
             style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }} />
           <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
-          <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
-          {/* Paycheck cadence toggle — round-trips with Simple via the same
-              localStorage key ("forecast-weeks"). 48 = paycheck (matches budget
-              tab cadence; 4 "extra" paychecks are absorbed into the budget
-              cushion). 52 = calendar (more honest for compound growth —
-              reflects when paychecks actually arrive). Affects cash-budget
-              contribution source only; salary-derived retirement contributions
-              are already denominated in annual salary. */}
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Weeks:</span>
-          <button
-            onClick={() => setForecastWeeks(52)}
-            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastWeeks === 52 ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastWeeks === 52 ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}
-            title="52 calendar weeks per year. More honest for compound growth — reflects when paychecks actually arrive. Affects the cash-budget contribution source on cash/savings accounts.">52 wk</button>
-          <button
-            onClick={() => setForecastWeeks(48)}
-            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastWeeks === 48 ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastWeeks === 48 ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}
-            title="48 paychecks per year — matches the rest of the app's budget cadence. The 4 'extra' paychecks are absorbed into the budget cushion.">48 pc</button>
-          <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
-          {/* Bonus toggle — round-trips with Simple via "forecast-bonus".
-              Adds C.eaipNet to the cash-budget contribution source on cash/
-              savings accounts. Has no effect on retirement accounts in this
-              view (those are salary-deferral driven; per-account bonus
-              allocation UI is a future backlog item). */}
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Bonus:</span>
-          <button
-            onClick={() => setForecastBonus(!forecastBonus)}
-            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: forecastBonus ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: forecastBonus ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}
-            title={`Include net annual bonus (${fmt(Number(C?.eaipNet) || 0)}/yr) in the cash-budget contribution source. Independent from the Trends tab toggle; round-trips with Simple Forecast.`}>{forecastBonus ? "ON" : "OFF"}</button>
           <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
           {/* FIRE controls grouped into a single visually-bound chunk:
               toggle + multiplier + target. Border + tinted background ties
@@ -1070,21 +1045,29 @@ export default function AdvancedForecastTab({
                       {a.type === "cash" && (
                         <div style={{ marginBottom: 4 }}>
                           <select
-                            value={a.contribSource || "manual"}
+                            // Legacy "budget" entries (pre-rename) map to
+                            // "budget-48" for display so React doesn't warn
+                            // about an unmatched <option>. The math layer
+                            // also accepts the legacy value (read shim) —
+                            // no migration write needed.
+                            value={a.contribSource === "budget" ? "budget-48" : (a.contribSource || "manual")}
                             onChange={e => {
                               const v = e.target.value;
                               const patch = { contribSource: v };
                               if (v !== "manual") patch.contribOverride = false;
                               updateAccount(a.id, patch);
                             }}
-                            title="Pick the contribution source for this cash account. 'Last N months' uses your transaction history (income − expenses, transfer rows excluded) annualized to a yearly amount."
+                            title="Pick the contribution source for this cash account. Budget variants annualize budgeted income (48 paychecks or 52 calendar weeks) minus budgeted expenses, optionally adding net bonus. Last N months uses your transaction history (income − expenses, transfer rows excluded) annualized."
                             style={{ width: "100%", padding: "4px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", marginBottom: 4 }}
                           >
-                            <option value="manual">Source: Manual entry</option>
-                            <option value="budget">{`Source: Budget tab × ${forecastWeeks} ${forecastWeeks === 48 ? "paychecks" : "weeks"}${forecastBonus ? " + bonus" : ""}`}</option>
-                            <option value="actual3">Source: Last 3 months actual</option>
-                            <option value="actual6">Source: Last 6 months actual</option>
-                            <option value="actual12">Source: Last 12 months actual</option>
+                            <option value="manual">Manual entry</option>
+                            <option value="budget-48">Budget — 48 weeks of income</option>
+                            <option value="budget-48-bonus">Budget — 48 weeks of income + bonus</option>
+                            <option value="budget-52">Budget — 52 weeks of income</option>
+                            <option value="budget-52-bonus">Budget — 52 weeks of income + bonus</option>
+                            <option value="actual3">Last 3 months actual</option>
+                            <option value="actual6">Last 6 months actual</option>
+                            <option value="actual12">Last 12 months actual</option>
                           </select>
                         </div>
                       )}
