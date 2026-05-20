@@ -378,14 +378,16 @@ export default function AdvancedForecastTab({
      redirected into a designated forecast account from that point on.
      See utils/endingItems.js for the data model. */
   const endingItems = Array.isArray(forecast?.endingItems) ? forecast.endingItems : [];
-  /* baseYearMonth is the projection's anchor month. baseYear from above
-     gives the calendar year; we anchor at January of that year because the
-     forecast math treats year 1 = baseYear + 1, year 0 = baseYear (a "we're
-     here now" row). Using January keeps month indexing aligned with how
-     the math layer interprets monthIndex. (If we ever start mid-year,
-     this would need to read the current month — but the projection
-     itself uses whole calendar years so January is the right anchor.) */
-  const baseYearMonth = `${baseYear}-01`;
+  /* baseYearMonth is the projection's "today" — anchored to the current
+     month, not January-of-current-year. Loan amortization output like
+     "Pays off: 2028-05 (24 mo)" needs to be honestly 24 months from
+     where the user is right now. The forecast math itself buckets by
+     calendar year, so a sub-year shift here only affects display +
+     monthIndex math inside resolveEndingEvents (still month-precise). */
+  const baseYearMonth = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
 
   const updateEndingItem = (id, patch) => {
     setForecast(prev => {
@@ -526,6 +528,33 @@ export default function AdvancedForecastTab({
       return { ...prev, accounts: prevAccounts.map(a => ACCOUNT_TYPE_TO_POOL[a.type] ? { ...a, capAtLimit: target } : a) };
     });
   };
+
+  /* Global "apply annual increase % to all accounts" control.
+     Most accounts move proportionally with salary increases (401(k)
+     contributions, HSA, IRA contributions, even taxable savings
+     typically scale up as raises arrive). Defaulting per-account
+     `annualIncrease` to 0 understates long-horizon balances; this
+     one-click action sets every account's `annualIncrease` to the
+     entered value. Local input state — not persisted — because this
+     is an action, not a setting. Default 3% to match Simple's
+     income-growth default. */
+  const [globalIncrease, setGlobalIncrease] = useState("3");
+  const applyIncreaseToAll = () => {
+    const v = evalF(globalIncrease);
+    if (!isFinite(v)) return;
+    setForecast(prev => {
+      const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
+      return { ...prev, accounts: prevAccounts.map(a => ({ ...a, annualIncrease: v })) };
+    });
+  };
+  /* Derive whether all accounts currently share a single annualIncrease
+     value (and what it is). Used to subtly indicate "in sync" vs "mixed."
+     null = no accounts, undefined = mixed. */
+  const sharedIncrease = (() => {
+    if (accounts.length === 0) return null;
+    const first = Number(accounts[0].annualIncrease) || 0;
+    return accounts.every(a => (Number(a.annualIncrease) || 0) === first) ? first : undefined;
+  })();
 
   /* ── Auto-derived annual contributions from the Income tab ──
      For derivable account types we can compute today's annual contribution
@@ -1010,7 +1039,9 @@ export default function AdvancedForecastTab({
           </div>
         </div>
 
-        {/* Projection assumptions: limit growth %. Small inline mini-section. */}
+        {/* Projection assumptions: limit growth + global annual increase.
+            Small inline mini-section. Both fields tied to projection-wide
+            behavior, distinct from per-account fine-tuning below. */}
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>IRS limit growth:</span>
           <div style={{ width: 90 }}>
@@ -1018,6 +1049,44 @@ export default function AdvancedForecastTab({
           </div>
           <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
             % per year applied to today's IRS limits for future projection years (rounded to nearest $500). Default 2.5%. Set to 0 to freeze limits at today's values.
+          </span>
+        </div>
+
+        {/* Global annual-increase apply control. Most accounts grow with
+            salary increases — this is the one-click way to set the same
+            % across all of them without editing each account row. Also
+            shows current state: in-sync (green dot) vs mixed (orange). */}
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <span
+              style={{
+                display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                background: sharedIncrease === null ? "#888" : sharedIncrease === undefined ? "#F39C12" : "#2ECC71",
+              }}
+              title={sharedIncrease === null
+                ? "No accounts to compare"
+                : sharedIncrease === undefined
+                  ? `Accounts have different annual increase values. Click "Apply to all" to sync.`
+                  : `All accounts at ${sharedIncrease}%/yr`}
+            />
+            Annual increase:
+          </span>
+          <div style={{ width: 90 }}>
+            <NI value={globalIncrease} onChange={setGlobalIncrease} onBlurResolve />
+          </div>
+          <button
+            onClick={applyIncreaseToAll}
+            disabled={accounts.length === 0}
+            title="Set every account's Annual Increase % to this value. Most accounts grow proportionally with salary increases — this is the one-click way to apply that without editing each account row."
+            style={{
+              padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5,
+              background: accounts.length === 0 ? "var(--input-bg,#f5f5f5)" : "#556FB5",
+              color: accounts.length === 0 ? "var(--tx3,#aaa)" : "#fff",
+              cursor: accounts.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >Apply to all</button>
+          <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
+            % per year that contributions grow — proxies salary raises. Per-account values can still be tuned individually below.
           </span>
         </div>
 
