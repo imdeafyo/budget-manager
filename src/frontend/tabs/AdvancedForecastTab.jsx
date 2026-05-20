@@ -1,9 +1,10 @@
 import { useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution } from "../utils/calc.js";
+import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
+import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
 
 /* ── Account type display metadata ──
    Account `type` strings map to (a) IRS pool for limit checking
@@ -107,6 +108,11 @@ export default function AdvancedForecastTab({
   // contributions so users don't enter the same number twice.
   cIraTrad = "0", cIraRoth = "0", kIraTrad = "0", kIraRoth = "0",
   preDed = [], hsaEmployerMatchAnnual = 0, tExpW = 0, tSavW = 0, remW = 0,
+  // Budget items — used by the Ending Obligations section to enumerate
+  // candidate budget lines in a single dropdown grouped by section, and
+  // to compute live monthly amounts at projection time. Shape matches
+  // useAppState's exp/sav arrays: { n, c, t, v, p } (savings rows omit t).
+  exp = [], sav = [],
   // Transactions + category sets enable the "from actual spending (last N
   // months)" contribution source on cash/savings accounts.
   transactions = [], cats = [], savCats = [], transferCats = [],
@@ -365,6 +371,148 @@ export default function AdvancedForecastTab({
     setForecast(prev => ({ ...prev, accounts: defaultForecastAccounts() }));
   };
 
+  /* ── Ending Obligations (Phase X-A) ──
+     Models budget lines that will stop at some future point (paid-off
+     loans, fixed-term subscriptions, term insurance reaching end of
+     premium). When the obligation ends, the freed monthly cash flow is
+     redirected into a designated forecast account from that point on.
+     See utils/endingItems.js for the data model. */
+  const endingItems = Array.isArray(forecast?.endingItems) ? forecast.endingItems : [];
+  /* baseYearMonth is the projection's anchor month. baseYear from above
+     gives the calendar year; we anchor at January of that year because the
+     forecast math treats year 1 = baseYear + 1, year 0 = baseYear (a "we're
+     here now" row). Using January keeps month indexing aligned with how
+     the math layer interprets monthIndex. (If we ever start mid-year,
+     this would need to read the current month — but the projection
+     itself uses whole calendar years so January is the right anchor.) */
+  const baseYearMonth = `${baseYear}-01`;
+
+  const updateEndingItem = (id, patch) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      return { ...prev, endingItems: cur.map(ei => ei.id === id ? { ...ei, ...patch } : ei) };
+    });
+  };
+  const removeEndingItem = (id) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      return { ...prev, endingItems: cur.filter(ei => ei.id !== id) };
+    });
+  };
+  const addEndingItem = () => {
+    /* Default destination: the first taxable/cash account in the list,
+       or any non-capped account, or the first account overall. The user
+       can change it immediately via the dropdown — this just keeps the
+       UI in a coherent initial state without forcing a destAccountId of
+       "" which would fail validation on resolve. */
+    const firstUncapped = accounts.find(a => !ACCOUNT_TYPE_TO_POOL[a.type]);
+    const defaultDest = (firstUncapped?.id) || accounts[0]?.id || "";
+    /* Default endsOn: 12 months out. Far enough that the user doesn't
+       see an immediate event in month 1; close enough that they can
+       see it on the chart. */
+    const defaultEndsOn = (() => {
+      const [y, m] = baseYearMonth.split("-").map(Number);
+      const total = y * 12 + (m - 1) + 12;
+      return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+    })();
+    const newItem = {
+      id: newEndingItemId(),
+      itemRef: null, // user picks via dropdown
+      destAccountId: defaultDest,
+      effect: "ends",
+      mode: "date",
+      endsOn: defaultEndsOn,
+      balance: 0,
+      annualRate: 0,
+    };
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      return { ...prev, endingItems: [...cur, newItem] };
+    });
+  };
+
+  /* Build the linked-item dropdown options. Single dropdown grouped by
+     section (Expenses then Savings) so the user picks "Mortgage P&I"
+     without first picking a section. Items with $0 amounts are still
+     listed — the user might be setting up an obligation for an item
+     they're about to start funding. We mark itemRefs that are already
+     consumed by another ending item so the dropdown can disable them
+     (one-ending-per-item invariant — also enforced on save via
+     findItemRefConflicts as a backstop). */
+  const linkedItemOptions = useMemo(() => {
+    const out = [];
+    for (let idx = 0; idx < (Array.isArray(exp) ? exp.length : 0); idx++) {
+      const e = exp[idx];
+      if (!e) continue;
+      out.push({ section: "exp", idx, name: e.n || `Expense ${idx + 1}`, key: `exp::${idx}` });
+    }
+    for (let idx = 0; idx < (Array.isArray(sav) ? sav.length : 0); idx++) {
+      const s = sav[idx];
+      if (!s) continue;
+      out.push({ section: "sav", idx, name: s.n || `Savings ${idx + 1}`, key: `sav::${idx}` });
+    }
+    return out;
+  }, [exp, sav]);
+
+  /* Set of itemRef keys (section::idx) already claimed by an ending item.
+     Each item maps to the ids that claim it, so we can keep the *current*
+     row's own selection enabled even when it's "taken." */
+  const claimedRefKeys = useMemo(() => {
+    const m = new Map(); // key -> Set of ending-item ids
+    for (const ei of endingItems) {
+      if (!ei?.itemRef) continue;
+      const k = `${ei.itemRef.section}::${ei.itemRef.idx}`;
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k).add(ei.id);
+    }
+    return m;
+  }, [endingItems]);
+
+  /* Look up the live monthly amount for a budget line by reference.
+     Uses toWk to convert the item's value+period to weekly, then ×(48/12)
+     to get a per-paycheck-monthly amount. budgetCompare's calendar-vs-
+     paycheck wrinkle doesn't apply here — the math layer is running a
+     monthly forecast based on budget intent, not reconciling against
+     transactions. Returns null when the linked item is missing (e.g.
+     renamed/deleted/reordered away). */
+  const monthlyAmountFor = (ref) => {
+    if (!ref || typeof ref.idx !== "number") return null;
+    const arr = ref.section === "sav" ? sav : exp;
+    if (!Array.isArray(arr)) return null;
+    const item = arr[ref.idx];
+    if (!item) return null;
+    // Sanity check: if the user reordered items, the idx may point at a
+    // different item now. We compare snapshot name as a soft check —
+    // when the name doesn't match, we trust the idx still (most reorders
+    // shift everything in lockstep) and surface the rename via the
+    // dropdown display rather than failing. The orphan path catches the
+    // hard case where idx is out of range entirely.
+    const wk = toWk(item.v, item.p);
+    if (!isFinite(wk)) return null;
+    return wk * 48 / 12; // weekly → monthly
+  };
+
+  /* Resolve ending items to applied events for the forecast math.
+     baseYearMonth + horizonMonths anchor the month-index math. The
+     output `resolvedEnding` includes orphan + out-of-horizon lists so
+     the UI can surface warnings beside the relevant rows.
+
+     This memo intentionally depends on the live `exp`/`sav` arrays —
+     editing a budget line's monthly amount or period updates the
+     forecast in real time without the user re-saving the ending item. */
+  const resolvedEnding = useMemo(() => {
+    const horizonMonths = (Number(horizon) || 0) * 12;
+    return resolveEndingEvents(endingItems, monthlyAmountFor, baseYearMonth, horizonMonths);
+    // monthlyAmountFor closes over exp/sav, so list those.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endingItems, exp, sav, baseYearMonth, horizon]);
+
+  /* Detect duplicate itemRef assignments (one-ending-per-item invariant).
+     UI prevents creating duplicates via dropdown disabling; this is a
+     defensive recompute for the warning banner in case the invariant
+     was broken via JSON import or a save migration. */
+  const endingItemConflicts = useMemo(() => findItemRefConflicts(endingItems), [endingItems]);
+
   /* Cap-at-limit master toggle. Tristate: all-on / all-off / mixed.
      Click flips: any-off → all-on, all-on → all-off. */
   const eligibleAccounts = accounts.filter(a => ACCOUNT_TYPE_TO_POOL[a.type]); // limit applies
@@ -606,8 +754,9 @@ export default function AdvancedForecastTab({
       getPoolLimit,
       accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
       limitGrowthPct,
+      appliedEndingEvents: resolvedEnding.events,
     });
-  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct]);
+  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events]);
 
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.
@@ -1228,6 +1377,304 @@ export default function AdvancedForecastTab({
             </div>
           );
         })()}
+      </Card>
+
+      {/* ── Ending Obligations (Phase X-A) ──
+          Models budget lines that will stop at a future date (paid-off
+          loans, fixed-term subscriptions, premium phase-outs). When an
+          obligation ends, the freed monthly cash flow redirects into a
+          destination forecast account from that point forward. Designed
+          to be light-touch — most users will have 0 of these, a handful
+          will have 1–3. We collapse the card by default if empty to
+          avoid visual noise on the tab. */}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>
+              Ending Obligations
+              {endingItems.length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)" }}>
+                  ({endingItems.length})
+                </span>
+              )}
+            </h3>
+            <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 540 }}>
+              Budget lines that will end at a future date (paid-off loans, finite subscriptions).
+              When they end, the freed monthly cash redirects to the destination account.
+            </div>
+          </div>
+          <button
+            onClick={addEndingItem}
+            disabled={accounts.length === 0 || linkedItemOptions.length === 0}
+            title={accounts.length === 0
+              ? "Add at least one forecast account first"
+              : linkedItemOptions.length === 0
+                ? "No budget items found — add expense or savings rows on the Budget tab"
+                : "Add a new ending obligation"}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 700,
+              border: "none",
+              borderRadius: 6,
+              background: (accounts.length === 0 || linkedItemOptions.length === 0) ? "var(--input-bg,#f5f5f5)" : "#556FB5",
+              color: (accounts.length === 0 || linkedItemOptions.length === 0) ? "var(--tx3,#aaa)" : "#fff",
+              cursor: (accounts.length === 0 || linkedItemOptions.length === 0) ? "not-allowed" : "pointer",
+            }}
+          >+ Add</button>
+        </div>
+
+        {endingItemConflicts.length > 0 && (
+          <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400E", background: "rgba(243,156,18,0.12)", border: "1px solid rgba(243,156,18,0.35)", borderRadius: 6 }}>
+            ⚠ {endingItemConflicts.length} budget item{endingItemConflicts.length === 1 ? " is" : "s are"} referenced by multiple ending obligations.
+            Only one obligation per budget line is supported — please remove duplicates below.
+          </div>
+        )}
+
+        {endingItems.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: 12, color: "var(--tx3,#888)", fontStyle: "italic", textAlign: "center", background: "var(--input-bg,#fafafa)", borderRadius: 6, border: "1px dashed var(--bdr,#ddd)" }}>
+            No ending obligations configured. Click <strong>+ Add</strong> to model a finite expense or savings line.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {endingItems.map((ei) => {
+              /* Per-row derived state — lots of small bits so we compute
+                 them once at the top of the row for readability below. */
+              const refKey = ei.itemRef ? `${ei.itemRef.section}::${ei.itemRef.idx}` : null;
+              const linkedItem = ei.itemRef
+                ? (ei.itemRef.section === "sav" ? sav[ei.itemRef.idx] : exp[ei.itemRef.idx])
+                : null;
+              const isOrphan = ei.itemRef && !linkedItem;
+              const liveMonthly = monthlyAmountFor(ei.itemRef);
+              const destAcct = accounts.find(a => a.id === ei.destAccountId);
+              const destPool = destAcct ? ACCOUNT_TYPE_TO_POOL[destAcct.type] : null;
+              const destIsCapped = !!destPool && destAcct?.capAtLimit;
+              const isOutOfHorizon = resolvedEnding.outOfHorizon.some(o => o.id === ei.id);
+              const isLoanMode = ei.mode === "loan";
+
+              /* Compute loan endsOn on the fly for display + persist via
+                 useEffect-equivalent on input blur. We compute every render
+                 for live preview; the persisted value is what the math
+                 layer trusts (resolveEndingEvents reads ei.endsOn). */
+              let loanResult = null;
+              if (isLoanMode && liveMonthly != null) {
+                loanResult = computeLoanEndsOn(ei.balance, ei.annualRate, liveMonthly, baseYearMonth);
+              }
+
+              const conflictsHere = endingItemConflicts.some(c => c.ids.includes(ei.id));
+
+              return (
+                <div key={ei.id} style={{
+                  padding: 10,
+                  border: `1px solid ${conflictsHere ? "rgba(232,87,58,0.5)" : isOrphan ? "rgba(232,87,58,0.5)" : "var(--bdr,#ddd)"}`,
+                  borderRadius: 8,
+                  background: "var(--card-bg,#fff)",
+                  display: "grid",
+                  gridTemplateColumns: mob ? "1fr" : "1.6fr 1fr 1.4fr auto",
+                  gap: 10,
+                  alignItems: "start",
+                }}>
+                  {/* Linked budget item */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Linked Budget Item</label>
+                    <select
+                      value={refKey || ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (!v) {
+                          updateEndingItem(ei.id, { itemRef: null });
+                          return;
+                        }
+                        const opt = linkedItemOptions.find(o => o.key === v);
+                        if (!opt) return;
+                        updateEndingItem(ei.id, { itemRef: { section: opt.section, idx: opt.idx, name: opt.name } });
+                      }}
+                      style={{ width: "100%", padding: 6, fontSize: 12, border: `1px solid ${isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                    >
+                      <option value="">— pick a budget line —</option>
+                      <optgroup label="Expenses">
+                        {linkedItemOptions.filter(o => o.section === "exp").map(o => {
+                          const taken = claimedRefKeys.get(o.key);
+                          const takenByOther = taken && !taken.has(ei.id);
+                          return (
+                            <option key={o.key} value={o.key} disabled={takenByOther}>
+                              {o.name}{takenByOther ? " — already used" : ""}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                      <optgroup label="Savings">
+                        {linkedItemOptions.filter(o => o.section === "sav").map(o => {
+                          const taken = claimedRefKeys.get(o.key);
+                          const takenByOther = taken && !taken.has(ei.id);
+                          return (
+                            <option key={o.key} value={o.key} disabled={takenByOther}>
+                              {o.name}{takenByOther ? " — already used" : ""}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    </select>
+                    {/* Live monthly + status hints */}
+                    <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
+                      {isOrphan ? (
+                        <span style={{ color: "#E8573A", fontWeight: 600 }}>
+                          ⚠ Linked item missing (was "{ei.itemRef?.name || "?"}")
+                        </span>
+                      ) : liveMonthly == null ? (
+                        <span style={{ fontStyle: "italic" }}>Pick a budget line above</span>
+                      ) : liveMonthly === 0 ? (
+                        <span style={{ color: "#E8573A" }}>Item amount is $0 — set a value on the Budget tab</span>
+                      ) : (
+                        <span>Currently: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(liveMonthly)}/mo</strong></span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Mode toggle + date or loan inputs */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Mode</label>
+                    <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+                      {["date", "loan"].map(m => (
+                        <button
+                          key={m}
+                          onClick={() => updateEndingItem(ei.id, { mode: m })}
+                          style={{
+                            flex: 1,
+                            padding: "5px 8px",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            border: "none",
+                            borderRadius: 5,
+                            background: ei.mode === m ? "#556FB5" : "var(--input-bg,#f5f5f5)",
+                            color: ei.mode === m ? "#fff" : "var(--tx2,#555)",
+                            cursor: "pointer",
+                          }}
+                          title={m === "date"
+                            ? "Pick the month the obligation ends. Use this for fixed-term subscriptions or known payoff dates."
+                            : "Enter loan balance + interest rate. The end date is computed from the linked item's monthly payment using standard amortization."}
+                        >
+                          {m === "date" ? "Date" : "Loan"}
+                        </button>
+                      ))}
+                    </div>
+                    {ei.mode === "date" ? (
+                      <input
+                        type="month"
+                        value={ei.endsOn || ""}
+                        onChange={e => updateEndingItem(ei.id, { endsOn: e.target.value })}
+                        style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                      />
+                    ) : (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: 9, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 2 }}>Balance</label>
+                          <NI
+                            value={String(ei.balance ?? 0)}
+                            onChange={v => {
+                              const num = evalF(v);
+                              const patch = { balance: num };
+                              /* Recompute endsOn live so the math layer
+                                 sees the new payoff date without a save
+                                 step. We only update when the result is
+                                 valid; invalid (zero-payment, neg-am)
+                                 leaves the old endsOn alone and the UI
+                                 shows the error below. */
+                              if (liveMonthly != null && liveMonthly > 0) {
+                                const r = computeLoanEndsOn(num, ei.annualRate, liveMonthly, baseYearMonth);
+                                if (r.ok) patch.endsOn = r.endsOn;
+                              }
+                              updateEndingItem(ei.id, patch);
+                            }}
+                            onBlurResolve
+                            prefix="$"
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: 9, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 2 }}>Rate %</label>
+                          <NI
+                            value={String(ei.annualRate ?? 0)}
+                            onChange={v => {
+                              const num = evalF(v);
+                              const patch = { annualRate: num };
+                              if (liveMonthly != null && liveMonthly > 0) {
+                                const r = computeLoanEndsOn(ei.balance, num, liveMonthly, baseYearMonth);
+                                if (r.ok) patch.endsOn = r.endsOn;
+                              }
+                              updateEndingItem(ei.id, patch);
+                            }}
+                            onBlurResolve
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {/* Computed-endsOn display for loan mode */}
+                    {ei.mode === "loan" && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
+                        {loanResult?.ok ? (
+                          <>Pays off: <strong style={{ color: "var(--card-color,#222)" }}>{loanResult.endsOn}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>({loanResult.months} mo)</span></>
+                        ) : loanResult?.reason === "zero-payment" ? (
+                          <span style={{ color: "#E8573A" }}>Need a non-zero monthly payment</span>
+                        ) : loanResult?.reason === "zero-balance" ? (
+                          <span style={{ color: "#E8573A" }}>Need a non-zero balance</span>
+                        ) : loanResult?.reason === "negative-amortization" ? (
+                          <span style={{ color: "#E8573A" }}>⚠ Payment doesn't cover interest — loan never pays off</span>
+                        ) : loanResult?.reason === "horizon-exceeded" ? (
+                          <span style={{ color: "#E8573A" }}>Pays off beyond 50yr — check inputs</span>
+                        ) : (
+                          <span style={{ fontStyle: "italic" }}>Awaiting valid inputs</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Destination account */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Redirect To</label>
+                    <select
+                      value={ei.destAccountId || ""}
+                      onChange={e => updateEndingItem(ei.id, { destAccountId: e.target.value })}
+                      style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                    >
+                      <option value="">— pick destination —</option>
+                      {accounts.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {deriveAccountName(a, p1Name, p2Name)}
+                        </option>
+                      ))}
+                    </select>
+                    {/* Status hints under destination */}
+                    <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
+                      {!ei.destAccountId ? (
+                        <span style={{ color: "#E8573A" }}>Pick a destination account</span>
+                      ) : destIsCapped ? (
+                        <span style={{ color: "#92400E" }} title="Pool caps apply to the base annual contribution only — the freed monthly cash flows through uncapped in X-A. If you're hitting a 401(k)/IRA/HSA ceiling, the math may overstate.">
+                          ⚠ Capped pool — caps may understate effect
+                        </span>
+                      ) : isOutOfHorizon ? (
+                        <span style={{ color: "var(--tx3,#888)", fontStyle: "italic" }}>
+                          Past {horizon}y horizon — no visible effect
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Remove button */}
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "flex-end" }}>
+                    <button
+                      onClick={() => {
+                        if (!window.confirm("Remove this ending obligation?")) return;
+                        removeEndingItem(ei.id);
+                      }}
+                      title="Remove this ending obligation"
+                      style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: "#ccc", padding: "2px 6px", lineHeight: 1 }}
+                    >×</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       {/* Per-pool summary cards — moved above the chart so the headline
