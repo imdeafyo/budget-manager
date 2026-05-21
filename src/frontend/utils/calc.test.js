@@ -579,6 +579,49 @@ describe("forecastGrowthAccounts — account-based projection", () => {
     expect(r.accountSeries.a[3].contribCum).toBeCloseTo(3310, 6);
   });
 
+  it("contribCumReal discounts each year's contribution to today's $", () => {
+    // 5% inflation, 0% return, $1000/yr flat contribution, 3 years.
+    // Nominal cum: 3000. Real cum: 1000/1.05 + 1000/1.05^2 + 1000/1.05^3
+    //   = 952.38 + 907.03 + 863.84 = 2723.25
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, inflationPct: 5 });
+    expect(r.accountSeries.a[3].contribCum).toBeCloseTo(3000, 6);
+    expect(r.accountSeries.a[3].contribCumReal).toBeCloseTo(2723.25, 1);
+    expect(r.years[3].byAccount.a.contribCumReal).toBeCloseTo(2723.25, 1);
+    // totals.contributionsReal is *per-year* (mirrors totals.contributions),
+    // not cumulative. Year 3 sees only that year's real contribution.
+    expect(r.years[3].totals.contributionsReal).toBeCloseTo(1000 / Math.pow(1.05, 3), 1);
+  });
+
+  it("contribCumReal equals contribCum when inflation is zero", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 5, { ...baseOpts, inflationPct: 0 });
+    expect(r.accountSeries.a[5].contribCumReal).toBeCloseTo(r.accountSeries.a[5].contribCum, 6);
+  });
+
+  it("contribCumReal can exceed today's-$ balance on low-return / high-inflation accounts", () => {
+    // Pure shape check: a cash account at 0.5% return with 5% inflation
+    // produces a today's-$ balance less than today's-$ contributions
+    // (real loss). This is the *correct* shape — the old display showed
+    // nominal contribCum which was nonsensically large vs real balance.
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 10000, annualReturn: 0.5, contribAmount: 10000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r = forecastGrowthAccounts(accounts, 30, { ...baseOpts, inflationPct: 5 });
+    const last = r.years[30].byAccount.cash;
+    // Today's $ contributions are positive and finite
+    expect(last.contribCumReal).toBeGreaterThan(0);
+    // And in this scenario, real balance is less than real contributions
+    // (real return is negative: 0.5% nominal − 5% inflation ≈ −4.5%)
+    expect(last.real).toBeLessThan(last.contribCumReal);
+    // But still much smaller than the nominal contribCum
+    expect(last.contribCumReal).toBeLessThan(last.contribCum);
+  });
+
   it("caps at IRS limit when capAtLimit=true and over the pool", () => {
     // Pre-tax + Roth 401(k) for one person, both with capAtLimit, total way over
     const accounts = [

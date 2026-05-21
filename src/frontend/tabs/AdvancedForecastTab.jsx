@@ -837,7 +837,14 @@ export default function AdvancedForecastTab({
     return colors;
   }, [accounts, colorBy]);
 
-  /* Per-pool ending-balance summary for the cards row. */
+  /* Per-pool ending-balance summary for the cards row.
+     `contributions` here is `contribCumReal` (each year's contribution
+     discounted to today's $ and summed), NOT nominal contribCum. This is
+     the unit-coherent counterpart to `real` (today's-$ balance), so the
+     "Contributed" row in the card uses the same purchasing-power frame as
+     "Today's $". Earlier versions used nominal contribCum, which produced
+     "Contributed > Today's $" displays on low-return / high-inflation
+     accounts that were mathematically right but misleading. */
   const poolSummary = useMemo(() => {
     const last = projection.years[projection.years.length - 1];
     if (!last) return [];
@@ -847,7 +854,7 @@ export default function AdvancedForecastTab({
       pools[pool] = pools[pool] || { nominal: 0, real: 0, contributions: 0, count: 0 };
       pools[pool].nominal += last.byAccount[a.id]?.nominal || 0;
       pools[pool].real += last.byAccount[a.id]?.real || 0;
-      pools[pool].contributions += last.byAccount[a.id]?.contribCum || 0;
+      pools[pool].contributions += last.byAccount[a.id]?.contribCumReal || 0;
       pools[pool].count += 1;
     }
     return Object.entries(pools).map(([pool, v]) => ({ pool, ...v }));
@@ -1762,7 +1769,7 @@ export default function AdvancedForecastTab({
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
                 <div style={{ fontSize: 22, fontWeight: 800, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
                 <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Today's $: {fmt(Math.round(p.real))}</div>
-                <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed: {fmt(Math.round(p.contributions))}</div>
+                <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed (today's $): {fmt(Math.round(p.contributions))}</div>
                 <div style={{ fontSize: 10, color: "var(--tx3,#bbb)", marginTop: 2 }}>{p.count} account{p.count === 1 ? "" : "s"}</div>
               </>
             ),
@@ -1797,7 +1804,19 @@ export default function AdvancedForecastTab({
                 ) : (
                   <>
                     <div style={{ fontSize: 22, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFireAdv.toFixed(1)} yr</div>
-                    <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target: {fmt(fireTarget)}</div>
+                    {/* Two-line target display: today's $ baseline (the
+                        25× expenses number the user enters / sees on
+                        the FIRE controls), plus the inflation-adjusted
+                        nominal target the chart actually crosses in
+                        year `yearsToFireAdv`. Without the second line
+                        the box duplicates the headline pool-summary
+                        card above; with it, the user can see how much
+                        the FIRE goal has grown in nominal dollars by
+                        the time they hit it. */}
+                    <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target today: {fmt(fireTarget)}</div>
+                    <div style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
+                      target year {yearsToFireAdv.toFixed(1)}: {fmt(fireTarget * Math.pow(1 + (Number(inflationPct) || 0) / 100, yearsToFireAdv))}
+                    </div>
                   </>
                 )}
               </>
@@ -1882,27 +1901,69 @@ export default function AdvancedForecastTab({
                 <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
-                  /* itemSorter reverses the natural Recharts order so the
-                     tooltip lists items top-down to match the visual stack:
-                     the top-most band in the chart appears first in the
-                     tooltip. Recharts stacks items in the order they're
-                     declared (first <Area> at the bottom of the stack), so
-                     reversing dataKey index = top-down read. The FI target
-                     line gets a stable position at the bottom of the
-                     tooltip (after all stacked accounts). */
-                  itemSorter={(item) => {
-                    if (item.dataKey === "fireThresh") return Number.POSITIVE_INFINITY;
-                    const idx = displayedAccounts.findIndex(a => a.id === item.dataKey);
-                    return idx >= 0 ? -idx : 1e9;
+                  /* Custom content (not formatter) — we need to:
+                     1. Sort items top-down to match the visual stack
+                        (was the old itemSorter's job).
+                     2. Append a "Total" row + "Today's $" row at the
+                        bottom. Recharts doesn't expose a hook for
+                        injected rows from formatter, so we own the
+                        whole render. The `total` and `totalReal` keys
+                        already exist in chartData (see chartData memo)
+                        — we read them from the payload's first item's
+                        full `payload` object, not from the items list
+                        itself (they're not declared as <Area>s, so they
+                        wouldn't appear there even if we wanted them to). */
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload || !payload.length) return null;
+                    const row = payload[0]?.payload || {};
+                    // Sort items top-down: invert displayedAccounts order
+                    // (first in displayedAccounts = bottom of stack), and
+                    // park the FI threshold last.
+                    const items = [...payload].sort((a, b) => {
+                      if (a.dataKey === "fireThresh") return 1;
+                      if (b.dataKey === "fireThresh") return -1;
+                      const ai = displayedAccounts.findIndex(x => x.id === a.dataKey);
+                      const bi = displayedAccounts.findIndex(x => x.id === b.dataKey);
+                      return (bi >= 0 ? bi : 1e9) - (ai >= 0 ? ai : 1e9);
+                    });
+                    const labelFor = (k) => {
+                      if (k === "fireThresh") return "FI target (year-y $)";
+                      const a = accounts.find(x => x.id === k);
+                      return a ? deriveAccountName(a, p1Name, p2Name) : k;
+                    };
+                    return (
+                      <div style={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, padding: "8px 10px", lineHeight: 1.5 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--tx1,#222)" }}>{`Year ${label} (${baseYear + Number(label)})`}</div>
+                        {items.map((it, idx) => (
+                          <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <span style={{ display: "inline-block", width: 8, height: 8, background: it.color || it.stroke || "#888", borderRadius: 2 }} />
+                            <span style={{ color: "var(--tx2,#555)", flex: 1 }}>{labelFor(it.dataKey)}</span>
+                            <span style={{ color: "var(--tx1,#222)", fontVariantNumeric: "tabular-nums" }}>{fmt(it.value)}</span>
+                          </div>
+                        ))}
+                        {/* Total rows — added because clicking through
+                            the tooltip to read the sum was the annoying
+                            part. Pull from chartData's `total` /
+                            `totalReal` keys (defined in the chartData
+                            memo above), not from summing items, so
+                            rounding stays consistent with the cards. */}
+                        {typeof row.total === "number" && (
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, paddingTop: 4, borderTop: "1px solid var(--bdr,#e0e0e0)" }}>
+                            <span style={{ display: "inline-block", width: 8, height: 8 }} />
+                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
+                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
+                          </div>
+                        )}
+                        {typeof row.totalReal === "number" && (
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <span style={{ display: "inline-block", width: 8, height: 8 }} />
+                            <span style={{ color: "var(--tx2,#555)", flex: 1 }}>Total (today's $)</span>
+                            <span style={{ color: "var(--tx2,#555)", fontVariantNumeric: "tabular-nums" }}>{fmt(row.totalReal)}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
                   }}
-                  formatter={(v, k) => {
-                    if (k === "fireThresh") return [fmt(v), "FI target (year-y $)"];
-                    if (k === "total") return [fmt(v), "Total (future $)"];
-                    if (k === "totalReal") return [fmt(v), "Total (today's $)"];
-                    const a = accounts.find(x => x.id === k);
-                    return [fmt(v), a ? deriveAccountName(a, p1Name, p2Name) : k];
-                  }}
-                  labelFormatter={(y) => `Year ${y} (${baseYear + Number(y)})`}
                 />
                 {showChartLegend && <Legend wrapperStyle={{ fontSize: 11 }} />}
                 {/* Stack order follows the user's sort selection above (manual /

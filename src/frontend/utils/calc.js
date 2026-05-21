@@ -279,11 +279,12 @@ export function yearsToTarget(initialBalance, annualContribution, returnPct, tar
    Returns:
      {
        years: [{ year, calendarYear, byAccount, byPool, totals }],
-       accountSeries: { [acctId]: [{ year, balance, real, contribution, contribCum, capped }] },
+       accountSeries: { [acctId]: [{ year, balance, real, contribution, contribCum, contribCumReal, capped }] },
        poolWarnings: [{ year, pool, owner, requested, limit, capped }],
      }
-   `byAccount`, `byPool`, `totals` each contain { nominal, real, contributions }
-   (real contributions are deflated to today's dollars). */
+   `byAccount` contains { nominal, real, contribution, contribCum, contribCumReal }
+   (contribCumReal = each year's contribution discounted to today's $ and summed,
+   for unit-coherent comparison with `real`). `byPool` and `totals` mirror this. */
 export function forecastGrowthAccounts(accounts, years, opts) {
   const {
     baseYear = new Date().getFullYear(),
@@ -365,22 +366,30 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   // Initialize per-account balances and series
   const balances = {};
   const cumContribs = {};
+  /* cumContribsReal: each year's contribution discounted back to year-0
+     (today's) dollars and summed. Necessary because contribCum is a
+     nominal sum across decades — directly comparing it to `real` (today's-$
+     balance) is a unit mismatch that produced misleading "Contributed >
+     Today's $" displays on low-return / high-inflation accounts. */
+  const cumContribsReal = {};
   const accountSeries = {};
   for (const a of accounts) {
     balances[a.id] = Number(a.startBalance) || 0;
     cumContribs[a.id] = 0;
-    accountSeries[a.id] = [{ year: 0, balance: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0, capped: false }];
+    cumContribsReal[a.id] = 0;
+    accountSeries[a.id] = [{ year: 0, balance: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0, contribCumReal: 0, capped: false }];
   }
 
   const yearRows = [{
     year: 0,
     calendarYear: baseYear,
-    byAccount: Object.fromEntries(accounts.map(a => [a.id, { nominal: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0 }])),
+    byAccount: Object.fromEntries(accounts.map(a => [a.id, { nominal: balances[a.id], real: balances[a.id], contribution: 0, contribCum: 0, contribCumReal: 0 }])),
     byPool: {},
     totals: {
       nominal: accounts.reduce((s, a) => s + balances[a.id], 0),
       real: accounts.reduce((s, a) => s + balances[a.id], 0),
       contributions: 0,
+      contributionsReal: 0,
     },
   }];
   const poolWarnings = [];
@@ -486,6 +495,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     let totalNominal = 0;
     let totalReal = 0;
     let totalContrib = 0;
+    let totalContribReal = 0;
 
     for (const a of accounts) {
       const r = (Number(a.annualReturn) || 0) / 100;
@@ -520,6 +530,13 @@ export function forecastGrowthAccounts(accounts, years, opts) {
       const yearActualContrib = yearAnnual + eventYearContrib;
       balances[a.id] = bal;
       cumContribs[a.id] += yearActualContrib;
+      /* Discount this year's contribution back to year-0 dollars before
+         summing. Using `y` (end-of-year) as the discount point is a small
+         approximation vs. spreading contributions through the year, but
+         matches how `real` (the balance counterpart) is discounted on the
+         same line below. */
+      const yearContribReal = yearActualContrib / Math.pow(1 + i, y);
+      cumContribsReal[a.id] += yearContribReal;
       const real = bal / Math.pow(1 + i, y);
       const wasCapped = (desired[a.id] - finalContrib[a.id]) > 0.01;
       accountSeries[a.id].push({
@@ -528,6 +545,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
         real,
         contribution: yearActualContrib,
         contribCum: cumContribs[a.id],
+        contribCumReal: cumContribsReal[a.id],
         capped: wasCapped,
         desiredContribution: desired[a.id],
         /* Diagnostic: how much of `contribution` came from ending-item
@@ -536,17 +554,19 @@ export function forecastGrowthAccounts(accounts, years, opts) {
            no events have fired for this account yet. */
         eventDelta: eventYearContrib,
       });
-      byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id] };
+      byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id], contribCumReal: cumContribsReal[a.id] };
 
       const poolName = accountTypeToPool[a.type] || "taxable";
-      if (!byPool[poolName]) byPool[poolName] = { nominal: 0, real: 0, contribution: 0 };
+      if (!byPool[poolName]) byPool[poolName] = { nominal: 0, real: 0, contribution: 0, contributionReal: 0 };
       byPool[poolName].nominal += bal;
       byPool[poolName].real += real;
       byPool[poolName].contribution += yearActualContrib;
+      byPool[poolName].contributionReal += yearContribReal;
 
       totalNominal += bal;
       totalReal += real;
       totalContrib += yearActualContrib;
+      totalContribReal += yearContribReal;
     }
 
     yearRows.push({
@@ -554,7 +574,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
       calendarYear,
       byAccount,
       byPool,
-      totals: { nominal: totalNominal, real: totalReal, contributions: totalContrib },
+      totals: { nominal: totalNominal, real: totalReal, contributions: totalContrib, contributionsReal: totalContribReal },
     });
   }
 
