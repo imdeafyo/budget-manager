@@ -1948,10 +1948,15 @@ export default function AdvancedForecastTab({
                             memo above), not from summing items, so
                             rounding stays consistent with the cards. */}
                         {typeof row.total === "number" && (
+                          /* Color matches the "today's $" row below (var(--tx2)) rather
+                             than var(--tx1) — which doesn't exist as a theme var, so it
+                             was falling back to #222 and rendering near-black on every
+                             theme (notably illegible in dark mode). fontWeight: 700
+                             preserves the visual hierarchy without relying on color. */
                           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, paddingTop: 4, borderTop: "1px solid var(--bdr,#e0e0e0)" }}>
                             <span style={{ display: "inline-block", width: 8, height: 8 }} />
-                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
-                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
+                            <span style={{ color: "var(--tx2,#555)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
+                            <span style={{ color: "var(--tx2,#555)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
                           </div>
                         )}
                         {typeof row.totalReal === "number" && (
