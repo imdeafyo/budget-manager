@@ -459,27 +459,21 @@ export default function useAppState() {
             if (!Array.isArray(d.forecast.endingItems)) {
               merged.endingItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
             }
-            /* === One-time localStorage → st.forecast migration ===
-               When `migrated` flag is false/missing on the loaded state,
-               this device's localStorage values seed the corresponding
-               st.forecast fields, then the flag is flipped to true and
-               auto-save pushes the seeded shape to the server. Whichever
-               device the user opens first after this deploy "wins" — they
-               can pick which device's localStorage carries over.
+            /* === One-time localStorage → st.forecast migration (DISABLED) ===
+               This shim seeds st.forecast.* from this device's localStorage
+               on first load after the migration deploy. It's now disabled
+               because the migration has run on Corey's primary device and
+               the seeded shape is on the server.
 
-               After migration, localStorage is no longer read for these
-               keys. The write-side listeners in ForecastTab/AdvancedForecastTab
-               also stop writing to localStorage once they're switched to
-               read from st.forecast.
+               LEFT IN PLACE INSTEAD OF DELETED so that if a forgotten device
+               surfaces (work laptop, etc.) with localStorage values worth
+               keeping, the shim can be revived by removing the `&& false`
+               guard below. After ~3 months with no need, delete this block
+               and its sibling under the `else` branch entirely.
 
-               Subtle: this runs inside the load-time setForecast updater,
-               which fires BEFORE `loaded` is set true (see setLoaded below).
-               So the first auto-save AFTER load will include migrated=true
-               in its hash, and the server will be updated in the very next
-               PUT cycle. The lastSavedHashRef is stamped from the loaded
-               (non-migrated) state, so the migration counts as a real
-               change and triggers a single legitimate save. */
-            if (!merged.migrated) {
+               History: see commit log around the "Forecast scenario inputs
+               sync across devices via st.forecast" change. */
+            if (!merged.migrated && false) {
               try {
                 const ls = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
                 const num = (k, fallback) => { const v = ls(k); const n = Number(v); return (v != null && Number.isFinite(n)) ? n : fallback; };
@@ -535,9 +529,10 @@ export default function useAppState() {
             return merged;
           });
         } else {
-          /* No saved forecast at all (brand-new account, or a save that
-             predates the forecast slice). Still run migration so this
-             device's localStorage seeds the defaults. */
+          /* No saved forecast at all — migration shim DISABLED. See sibling
+             block above for context and revival instructions. */
+          // eslint-disable-next-line no-constant-condition
+          if (false) {
           setForecast(prev => {
             if (prev?.migrated) return prev;
             const merged = { ...prev };
@@ -580,6 +575,7 @@ export default function useAppState() {
             }
             return merged;
           });
+          } // end if (false) — migration disabled
         }
       }
       setLoaded(true);

@@ -1931,12 +1931,12 @@ export default function AdvancedForecastTab({
                     };
                     return (
                       <div style={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12, padding: "8px 10px", lineHeight: 1.5 }}>
-                        <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--tx1,#222)" }}>{`Year ${label} (${baseYear + Number(label)})`}</div>
+                        <div style={{ fontWeight: 600, marginBottom: 4, color: "var(--tx,#222)" }}>{`Year ${label} (${baseYear + Number(label)})`}</div>
                         {items.map((it, idx) => (
                           <div key={idx} style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <span style={{ display: "inline-block", width: 8, height: 8, background: it.color || it.stroke || "#888", borderRadius: 2 }} />
                             <span style={{ color: "var(--tx2,#555)", flex: 1 }}>{labelFor(it.dataKey)}</span>
-                            <span style={{ color: "var(--tx1,#222)", fontVariantNumeric: "tabular-nums" }}>{fmt(it.value)}</span>
+                            <span style={{ color: "var(--tx,#222)", fontVariantNumeric: "tabular-nums" }}>{fmt(it.value)}</span>
                           </div>
                         ))}
                         {/* Total rows — added because clicking through
@@ -1944,12 +1944,17 @@ export default function AdvancedForecastTab({
                             part. Pull from chartData's `total` /
                             `totalReal` keys (defined in the chartData
                             memo above), not from summing items, so
-                            rounding stays consistent with the cards. */}
+                            rounding stays consistent with the cards.
+                            Colors use --tx (theme primary text) not the
+                            phantom --tx1 — there's no --tx1 in the theme
+                            CSS so it was always falling back to #222
+                            and rendering near-black on every theme, which
+                            was illegible in dark mode. */}
                         {typeof row.total === "number" && (
                           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, paddingTop: 4, borderTop: "1px solid var(--bdr,#e0e0e0)" }}>
                             <span style={{ display: "inline-block", width: 8, height: 8 }} />
-                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
-                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
+                            <span style={{ color: "var(--tx,#222)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
+                            <span style={{ color: "var(--tx,#222)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
                           </div>
                         )}
                         {typeof row.totalReal === "number" && (
