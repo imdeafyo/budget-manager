@@ -1188,4 +1188,131 @@ describe("forecastGrowthAccounts — appliedEndingEvents (ending obligations)", 
     // Balance > contributions because of growth
     expect(balance).toBeGreaterThan(1200);
   });
+
+  it("applies one-time outflow events to the balance in the matching month", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 50000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    // 30k outflow at month 6 of year 1 (e.g. car purchase)
+    const events = [{ accountId: "cash", monthIndex: 6, amount: -30000 }];
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    // Year 1 end balance should be ~20k (50k - 30k, no growth, no contrib)
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(20000, 5);
+    // Year 2 end balance unchanged (no further events)
+    expect(r.years[2].byAccount.cash.nominal).toBeCloseTo(20000, 5);
+    // accountSeries should expose oneTimeAmount for that year
+    expect(r.accountSeries.cash[1].oneTimeAmount).toBe(-30000);
+    expect(r.accountSeries.cash[2].oneTimeAmount).toBe(0);
+  });
+
+  it("applies one-time inflow events", () => {
+    const accounts = [
+      { id: "tx", name: "Tax", owner: "joint", type: "taxable", startBalance: 10000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "tx", monthIndex: 12, amount: 50000 }]; // inheritance end of year 1
+    const r = forecastGrowthAccounts(accounts, 2, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.tx.nominal).toBeCloseTo(60000, 5);
+    expect(r.accountSeries.tx[1].oneTimeAmount).toBe(50000);
+  });
+
+  it("allows balance to go negative (surfaces infeasible plans)", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 5000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 6, amount: -30000 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(-25000, 5);
+  });
+
+  it("does NOT count one-time events as contributions", () => {
+    const accounts = [
+      { id: "tx", name: "Tax", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "tx", monthIndex: 6, amount: 50000 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    // Contribution remains the base $1200 — the $50k event is not a contribution
+    expect(r.years[1].byAccount.tx.contribution).toBeCloseTo(1200, 6);
+    expect(r.accountSeries.tx[1].contribCum).toBeCloseTo(1200, 6);
+    // But the balance does include the $50k
+    expect(r.years[1].byAccount.tx.nominal).toBeCloseTo(51200, 5);
+  });
+
+  it("bypasses pool caps for one-time events (rollover into 401k)", () => {
+    // 401k_pretax with cap-at-limit enabled, plus a $80k one-time rollover event.
+    // The event should land regardless of the IRS contribution cap.
+    const accounts = [
+      { id: "k", name: "K", owner: "p1", type: "401k_pretax", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: true },
+    ];
+    const events = [{ accountId: "k", monthIndex: 6, amount: 80000 }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.k.nominal).toBeCloseTo(80000, 5);
+    // And no pool warning should fire for it (events are not contributions)
+    expect(r.poolWarnings.length).toBe(0);
+  });
+
+  it("handles multiple events in the same month on the same account", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 100000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [
+      { accountId: "cash", monthIndex: 6, amount: -30000 },
+      { accountId: "cash", monthIndex: 6, amount: -10000 },
+      { accountId: "cash", monthIndex: 6, amount: 5000 },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(65000, 5);
+    expect(r.accountSeries.cash[1].oneTimeAmount).toBeCloseTo(-35000, 5);
+  });
+
+  it("handles events spread across multiple years on multiple accounts", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "cash", startBalance: 10000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "b", name: "B", owner: "p2", type: "taxable", startBalance: 20000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [
+      { accountId: "a", monthIndex: 6, amount: -5000 },   // year 1
+      { accountId: "b", monthIndex: 18, amount: -3000 },  // year 2
+      { accountId: "a", monthIndex: 25, amount: 1000 },   // year 3
+    ];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.a.nominal).toBeCloseTo(5000, 5);
+    expect(r.years[1].byAccount.b.nominal).toBeCloseTo(20000, 5);
+    expect(r.years[2].byAccount.a.nominal).toBeCloseTo(5000, 5);
+    expect(r.years[2].byAccount.b.nominal).toBeCloseTo(17000, 5);
+    expect(r.years[3].byAccount.a.nominal).toBeCloseTo(6000, 5);
+    expect(r.years[3].byAccount.b.nominal).toBeCloseTo(17000, 5);
+  });
+
+  it("ignores one-time events with missing or unknown accountId", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 10000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [
+      { accountId: "cash", monthIndex: 6, amount: -1000 },
+      { accountId: "ghost", monthIndex: 6, amount: -50000 }, // unknown account — should be ignored
+      { monthIndex: 6, amount: -50000 },                       // no accountId — should be ignored
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(9000, 5);
+  });
+
+  it("works alongside ending events without interference", () => {
+    const accounts = [
+      { id: "tx", name: "Tax", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
+    ];
+    const endingEvents = [{ accountId: "tx", monthIndex: 7, monthlyDelta: 200 }];
+    const oneTimeEvents = [{ accountId: "tx", monthIndex: 9, amount: 10000 }];
+    const r = forecastGrowthAccounts(accounts, 1, {
+      ...baseOpts,
+      inflationPct: 0,
+      appliedEndingEvents: endingEvents,
+      appliedOneTimeEvents: oneTimeEvents,
+    });
+    // Base $100/mo × 12 = $1200, plus $200/mo for months 7-12 = $1200, total $2400 contrib
+    expect(r.years[1].byAccount.tx.contribution).toBeCloseTo(2400, 6);
+    // Plus the $10k one-time event
+    expect(r.years[1].byAccount.tx.nominal).toBeCloseTo(12400, 5);
+    expect(r.accountSeries.tx[1].eventDelta).toBeCloseTo(1200, 6);
+    expect(r.accountSeries.tx[1].oneTimeAmount).toBeCloseTo(10000, 5);
+  });
 });

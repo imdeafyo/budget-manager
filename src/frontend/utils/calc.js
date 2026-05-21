@@ -322,6 +322,20 @@ export function forecastGrowthAccounts(accounts, years, opts) {
        Resolved by `resolveEndingEvents` in utils/endingItems.js — see
        there for the data model + semantics. */
     appliedEndingEvents = [],
+    /* One-time Events (Advanced Forecast). Each event
+       { accountId, monthIndex, amount } applies a single signed
+       lump-sum to the account's balance in the specified absolute
+       month (1-indexed). Positive = inflow (rollover, inheritance);
+       negative = outflow (car purchase, down payment).
+
+       Distinct from appliedEndingEvents which are RECURRING monthly
+       delta changes. One-time events fire ONCE and disappear.
+       Bypasses pool caps entirely — events are explicit user
+       assertions about cash movements that already happened or
+       will happen regardless of contribution-limit math.
+
+       Resolved by `resolveOneTimeEvents` in utils/oneTimeEvents.js. */
+    appliedOneTimeEvents = [],
   } = opts || {};
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -424,6 +438,32 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     extraMonthlyDelta[a.id] = 0;
   }
 
+  /* Pre-group one-time events by accountId, same shape as ending events
+     but with `amount` instead of `monthlyDelta`. One-time events fire
+     a single signed balance adjustment in the matching month and then
+     vanish — no running accumulator (unlike ending events whose delta
+     persists for the rest of the projection). */
+  const oneTimeForAcct = {};
+  if (Array.isArray(appliedOneTimeEvents)) {
+    for (const e of appliedOneTimeEvents) {
+      if (!e || !e.accountId) continue;
+      if (!oneTimeForAcct[e.accountId]) oneTimeForAcct[e.accountId] = [];
+      oneTimeForAcct[e.accountId].push({
+        monthIndex: Number(e.monthIndex) || 0,
+        amount: Number(e.amount) || 0,
+        id: e.id,
+        label: e.label,
+      });
+    }
+    for (const k of Object.keys(oneTimeForAcct)) {
+      oneTimeForAcct[k].sort((a, b) => a.monthIndex - b.monthIndex);
+    }
+  }
+  /* Per-account cursor into oneTimeForAcct[id]. Each event consumed
+     exactly once. */
+  const oneTimeCursor = {};
+  for (const a of accounts) oneTimeCursor[a.id] = 0;
+
   for (let y = 1; y <= years; y++) {
     const calendarYear = baseYear + y;
 
@@ -511,7 +551,13 @@ export function forecastGrowthAccounts(accounts, years, opts) {
          Event contribution is the only thing accumulated month-by-month;
          total reported contribution = yearAnnual + eventYearContrib. */
       let eventYearContrib = 0;
+      /* Track lump-sum events applied this year. These are NOT
+         contributions (don't count toward contribCum or yearActualContrib)
+         — they're balance adjustments. We track them separately so the
+         year row can surface "one-time events: +/-$X" if needed for UI. */
+      let oneTimeYearAmount = 0;
       const acctEvents = eventsForAcct[a.id];
+      const acctOneTime = oneTimeForAcct[a.id];
       for (let m = 0; m < 12; m++) {
         const absMonth = (y - 1) * 12 + m + 1; // 1-indexed absolute month
         if (acctEvents) {
@@ -526,6 +572,23 @@ export function forecastGrowthAccounts(accounts, years, opts) {
         const effectiveMonthly = baseMonthlyC + extraMonthlyDelta[a.id];
         bal = bal * (1 + monthlyR) + effectiveMonthly;
         eventYearContrib += extraMonthlyDelta[a.id];
+        /* Fire all one-time events whose monthIndex matches this absolute
+           month. Applied AFTER growth + contribution for the month so the
+           lump-sum hits the post-contribution balance — matches the user
+           intuition "I withdrew $30k in June" → June's ending balance is
+           $30k lower. Negative balances are allowed: the forecast should
+           surface infeasible plans visibly rather than silently capping. */
+        if (acctOneTime) {
+          while (
+            oneTimeCursor[a.id] < acctOneTime.length &&
+            acctOneTime[oneTimeCursor[a.id]].monthIndex === absMonth
+          ) {
+            const amt = acctOneTime[oneTimeCursor[a.id]].amount;
+            bal += amt;
+            oneTimeYearAmount += amt;
+            oneTimeCursor[a.id] += 1;
+          }
+        }
       }
       const yearActualContrib = yearAnnual + eventYearContrib;
       balances[a.id] = bal;
@@ -553,6 +616,11 @@ export function forecastGrowthAccounts(accounts, years, opts) {
            negative = "starts" scaffolding suppressing base). Zero when
            no events have fired for this account yet. */
         eventDelta: eventYearContrib,
+        /* Signed sum of one-time events that fired in year y. Negative =
+           outflow (drained the account); positive = inflow (rollover,
+           inheritance). Does NOT count toward `contribution` — these
+           are balance adjustments, not contributions. */
+        oneTimeAmount: oneTimeYearAmount,
       });
       byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id], contribCumReal: cumContribsReal[a.id] };
 

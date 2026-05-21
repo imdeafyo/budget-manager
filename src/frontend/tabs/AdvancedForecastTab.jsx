@@ -1,10 +1,11 @@
 import { useMemo, useState, useEffect } from "react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart } from "recharts";
+import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart, ReferenceLine } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
+import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToFractionalYear } from "../utils/oneTimeEvents.js";
 
 /* ── Account type display metadata ──
    Account `type` strings map to (a) IRS pool for limit checking
@@ -431,6 +432,52 @@ export default function AdvancedForecastTab({
     });
   };
 
+  /* === One-time Events ===
+     Dated lump-sum events on a single account. Independent from
+     ending items — these are one-shot balance adjustments, not
+     recurring redirects of freed cash flow. See utils/oneTimeEvents.js. */
+  const oneTimeEvents = Array.isArray(forecast?.oneTimeEvents) ? forecast.oneTimeEvents : [];
+
+  const updateOneTimeEvent = (id, patch) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
+      return { ...prev, oneTimeEvents: cur.map(ev => ev.id === id ? { ...ev, ...patch } : ev) };
+    });
+  };
+  const removeOneTimeEvent = (id) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
+      return { ...prev, oneTimeEvents: cur.filter(ev => ev.id !== id) };
+    });
+  };
+  const addOneTimeEvent = () => {
+    /* Default account: first "cash" type if any, else first account. Cash
+       is the most likely target for the canonical use case (large planned
+       purchase out of savings). */
+    const firstCash = accounts.find(a => a.type === "cash");
+    const defaultAccountId = (firstCash?.id) || accounts[0]?.id || "";
+    /* Default date: 12 months from today, first of that month. Far enough
+       to be obviously a planned-future event, not "happening now." */
+    const defaultDate = (() => {
+      const d = new Date();
+      const total = d.getFullYear() * 12 + d.getMonth() + 12;
+      const year = Math.floor(total / 12);
+      const month = (total % 12) + 1;
+      return `${year}-${String(month).padStart(2, "0")}-01`;
+    })();
+    const newEvent = {
+      id: newOneTimeEventId(),
+      date: defaultDate,
+      amount: 0,
+      accountId: defaultAccountId,
+      label: "",
+    };
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
+      return { ...prev, oneTimeEvents: [...cur, newEvent] };
+    });
+  };
+
   /* Build the linked-item dropdown options. Single dropdown grouped by
      section (Expenses then Savings) so the user picks "Mortgage P&I"
      without first picking a section. Items with $0 amounts are still
@@ -506,6 +553,17 @@ export default function AdvancedForecastTab({
     // monthlyAmountFor closes over exp/sav, so list those.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endingItems, exp, sav, baseYearMonth, horizon]);
+
+  /* Resolve one-time events. resolveOneTimeEvents wants baseYearMonth as
+     { year, month } (numeric), distinct from endingItems' "YYYY-MM" string
+     shape. Recompute on event/horizon change — events depend only on their
+     own date + the account list + horizon, not on budget content. */
+  const resolvedOneTime = useMemo(() => {
+    const horizonMonths = (Number(horizon) || 0) * 12;
+    const [yStr, mStr] = baseYearMonth.split("-");
+    const baseYM = { year: Number(yStr), month: Number(mStr) };
+    return resolveOneTimeEvents(oneTimeEvents, accounts, baseYM, horizonMonths);
+  }, [oneTimeEvents, accounts, baseYearMonth, horizon]);
 
   /* Detect duplicate itemRef assignments (one-ending-per-item invariant).
      UI prevents creating duplicates via dropdown disabling; this is a
@@ -782,8 +840,9 @@ export default function AdvancedForecastTab({
       accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
       limitGrowthPct,
       appliedEndingEvents: resolvedEnding.events,
+      appliedOneTimeEvents: resolvedOneTime.events,
     });
-  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events]);
+  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events, resolvedOneTime.events]);
 
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.
@@ -1751,6 +1810,151 @@ export default function AdvancedForecastTab({
         )}
       </Card>
 
+      {/* ── One-time Events ──
+          Discrete dated cash events on a single account. Distinct from
+          Ending Obligations: those are recurring monthly redirects of
+          freed budget cash. These are lump sums. */}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>
+              One-time Events
+              {oneTimeEvents.length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)" }}>
+                  ({oneTimeEvents.length})
+                </span>
+              )}
+            </h3>
+            <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 580 }}>
+              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Negative amount = money out; positive = money in. Events bypass contribution caps and can drive a balance negative — that surfaces planning problems rather than hiding them.
+            </div>
+          </div>
+          <button
+            onClick={addOneTimeEvent}
+            disabled={accounts.length === 0}
+            title={accounts.length === 0 ? "Add at least one forecast account first" : "Add a one-time event"}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 700,
+              border: "none",
+              borderRadius: 6,
+              background: accounts.length === 0 ? "var(--input-bg,#f5f5f5)" : "#556FB5",
+              color: accounts.length === 0 ? "var(--tx3,#aaa)" : "#fff",
+              cursor: accounts.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >+ Add</button>
+        </div>
+
+        {(resolvedOneTime.orphans.length > 0 || resolvedOneTime.inPast.length > 0 || resolvedOneTime.outOfHorizon.length > 0) && (
+          <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400E", background: "rgba(243,156,18,0.12)", border: "1px solid rgba(243,156,18,0.35)", borderRadius: 6 }}>
+            {resolvedOneTime.orphans.length > 0 && <div>⚠ {resolvedOneTime.orphans.length} event{resolvedOneTime.orphans.length === 1 ? "" : "s"} can't be applied (missing account or invalid date).</div>}
+            {resolvedOneTime.inPast.length > 0 && <div>ℹ {resolvedOneTime.inPast.length} event{resolvedOneTime.inPast.length === 1 ? " is" : "s are"} in the past — not applied to the projection.</div>}
+            {resolvedOneTime.outOfHorizon.length > 0 && <div>ℹ {resolvedOneTime.outOfHorizon.length} event{resolvedOneTime.outOfHorizon.length === 1 ? " is" : "s are"} beyond the forecast horizon — extend the horizon to include {resolvedOneTime.outOfHorizon.length === 1 ? "it" : "them"}.</div>}
+          </div>
+        )}
+
+        {oneTimeEvents.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: 12, color: "var(--tx3,#888)", fontStyle: "italic", textAlign: "center", background: "var(--input-bg,#fafafa)", borderRadius: 6, border: "1px dashed var(--bdr,#ddd)" }}>
+            No one-time events configured. Click <strong>+ Add</strong> to model a planned cash event.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "var(--input-bg,#f8f8f8)" }}>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Date</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Label</th>
+                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Amount</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Account</th>
+                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Status</th>
+                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {oneTimeEvents.map(ev => {
+                  /* Per-row status — derived from the resolved arrays so the
+                     row reflects what the math layer will actually do with it. */
+                  const inEvents = resolvedOneTime.events.some(e => e.id === ev.id);
+                  const inOrphans = resolvedOneTime.orphans.find(e => e.id === ev.id);
+                  const inPast = resolvedOneTime.inPast.some(e => e.id === ev.id);
+                  const outHz = resolvedOneTime.outOfHorizon.some(e => e.id === ev.id);
+                  let status = "Active";
+                  let statusColor = "#27AE60";
+                  if (inOrphans) {
+                    status = inOrphans.reason === "bad-date" ? "Bad date" : "No account";
+                    statusColor = "#C0392B";
+                  } else if (inPast) {
+                    status = "In past";
+                    statusColor = "#888";
+                  } else if (outHz) {
+                    status = "Past horizon";
+                    statusColor = "#888";
+                  } else if (!inEvents) {
+                    /* Catch-all — shouldn't happen but defensive */
+                    status = "Inactive";
+                    statusColor = "#888";
+                  }
+                  const isOutflow = Number(ev.amount) < 0;
+                  return (
+                    <tr key={ev.id} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
+                      <td style={{ padding: 6 }}>
+                        <input
+                          type="date"
+                          value={ev.date || ""}
+                          onChange={(e) => updateOneTimeEvent(ev.id, { date: e.target.value })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 140 }}
+                        />
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <input
+                          type="text"
+                          value={ev.label || ""}
+                          onChange={(e) => updateOneTimeEvent(ev.id, { label: e.target.value })}
+                          placeholder="e.g. car down payment"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 140 }}
+                        />
+                      </td>
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        <input
+                          type="number"
+                          value={ev.amount}
+                          onChange={(e) => updateOneTimeEvent(ev.id, { amount: Number(e.target.value) || 0 })}
+                          step="100"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: isOutflow ? "#C0392B" : "var(--card-color,#222)", width: 110, textAlign: "right", fontWeight: 600 }}
+                        />
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select
+                          value={ev.accountId || ""}
+                          onChange={(e) => updateOneTimeEvent(ev.id, { accountId: e.target.value })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 140 }}
+                        >
+                          <option value="">— pick —</option>
+                          {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6, textAlign: "center", fontSize: 11, color: statusColor, fontWeight: 600 }}>
+                        {status}
+                      </td>
+                      <td style={{ padding: 6, textAlign: "center" }}>
+                        <button
+                          onClick={() => removeOneTimeEvent(ev.id)}
+                          title="Delete event"
+                          style={{ padding: "2px 8px", fontSize: 12, fontWeight: 700, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "#C0392B", cursor: "pointer" }}
+                        >×</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {/* Per-pool summary cards — moved above the chart so the headline
           numbers anchor the visualization that follows. Cards are draggable
           (drag handle ⠿ in each card's top-right corner); order is persisted
@@ -1987,6 +2191,39 @@ export default function AdvancedForecastTab({
                 {fireEnabled && fireTarget > 0 && (
                   <Line type="monotone" dataKey="fireThresh" name="FI target" stroke="#F39C12" strokeWidth={2.5} strokeDasharray="6 3" dot={false} activeDot={{ r: 5, fill: "#F39C12", stroke: "#F39C12" }} />
                 )}
+                {/* One-time event ReferenceLines. Stroke color signals
+                    direction: red for outflow (negative), green for
+                    inflow (positive). Label shows truncated user label
+                    + amount; full text is on hover via the data table
+                    below the chart. We place them on a numeric-positioned
+                    x via `monthIndexToFractionalYear`. The chart's XAxis
+                    uses `year` as a category/numeric axis — ReferenceLine
+                    accepts numeric x even on category axes (Recharts
+                    renders it at the interpolated position). */}
+                {resolvedOneTime.events.map(ev => {
+                  const x = monthIndexToFractionalYear(ev.monthIndex);
+                  const isInflow = ev.amount >= 0;
+                  const color = isInflow ? "#27AE60" : "#C0392B";
+                  const labelText = ev.label
+                    ? `${ev.label} ${isInflow ? "+" : "−"}${fmtCompact(Math.abs(ev.amount))}`
+                    : `${isInflow ? "+" : "−"}${fmtCompact(Math.abs(ev.amount))}`;
+                  return (
+                    <ReferenceLine
+                      key={ev.id}
+                      x={x}
+                      stroke={color}
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
+                      label={{
+                        value: labelText,
+                        position: "top",
+                        fill: color,
+                        fontSize: 10,
+                        fontWeight: 600,
+                      }}
+                    />
+                  );
+                })}
               </ComposedChart>
             </ResponsiveContainer>
           </div>

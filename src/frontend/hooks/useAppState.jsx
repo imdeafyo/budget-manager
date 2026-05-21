@@ -353,6 +353,12 @@ export default function useAppState() {
        a section in AdvancedForecastTab to add/edit/delete. See
        utils/endingItems.js for shape and resolveEndingEvents semantics. */
     endingItems: [],
+    /* One-time Events: dated lump-sum cash events that hit a single
+       account balance at a specific month (car purchase, inheritance,
+       rollover, etc). Array of { id, date "YYYY-MM-DD", amount, accountId,
+       label }. Empty by default. See utils/oneTimeEvents.js for shape
+       + resolveOneTimeEvents semantics. */
+    oneTimeEvents: [],
     /* === Scenario inputs (moved from localStorage so they sync across devices) ===
        Both Simple and Advanced forecast tabs read/write these through
        setForecast. Display-only prefs (sortMode, colorBy, showChartLegend,
@@ -458,6 +464,13 @@ export default function useAppState() {
                malformed (non-array) saved value can't poison state. */
             if (!Array.isArray(d.forecast.endingItems)) {
               merged.endingItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+            }
+            /* oneTimeEvents: same guard as endingItems above. Saves
+               predating One-time Events won't have this field; the
+               shallow spread keeps prev's [] there. A malformed
+               (non-array) saved value falls back to []. */
+            if (!Array.isArray(d.forecast.oneTimeEvents)) {
+              merged.oneTimeEvents = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
             }
             /* === One-time localStorage → st.forecast migration (DISABLED) ===
                This shim seeds st.forecast.* from this device's localStorage
