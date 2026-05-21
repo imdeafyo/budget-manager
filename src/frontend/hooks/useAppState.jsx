@@ -353,6 +353,34 @@ export default function useAppState() {
        a section in AdvancedForecastTab to add/edit/delete. See
        utils/endingItems.js for shape and resolveEndingEvents semantics. */
     endingItems: [],
+    /* === Scenario inputs (moved from localStorage so they sync across devices) ===
+       Both Simple and Advanced forecast tabs read/write these through
+       setForecast. Display-only prefs (sortMode, colorBy, showChartLegend,
+       cardOrder) stay in localStorage — those are per-device UI choices,
+       not scenario data.
+
+       Migration: on the first load after this deploy, if `migrated` is
+       false/missing, the load handler seeds these fields from this
+       device's localStorage and flips the flag. Whichever device is
+       opened first wins; subsequent loads ignore localStorage. */
+    horizon: 30,
+    inflationPct: "3",
+    fireEnabled: false,
+    fireMultiplier: "25",
+    // Simple-only fields
+    returnPct: "7",
+    incomeGrowthPct: "3",
+    initialBalance: "0",
+    valueMode: "both",          // both | nominal | real
+    targetMonths: "12",
+    contribSource: "budget",    // budget | actual
+    actualMode: "net",          // net | gross
+    forecastWeeks: 52,          // 48 or 52
+    forecastBonus: false,
+    include401k: true,
+    includeMatch: true,
+    includeHsa: true,
+    migrated: false,
   }));
   const [txLoaded, setTxLoaded] = useState(false);
 
@@ -430,6 +458,125 @@ export default function useAppState() {
                malformed (non-array) saved value can't poison state. */
             if (!Array.isArray(d.forecast.endingItems)) {
               merged.endingItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+            }
+            /* === One-time localStorage → st.forecast migration ===
+               When `migrated` flag is false/missing on the loaded state,
+               this device's localStorage values seed the corresponding
+               st.forecast fields, then the flag is flipped to true and
+               auto-save pushes the seeded shape to the server. Whichever
+               device the user opens first after this deploy "wins" — they
+               can pick which device's localStorage carries over.
+
+               After migration, localStorage is no longer read for these
+               keys. The write-side listeners in ForecastTab/AdvancedForecastTab
+               also stop writing to localStorage once they're switched to
+               read from st.forecast.
+
+               Subtle: this runs inside the load-time setForecast updater,
+               which fires BEFORE `loaded` is set true (see setLoaded below).
+               So the first auto-save AFTER load will include migrated=true
+               in its hash, and the server will be updated in the very next
+               PUT cycle. The lastSavedHashRef is stamped from the loaded
+               (non-migrated) state, so the migration counts as a real
+               change and triggers a single legitimate save. */
+            if (!merged.migrated) {
+              try {
+                const ls = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+                const num = (k, fallback) => { const v = ls(k); const n = Number(v); return (v != null && Number.isFinite(n)) ? n : fallback; };
+                const bool01 = (k, fallback) => { const v = ls(k); if (v === "1") return true; if (v === "0") return false; return fallback; };
+                const boolNotZero = (k, fallback) => { const v = ls(k); if (v === "0") return false; if (v === "1") return true; return fallback; };
+                const str = (k, fallback) => { const v = ls(k); return (v != null && v !== "") ? v : fallback; };
+
+                // Shared (both tabs read these same keys today)
+                merged.horizon = num("forecast-horizon", merged.horizon);
+                merged.inflationPct = str("forecast-inflation", merged.inflationPct);
+                merged.fireEnabled = bool01("forecast-fire-enabled", merged.fireEnabled);
+                merged.fireMultiplier = str("forecast-fire-multiplier", merged.fireMultiplier);
+
+                // Simple-only
+                merged.returnPct = str("forecast-return", merged.returnPct);
+                merged.incomeGrowthPct = str("forecast-income-growth", merged.incomeGrowthPct);
+                merged.initialBalance = str("forecast-initial", merged.initialBalance);
+                merged.valueMode = str("forecast-value-mode", merged.valueMode);
+                merged.targetMonths = str("forecast-target-months", merged.targetMonths);
+                merged.contribSource = str("forecast-contrib-source", merged.contribSource);
+                merged.actualMode = str("forecast-actual-mode", merged.actualMode);
+                const wks = num("forecast-weeks", merged.forecastWeeks);
+                merged.forecastWeeks = (wks === 48 || wks === 52) ? wks : merged.forecastWeeks;
+                merged.forecastBonus = bool01("forecast-bonus", merged.forecastBonus);
+                merged.include401k = boolNotZero("forecast-include-401k", merged.include401k);
+                merged.includeMatch = boolNotZero("forecast-include-match", merged.includeMatch);
+                merged.includeHsa = boolNotZero("forecast-include-hsa", merged.includeHsa);
+
+                merged.migrated = true;
+                log.info("forecast.migrate", { source: "localStorage" });
+                /* Cleanup: drop the now-dead localStorage keys. After
+                   migration these are never read again, so leaving them
+                   around is just clutter / future footgun. Display-only
+                   prefs (forecast-simple-legend, forecast-sort-mode,
+                   forecast-color-by, forecast-adv-legend, forecast-card-order)
+                   intentionally NOT wiped — those still live in
+                   localStorage by design. */
+                try {
+                  [
+                    "forecast-horizon","forecast-inflation","forecast-fire-enabled","forecast-fire-multiplier",
+                    "forecast-return","forecast-income-growth","forecast-initial","forecast-value-mode",
+                    "forecast-target-months","forecast-contrib-source","forecast-actual-mode",
+                    "forecast-weeks","forecast-bonus","forecast-include-401k","forecast-include-match","forecast-include-hsa",
+                  ].forEach(k => { try { localStorage.removeItem(k); } catch {} });
+                } catch {}
+              } catch (e) {
+                // Failing the migration shouldn't block load. Just flip the
+                // flag so we don't retry forever, and log it.
+                merged.migrated = true;
+                log.warn("forecast.migrate.fail", { message: String(e?.message || e) });
+              }
+            }
+            return merged;
+          });
+        } else {
+          /* No saved forecast at all (brand-new account, or a save that
+             predates the forecast slice). Still run migration so this
+             device's localStorage seeds the defaults. */
+          setForecast(prev => {
+            if (prev?.migrated) return prev;
+            const merged = { ...prev };
+            try {
+              const ls = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+              const num = (k, fallback) => { const v = ls(k); const n = Number(v); return (v != null && Number.isFinite(n)) ? n : fallback; };
+              const bool01 = (k, fallback) => { const v = ls(k); if (v === "1") return true; if (v === "0") return false; return fallback; };
+              const boolNotZero = (k, fallback) => { const v = ls(k); if (v === "0") return false; if (v === "1") return true; return fallback; };
+              const str = (k, fallback) => { const v = ls(k); return (v != null && v !== "") ? v : fallback; };
+              merged.horizon = num("forecast-horizon", merged.horizon);
+              merged.inflationPct = str("forecast-inflation", merged.inflationPct);
+              merged.fireEnabled = bool01("forecast-fire-enabled", merged.fireEnabled);
+              merged.fireMultiplier = str("forecast-fire-multiplier", merged.fireMultiplier);
+              merged.returnPct = str("forecast-return", merged.returnPct);
+              merged.incomeGrowthPct = str("forecast-income-growth", merged.incomeGrowthPct);
+              merged.initialBalance = str("forecast-initial", merged.initialBalance);
+              merged.valueMode = str("forecast-value-mode", merged.valueMode);
+              merged.targetMonths = str("forecast-target-months", merged.targetMonths);
+              merged.contribSource = str("forecast-contrib-source", merged.contribSource);
+              merged.actualMode = str("forecast-actual-mode", merged.actualMode);
+              const wks = num("forecast-weeks", merged.forecastWeeks);
+              merged.forecastWeeks = (wks === 48 || wks === 52) ? wks : merged.forecastWeeks;
+              merged.forecastBonus = bool01("forecast-bonus", merged.forecastBonus);
+              merged.include401k = boolNotZero("forecast-include-401k", merged.include401k);
+              merged.includeMatch = boolNotZero("forecast-include-match", merged.includeMatch);
+              merged.includeHsa = boolNotZero("forecast-include-hsa", merged.includeHsa);
+              merged.migrated = true;
+              log.info("forecast.migrate", { source: "localStorage", noSavedForecast: true });
+              try {
+                [
+                  "forecast-horizon","forecast-inflation","forecast-fire-enabled","forecast-fire-multiplier",
+                  "forecast-return","forecast-income-growth","forecast-initial","forecast-value-mode",
+                  "forecast-target-months","forecast-contrib-source","forecast-actual-mode",
+                  "forecast-weeks","forecast-bonus","forecast-include-401k","forecast-include-match","forecast-include-hsa",
+                ].forEach(k => { try { localStorage.removeItem(k); } catch {} });
+              } catch {}
+            } catch (e) {
+              merged.migrated = true;
+              log.warn("forecast.migrate.fail", { message: String(e?.message || e) });
             }
             return merged;
           });

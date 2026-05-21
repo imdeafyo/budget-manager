@@ -5,8 +5,18 @@ import { forecastGrowth, fmt, fmtCompact, evalF } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 
 export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0, forecast = {}, setForecast, tax = {}, setTax, p1Name = "Person 1", p2Name = "Person 2", cSal = "0", kSal = "0", c4pre = "0", c4ro = "0", k4pre = "0", k4ro = "0" }) {
-  const [returnPct, setReturnPct] = useState(() => { try { return localStorage.getItem("forecast-return") || "7"; } catch { return "7"; } });
-  const [inflationPct, setInflationPct] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
+  /* Scenario inputs live on st.forecast.* so they sync across devices.
+     Display-only prefs (e.g. showChartLegend) stay in localStorage.
+     Each scenario field has a derived value + a setter that calls
+     setForecast(prev => ({ ...prev, [key]: v })). Variable names mirror
+     the old local-state names so the rest of the file is unchanged. */
+  const F = forecast || {};
+  const setFc = (key, v) => setForecast && setForecast(prev => ({ ...(prev || {}), [key]: v }));
+
+  const returnPct = F.returnPct ?? "7";
+  const setReturnPct = (v) => setFc("returnPct", v);
+  const inflationPct = F.inflationPct ?? "3";
+  const setInflationPct = (v) => setFc("inflationPct", v);
   // Phase 7: nominal income growth rate. Default 3% to match inflation default —
   // at defaults this means real contributions roughly flat (matches old
   // behavior). Setting above inflation models real career growth (raises that
@@ -14,33 +24,39 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   // annual contribution, which approximates well — most savings flows scale
   // with salary (take-home, 401k%, HSA, bonus%, employer match). The flat
   // HSA employer match is technically over-credited but the error is tiny.
-  const [incomeGrowthPct, setIncomeGrowthPct] = useState(() => { try { return localStorage.getItem("forecast-income-growth") || "3"; } catch { return "3"; } });
-  const [initialBalance, setInitialBalance] = useState(() => { try { return localStorage.getItem("forecast-initial") || "0"; } catch { return "0"; } });
-  const [horizon, setHorizon] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
-  const [valueMode, setValueMode] = useState(() => { try { return localStorage.getItem("forecast-value-mode") || "both"; } catch { return "both"; } }); // both | nominal | real
+  const incomeGrowthPct = F.incomeGrowthPct ?? "3";
+  const setIncomeGrowthPct = (v) => setFc("incomeGrowthPct", v);
+  const initialBalance = F.initialBalance ?? "0";
+  const setInitialBalance = (v) => setFc("initialBalance", v);
+  const horizon = F.horizon ?? 30;
+  const setHorizon = (v) => setFc("horizon", v);
+  const valueMode = F.valueMode ?? "both"; // both | nominal | real
+  const setValueMode = (v) => setFc("valueMode", v);
   // Legend visibility on the compound-growth chart. Per-device, persisted.
-  // Default ON for first-time discoverability.
+  // Default ON for first-time discoverability. Stays in localStorage —
+  // this is a display preference, not a scenario input.
   const [showChartLegend, setShowChartLegend] = useState(() => { try { return localStorage.getItem("forecast-simple-legend") !== "0"; } catch { return true; } });
   useEffect(() => { try { localStorage.setItem("forecast-simple-legend", showChartLegend ? "1" : "0"); } catch {} }, [showChartLegend]);
-  const [targetMonths, setTargetMonths] = useState(() => { try { return localStorage.getItem("forecast-target-months") || "12"; } catch { return "12"; } });
+  const targetMonths = F.targetMonths ?? "12";
+  const setTargetMonths = (v) => setFc("targetMonths", v);
   // Phase 7: contribution source — "budget" | "actual3" | "actual6" | "actual12"
-  const [contribSource, setContribSource] = useState(() => { try { return localStorage.getItem("forecast-contrib-source") || "budget"; } catch { return "budget"; } });
+  const contribSource = F.contribSource ?? "budget";
+  const setContribSource = (v) => setFc("contribSource", v);
   // Phase 7: actuals mode — "net" (income − expenses) | "expenses" (budgeted income − expenses)
   // Only meaningful when contribSource !== "budget".
-  const [actualMode, setActualMode] = useState(() => { try { return localStorage.getItem("forecast-actual-mode") || "net"; } catch { return "net"; } });
+  const actualMode = F.actualMode ?? "net";
+  const setActualMode = (v) => setFc("actualMode", v);
   // Phase 7: forecast-local pay cadence — 48 (paycheck) or 52 (calendar). Default 52.
   // Calendar is more honest for compound growth; 48 matches the rest of the app's
   // budget cadence. This is intentionally independent from the rest of the app's
   // visCols 48/52 toggle (which is just a display unit, not a forecast assumption).
-  const [forecastWeeks, setForecastWeeks] = useState(() => {
-    try { const v = Number(localStorage.getItem("forecast-weeks")); return v === 48 || v === 52 ? v : 52; } catch { return 52; }
-  });
+  const forecastWeeks = (F.forecastWeeks === 48 || F.forecastWeeks === 52) ? F.forecastWeeks : 52;
+  const setForecastWeeks = (v) => setFc("forecastWeeks", v);
   // Phase 7: forecast-local bonus inclusion. Default OFF (conservative). Independent
   // from the global Charts-tab `includeEaip` so changing one doesn't silently move
   // the forecast number.
-  const [forecastBonus, setForecastBonus] = useState(() => {
-    try { return localStorage.getItem("forecast-bonus") === "1"; } catch { return false; }
-  });
+  const forecastBonus = !!F.forecastBonus;
+  const setForecastBonus = (v) => setFc("forecastBonus", v);
   // Phase 7: retirement-contribution toggles. The base `C.net` excludes 401(k)
   // elective contributions (they're stripped pre-net), HSA (also pre-tax/pre-net),
   // and obviously employer match (never touched the paycheck). For a retirement
@@ -48,46 +64,19 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   // user can model either "all savings" or just "after-tax savings."
   // 401(k) elective + HSA default ON (likely intent for a retirement forecast).
   // Employer match defaults ON only if a match is actually configured.
-  const [include401k, setInclude401k] = useState(() => {
-    try { return localStorage.getItem("forecast-include-401k") !== "0"; } catch { return true; }
-  });
-  const [includeMatch, setIncludeMatch] = useState(() => {
-    try {
-      const v = localStorage.getItem("forecast-include-match");
-      if (v === "0") return false;
-      if (v === "1") return true;
-      return true; // default on
-    } catch { return true; }
-  });
-  const [includeHSA, setIncludeHSA] = useState(() => {
-    try { return localStorage.getItem("forecast-include-hsa") !== "0"; } catch { return true; }
-  });
+  const include401k = F.include401k !== false;
+  const setInclude401k = (v) => setFc("include401k", v);
+  const includeMatch = F.includeMatch !== false;
+  const setIncludeMatch = (v) => setFc("includeMatch", v);
+  const includeHSA = F.includeHsa !== false;
+  const setIncludeHSA = (v) => setFc("includeHsa", v);
   // Phase 7: FIRE — financial independence target as multiple of annual expenses.
   // Standard FIRE = 25× (4% safe withdrawal). 28-33× for early retirement.
   // 20× = aggressive 5% withdrawal, only safe with flexibility.
-  const [fireEnabled, setFireEnabled] = useState(() => {
-    try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; }
-  });
-  const [fireMultiplier, setFireMultiplier] = useState(() => {
-    try { return localStorage.getItem("forecast-fire-multiplier") || "25"; } catch { return "25"; }
-  });
-
-  useEffect(() => { try { localStorage.setItem("forecast-return", returnPct); } catch {} }, [returnPct]);
-  useEffect(() => { try { localStorage.setItem("forecast-inflation", inflationPct); } catch {} }, [inflationPct]);
-  useEffect(() => { try { localStorage.setItem("forecast-income-growth", incomeGrowthPct); } catch {} }, [incomeGrowthPct]);
-  useEffect(() => { try { localStorage.setItem("forecast-initial", initialBalance); } catch {} }, [initialBalance]);
-  useEffect(() => { try { localStorage.setItem("forecast-horizon", String(horizon)); } catch {} }, [horizon]);
-  useEffect(() => { try { localStorage.setItem("forecast-value-mode", valueMode); } catch {} }, [valueMode]);
-  useEffect(() => { try { localStorage.setItem("forecast-target-months", targetMonths); } catch {} }, [targetMonths]);
-  useEffect(() => { try { localStorage.setItem("forecast-contrib-source", contribSource); } catch {} }, [contribSource]);
-  useEffect(() => { try { localStorage.setItem("forecast-actual-mode", actualMode); } catch {} }, [actualMode]);
-  useEffect(() => { try { localStorage.setItem("forecast-weeks", String(forecastWeeks)); } catch {} }, [forecastWeeks]);
-  useEffect(() => { try { localStorage.setItem("forecast-bonus", forecastBonus ? "1" : "0"); } catch {} }, [forecastBonus]);
-  useEffect(() => { try { localStorage.setItem("forecast-include-401k", include401k ? "1" : "0"); } catch {} }, [include401k]);
-  useEffect(() => { try { localStorage.setItem("forecast-include-match", includeMatch ? "1" : "0"); } catch {} }, [includeMatch]);
-  useEffect(() => { try { localStorage.setItem("forecast-include-hsa", includeHSA ? "1" : "0"); } catch {} }, [includeHSA]);
-  useEffect(() => { try { localStorage.setItem("forecast-fire-enabled", fireEnabled ? "1" : "0"); } catch {} }, [fireEnabled]);
-  useEffect(() => { try { localStorage.setItem("forecast-fire-multiplier", fireMultiplier); } catch {} }, [fireMultiplier]);
+  const fireEnabled = !!F.fireEnabled;
+  const setFireEnabled = (v) => setFc("fireEnabled", v);
+  const fireMultiplier = F.fireMultiplier ?? "25";
+  const setFireMultiplier = (v) => setFc("fireMultiplier", v);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);

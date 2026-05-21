@@ -123,25 +123,23 @@ export default function AdvancedForecastTab({
   // contribSource dropdown (e.g., "budget-52-bonus") picks the math.
   C = {},
 }) {
-  // Cross-view shared state — read/written via the same keys Simple uses so
-  // toggling between subtabs keeps the user's last horizon / FIRE settings.
-  const [horizon, setHorizonRaw] = useState(() => { try { return Number(localStorage.getItem("forecast-horizon")) || 30; } catch { return 30; } });
-  const setHorizon = (v) => { setHorizonRaw(v); try { localStorage.setItem("forecast-horizon", String(v)); } catch {} };
+  /* Scenario inputs (horizon, inflation, FIRE) live on st.forecast.* so
+     they sync across devices and round-trip with the Simple tab via the
+     same fields rather than via localStorage. Display-only prefs
+     (sortMode, colorBy, showChartLegend, cardOrder) stay in localStorage —
+     those are per-device UI choices. */
+  const setFc = (key, v) => setForecast && setForecast(prev => ({ ...(prev || {}), [key]: v }));
+  const horizon = (forecast && Number.isFinite(Number(forecast.horizon))) ? Number(forecast.horizon) : 30;
+  const setHorizon = (v) => setFc("horizon", v);
 
-  // Inflation rate. Editable on this tab so the FIRE-target line on the chart
-  // can be adjusted without bouncing to Simple. Same localStorage key Simple
-  // reads from, so changes round-trip between subtabs.
-  const [inflationPct, setInflationPctRaw] = useState(() => { try { return localStorage.getItem("forecast-inflation") || "3"; } catch { return "3"; } });
-  const setInflationPct = (v) => { setInflationPctRaw(v); try { localStorage.setItem("forecast-inflation", String(v)); } catch {} };
+  const inflationPct = (forecast && forecast.inflationPct != null) ? forecast.inflationPct : "3";
+  const setInflationPct = (v) => setFc("inflationPct", v);
 
-  const [fireEnabled, setFireEnabledRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-enabled") === "1"; } catch { return false; } });
-  const setFireEnabled = (v) => { setFireEnabledRaw(v); try { localStorage.setItem("forecast-fire-enabled", v ? "1" : "0"); } catch {} };
+  const fireEnabled = !!(forecast && forecast.fireEnabled);
+  const setFireEnabled = (v) => setFc("fireEnabled", v);
 
-  // FIRE multiplier (× annual expenses). Editable on this tab so scenario
-  // planning is possible without bouncing back to Simple. Persists to the
-  // same localStorage key Simple reads from, so changes round-trip.
-  const [fireMultiplier, setFireMultiplierRaw] = useState(() => { try { return localStorage.getItem("forecast-fire-multiplier") || "25"; } catch { return "25"; } });
-  const setFireMultiplier = (v) => { setFireMultiplierRaw(v); try { localStorage.setItem("forecast-fire-multiplier", String(v)); } catch {} };
+  const fireMultiplier = (forecast && forecast.fireMultiplier != null) ? forecast.fireMultiplier : "25";
+  const setFireMultiplier = (v) => setFc("fireMultiplier", v);
 
   // FIRE derivations — minimal version of Simple's logic. Uses tExpW × 48
   // (paycheck-basis annual expenses) as the FIRE expense baseline; the
@@ -1948,15 +1946,10 @@ export default function AdvancedForecastTab({
                             memo above), not from summing items, so
                             rounding stays consistent with the cards. */}
                         {typeof row.total === "number" && (
-                          /* Color matches the "today's $" row below (var(--tx2)) rather
-                             than var(--tx1) — which doesn't exist as a theme var, so it
-                             was falling back to #222 and rendering near-black on every
-                             theme (notably illegible in dark mode). fontWeight: 700
-                             preserves the visual hierarchy without relying on color. */
                           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, paddingTop: 4, borderTop: "1px solid var(--bdr,#e0e0e0)" }}>
                             <span style={{ display: "inline-block", width: 8, height: 8 }} />
-                            <span style={{ color: "var(--tx2,#555)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
-                            <span style={{ color: "var(--tx2,#555)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
+                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, flex: 1 }}>Total (future $)</span>
+                            <span style={{ color: "var(--tx1,#222)", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmt(row.total)}</span>
                           </div>
                         )}
                         {typeof row.totalReal === "number" && (
