@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart, ReferenceLine } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, toWk } from "../utils/calc.js";
+import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
@@ -1580,8 +1580,35 @@ export default function AdvancedForecastTab({
               const isOrphan = ei.itemRef && !linkedItem;
               const liveMonthly = monthlyAmountFor(ei.itemRef);
               const destAcct = accounts.find(a => a.id === ei.destAccountId);
-              const destPool = destAcct ? ACCOUNT_TYPE_TO_POOL[destAcct.type] : null;
-              const destIsCapped = !!destPool && destAcct?.capAtLimit;
+              /* Pool-headroom-aware capping warning. The prior implementation
+                 fired whenever the destination was in any capped pool with
+                 capAtLimit enabled — false alarm for the common case where
+                 the pool is nowhere near its IRS limit (e.g. $5k Roth IRA
+                 against a $7k limit). Now: only warn when the freed cash,
+                 combined with existing pool contributions, would push the
+                 pool over its limit. See poolHeadroom in calc.js + tests. */
+              const freedAnnual = (Number(liveMonthly) || 0) * 12;
+              const headroom = poolHeadroom({
+                destAccount: destAcct,
+                accounts,
+                effectiveContribFor,
+                accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+                getPoolLimit,
+                baseYear,
+                hsaCoverage,
+                ageOf: (owner) => {
+                  if (owner === "p1" && tax?.p1BirthYear) return baseYear - tax.p1BirthYear;
+                  if (owner === "p2" && tax?.p2BirthYear) return baseYear - tax.p2BirthYear;
+                  if (owner === "joint") {
+                    if (tax?.p1BirthYear && tax?.p2BirthYear) return baseYear - Math.min(tax.p1BirthYear, tax.p2BirthYear);
+                    if (tax?.p1BirthYear) return baseYear - tax.p1BirthYear;
+                    if (tax?.p2BirthYear) return baseYear - tax.p2BirthYear;
+                  }
+                  return null;
+                },
+                freedAnnual,
+              });
+              const destIsCapped = headroom.atRisk;
               const isOutOfHorizon = resolvedEnding.outOfHorizon.some(o => o.id === ei.id);
               const isLoanMode = ei.mode === "loan";
 

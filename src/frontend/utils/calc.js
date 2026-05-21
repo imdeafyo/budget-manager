@@ -670,6 +670,75 @@ export function yearsToHitPoolLimit(base, annualIncreasePct, limit, maxYears = 1
   return null;
 }
 
+/* Pool headroom check for the "Capped pool — caps may understate effect"
+   warning on Advanced Forecast ending obligations. Returns:
+     {
+       atRisk: boolean,    // true when warning should display
+       pool: string|null,  // resolved pool name ("hsa", "ira", "401k_employee", ...)
+       limit: number,      // pool limit (Infinity for uncapped pools)
+       current: number,    // current total contributions to this pool (excluding the freed cash)
+       projected: number,  // current + freed cash
+     }
+   Prior implementation flagged ANY destination account in a capped pool
+   regardless of whether the pool was actually near its limit. That fired
+   false positives on common cases (e.g. $5k to a single Roth IRA against
+   a $7,500 limit). The fix: warn only when the freed cash, combined with
+   today's pool contributions, would push the pool over its IRS limit.
+
+   `freedAnnual` is the annualized cash that would redirect into the
+   destination account once the obligation ends. Use 0 to ask "is this
+   pool ALREADY over?" without modeling any new inflow.
+
+   `accountTypeToPool` and `getPoolLimit` are passed in to keep calc.js
+   decoupled from taxDB.js, matching the pattern in forecastGrowthAccounts.
+
+   Pool grouping mirrors the projection logic in forecastGrowthAccounts:
+   401k_employee and ira are per-owner (each person has their own limit);
+   hsa is household-wide regardless of owner. */
+export function poolHeadroom(opts) {
+  const {
+    destAccount,
+    accounts = [],
+    effectiveContribFor, // (account) -> number
+    accountTypeToPool,
+    getPoolLimit,
+    baseYear,
+    ageOf, // (owner) -> number|null (passes to getPoolLimit)
+    hsaCoverage = "family",
+    freedAnnual = 0,
+  } = opts || {};
+
+  if (!destAccount || !accountTypeToPool || !getPoolLimit) {
+    return { atRisk: false, pool: null, limit: Infinity, current: 0, projected: 0 };
+  }
+  if (!destAccount.capAtLimit) {
+    // User has explicitly opted out of capping for this account — no warning needed.
+    return { atRisk: false, pool: null, limit: Infinity, current: 0, projected: 0 };
+  }
+  const pool = accountTypeToPool[destAccount.type];
+  if (!pool) {
+    return { atRisk: false, pool: null, limit: Infinity, current: 0, projected: 0 };
+  }
+
+  // Group accounts in the same pool by the same key forecastGrowthAccounts uses.
+  // hsa is household-keyed; everything else is per-owner.
+  const sharesPool = (a) => {
+    if (accountTypeToPool[a.type] !== pool) return false;
+    if (pool === "hsa") return true;
+    return a.owner === destAccount.owner;
+  };
+
+  const current = accounts
+    .filter(sharesPool)
+    .reduce((s, a) => s + (Number(effectiveContribFor(a)) || 0), 0);
+
+  const age = typeof ageOf === "function" ? ageOf(destAccount.owner === "joint" ? "joint" : destAccount.owner) : null;
+  const limit = getPoolLimit(pool, baseYear, age, hsaCoverage);
+  const projected = current + (Number(freedAnnual) || 0);
+  const atRisk = isFinite(limit) && projected > limit;
+  return { atRisk, pool, limit, current, projected };
+}
+
 /* Annual cash-budget contribution figure used by the Advanced Forecast
    "Source: Budget" mode on cash/savings accounts. Mirrors Simple's
    budgetAnnualContribution algebra exactly, MINUS the retirement adders

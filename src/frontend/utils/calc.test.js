@@ -4,7 +4,7 @@ import {
   calcStateTax, getStateMarg, toWk, fromWk, recalcMilestonePure,
   forecastGrowth, yearsToTarget,
   forecastGrowthAccounts, yearsToHitPoolLimit,
-  cashBudgetContribution,
+  cashBudgetContribution, poolHeadroom,
   fmtCompact
 } from "../utils/calc.js";
 import { TAX_DB, STATE_BRACKETS, getPoolLimit, ACCOUNT_TYPE_TO_POOL, IRA_LIMITS, HSA_LIMITS_SELF, CATCHUP_401K } from "../data/taxDB.js";
@@ -1314,5 +1314,195 @@ describe("forecastGrowthAccounts — appliedEndingEvents (ending obligations)", 
     expect(r.years[1].byAccount.tx.nominal).toBeCloseTo(12400, 5);
     expect(r.accountSeries.tx[1].eventDelta).toBeCloseTo(1200, 6);
     expect(r.accountSeries.tx[1].oneTimeAmount).toBeCloseTo(10000, 5);
+  });
+});
+
+describe("poolHeadroom — Capped pool warning gate for ending obligations", () => {
+  // Real getPoolLimit + ACCOUNT_TYPE_TO_POOL from taxDB; thin opts wrapper.
+  const baseOpts = (overrides = {}) => ({
+    accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+    getPoolLimit,
+    baseYear: 2026,
+    ageOf: () => null,
+    hsaCoverage: "family",
+    freedAnnual: 0,
+    ...overrides,
+  });
+
+  it("returns atRisk=false for uncapped pools (taxable)", () => {
+    const dest = { id: "tx", owner: "joint", type: "taxable", capAtLimit: false };
+    const accounts = [dest];
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: dest,
+      accounts,
+      effectiveContribFor: () => 50000,
+      freedAnnual: 999999,
+    });
+    expect(r.atRisk).toBe(false);
+    expect(r.pool).toBe(null);
+  });
+
+  it("returns atRisk=false when destination has capAtLimit disabled (user opted out)", () => {
+    const dest = { id: "ira", owner: "p1", type: "ira_roth", capAtLimit: false };
+    const accounts = [dest];
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: dest,
+      accounts,
+      effectiveContribFor: () => 5000,
+      freedAnnual: 100000,
+    });
+    expect(r.atRisk).toBe(false);
+  });
+
+  it("Regression: a $5k Roth IRA contribution (no other IRAs) does NOT trigger the warning (the original bug)", () => {
+    // The user described this exactly: $5k/yr Roth IRA, no other IRA accounts,
+    // ending obligation redirects to it. Previous logic flagged this. Limit
+    // for ira pool in 2026 is $7,000 (no catch-up). 5000 << 7000, even with
+    // some freed cash, so atRisk should be false unless freed cash actually
+    // pushes the pool over.
+    const dest = { id: "ira", owner: "p1", type: "ira_roth", capAtLimit: true };
+    const accounts = [dest];
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: dest,
+      accounts,
+      effectiveContribFor: () => 5000,
+      freedAnnual: 0,
+    });
+    expect(r.atRisk).toBe(false);
+    expect(r.pool).toBe("ira");
+    expect(r.current).toBe(5000);
+    expect(r.limit).toBeGreaterThanOrEqual(7000);
+  });
+
+  it("flags when freed cash pushes the IRA pool over the limit", () => {
+    // $6k base + $3k freed → $9k against ~$7k limit = over.
+    const dest = { id: "ira", owner: "p1", type: "ira_roth", capAtLimit: true };
+    const accounts = [dest];
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: dest,
+      accounts,
+      effectiveContribFor: () => 6000,
+      freedAnnual: 3000,
+    });
+    expect(r.atRisk).toBe(true);
+    expect(r.pool).toBe("ira");
+    expect(r.projected).toBeCloseTo(9000, 6);
+  });
+
+  it("sums multiple IRA accounts in the same owner's pool", () => {
+    // Trad $4k + Roth $4k = $8k, already over $7k limit even at freedAnnual=0.
+    const trad = { id: "trad", owner: "p1", type: "ira_traditional", capAtLimit: true };
+    const roth = { id: "roth", owner: "p1", type: "ira_roth", capAtLimit: true };
+    const dest = roth;
+    const accounts = [trad, roth];
+    const contribs = { trad: 4000, roth: 4000 };
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: dest,
+      accounts,
+      effectiveContribFor: (a) => contribs[a.id] || 0,
+      freedAnnual: 0,
+    });
+    expect(r.atRisk).toBe(true);
+    expect(r.current).toBeCloseTo(8000, 6);
+  });
+
+  it("does NOT cross-pool: a different person's IRA contribs don't count", () => {
+    // p1 has $5k in Roth (under limit). p2 has $7k in Trad (at p2's limit).
+    // Destination is p1's Roth. p2's contribs should NOT be summed.
+    const p1Roth = { id: "p1r", owner: "p1", type: "ira_roth", capAtLimit: true };
+    const p2Trad = { id: "p2t", owner: "p2", type: "ira_traditional", capAtLimit: true };
+    const accounts = [p1Roth, p2Trad];
+    const contribs = { p1r: 5000, p2t: 7000 };
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: p1Roth,
+      accounts,
+      effectiveContribFor: (a) => contribs[a.id] || 0,
+      freedAnnual: 0,
+    });
+    expect(r.atRisk).toBe(false);
+    expect(r.current).toBe(5000); // only p1's contribs
+  });
+
+  it("HSA pool is household-wide regardless of owner", () => {
+    // Two HSA accounts with different "owners" (one joint, one p1) should
+    // still share the same pool because hsa pool is household-keyed.
+    const hsaA = { id: "ha", owner: "joint", type: "hsa_cash", capAtLimit: true };
+    const hsaB = { id: "hb", owner: "p1", type: "hsa_invested", capAtLimit: true };
+    const accounts = [hsaA, hsaB];
+    const contribs = { ha: 5000, hb: 4000 };
+    const r = poolHeadroom({
+      ...baseOpts({ hsaCoverage: "family" }),
+      destAccount: hsaA,
+      accounts,
+      effectiveContribFor: (a) => contribs[a.id] || 0,
+      freedAnnual: 0,
+    });
+    // Family limit 2026 = $8,300. $5k + $4k = $9k > $8.3k → at risk.
+    expect(r.atRisk).toBe(true);
+    expect(r.current).toBeCloseTo(9000, 6);
+    expect(r.pool).toBe("hsa");
+  });
+
+  it("HSA self-only coverage applies a lower limit", () => {
+    const hsa = { id: "h", owner: "joint", type: "hsa_cash", capAtLimit: true };
+    const accounts = [hsa];
+    const r = poolHeadroom({
+      ...baseOpts({ hsaCoverage: "self" }),
+      destAccount: hsa,
+      accounts,
+      effectiveContribFor: () => 4500,
+      freedAnnual: 0,
+    });
+    // 2026 HSA self limit = $4,400. $4,500 > $4,400 → at risk.
+    expect(r.atRisk).toBe(true);
+    expect(r.limit).toBeCloseTo(4400, 0);
+  });
+
+  it("returns safe defaults when destAccount is missing", () => {
+    const r = poolHeadroom({ ...baseOpts(), destAccount: null, accounts: [], effectiveContribFor: () => 0 });
+    expect(r.atRisk).toBe(false);
+    expect(r.pool).toBe(null);
+  });
+
+  it("returns safe defaults when accountTypeToPool/getPoolLimit are missing", () => {
+    const dest = { id: "ira", owner: "p1", type: "ira_roth", capAtLimit: true };
+    const r = poolHeadroom({ destAccount: dest, accounts: [dest], effectiveContribFor: () => 5000 });
+    expect(r.atRisk).toBe(false);
+  });
+
+  it("401(k) employee pool is per-owner", () => {
+    const p1Pre = { id: "p1p", owner: "p1", type: "401k_pretax", capAtLimit: true };
+    const p2Pre = { id: "p2p", owner: "p2", type: "401k_pretax", capAtLimit: true };
+    const accounts = [p1Pre, p2Pre];
+    const contribs = { p1p: 24500, p2p: 24500 }; // each at their own ~$24.5k limit
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: p1Pre,
+      accounts,
+      effectiveContribFor: (a) => contribs[a.id] || 0,
+      freedAnnual: 1000,
+    });
+    // p1's pool sees only p1's contribution + freed cash. $24.5k + $1k = $25.5k > limit.
+    expect(r.atRisk).toBe(true);
+    expect(r.current).toBe(24500); // NOT 49000
+  });
+
+  it("401k_match destination is not pool-capped (employer match has no employee deferral cap)", () => {
+    const match = { id: "m", owner: "p1", type: "401k_match", capAtLimit: false };
+    const r = poolHeadroom({
+      ...baseOpts(),
+      destAccount: match,
+      accounts: [match],
+      effectiveContribFor: () => 10000,
+      freedAnnual: 50000,
+    });
+    expect(r.atRisk).toBe(false);
+    expect(r.pool).toBe(null);
   });
 });
