@@ -1826,7 +1826,7 @@ export default function AdvancedForecastTab({
               )}
             </h3>
             <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 580 }}>
-              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Negative amount = money out; positive = money in. Events bypass contribution caps and can drive a balance negative — that surfaces planning problems rather than hiding them.
+              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Type a <strong>negative</strong> amount for outflows (money out) or a positive amount for inflows. Events bypass contribution caps and can drive a balance negative — that surfaces planning problems rather than hiding them.
             </div>
           </div>
           <button
@@ -1895,7 +1895,6 @@ export default function AdvancedForecastTab({
                     status = "Inactive";
                     statusColor = "#888";
                   }
-                  const isOutflow = Number(ev.amount) < 0;
                   return (
                     <tr key={ev.id} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
                       <td style={{ padding: 6 }}>
@@ -1916,12 +1915,12 @@ export default function AdvancedForecastTab({
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
-                        <input
-                          type="number"
+                        <NI
                           value={ev.amount}
-                          onChange={(e) => updateOneTimeEvent(ev.id, { amount: Number(e.target.value) || 0 })}
-                          step="100"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: isOutflow ? "#C0392B" : "var(--card-color,#222)", width: 110, textAlign: "right", fontWeight: 600 }}
+                          onChange={(v) => updateOneTimeEvent(ev.id, { amount: Number(v) || 0 })}
+                          onBlurResolve
+                          prefix="$"
+                          style={{ width: 130 }}
                         />
                       </td>
                       <td style={{ padding: 6 }}>
