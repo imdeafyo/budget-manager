@@ -5,7 +5,7 @@ import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, ca
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
-import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToFractionalYear } from "../utils/oneTimeEvents.js";
+import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 
 /* ── Account type display metadata ──
    Account `type` strings map to (a) IRS pool for limit checking
@@ -1942,12 +1942,27 @@ export default function AdvancedForecastTab({
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
-                        <NI
-                          value={ev.amount}
-                          onChange={(v) => updateOneTimeEvent(ev.id, { amount: Number(v) || 0 })}
-                          onBlurResolve
-                          prefix="$"
-                          style={{ width: 130 }}
+                        {/* Native numeric input, commits on every change.
+                            We deliberately don't use the shared NI here:
+                            NI only commits on blur, and mobile browsers
+                            (iOS Safari especially) don't always fire blur
+                            when the user dismisses the keyboard or taps a
+                            non-input area. That caused the entered amount
+                            to silently stay at 0 in state — "doesn't seem
+                            to change FIRE" symptom. inputMode="decimal"
+                            also gets the numeric keyboard on mobile. */}
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="any"
+                          value={ev.amount === 0 ? "" : ev.amount}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const n = raw === "" || raw === "-" ? 0 : Number(raw);
+                            updateOneTimeEvent(ev.id, { amount: Number.isFinite(n) ? n : 0 });
+                          }}
+                          placeholder="$ amount"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 130, textAlign: "right" }}
                         />
                       </td>
                       <td style={{ padding: 6 }}>
@@ -2221,13 +2236,14 @@ export default function AdvancedForecastTab({
                     direction: red for outflow (negative), green for
                     inflow (positive). Label shows truncated user label
                     + amount; full text is on hover via the data table
-                    below the chart. We place them on a numeric-positioned
-                    x via `monthIndexToFractionalYear`. The chart's XAxis
-                    uses `year` as a category/numeric axis — ReferenceLine
-                    accepts numeric x even on category axes (Recharts
-                    renders it at the interpolated position). */}
+                    below the chart. We snap x to the integer year via
+                    `monthIndexToChartYear` because Recharts v3 silently
+                    drops ReferenceLines whose x is a fractional value
+                    on a category axis — that was the "doesn't always
+                    show on graph" bug. Snapping costs sub-year visual
+                    precision but guarantees the marker renders. */}
                 {resolvedOneTime.events.map(ev => {
-                  const x = monthIndexToFractionalYear(ev.monthIndex);
+                  const x = monthIndexToChartYear(ev.monthIndex);
                   const isInflow = ev.amount >= 0;
                   const color = isInflow ? "#27AE60" : "#C0392B";
                   const labelText = ev.label

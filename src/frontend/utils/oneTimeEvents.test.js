@@ -5,6 +5,7 @@ import {
   eventMonthIndex,
   resolveOneTimeEvents,
   monthIndexToFractionalYear,
+  monthIndexToChartYear,
 } from "./oneTimeEvents.js";
 
 describe("newOneTimeEventId", () => {
@@ -234,5 +235,37 @@ describe("monthIndexToFractionalYear", () => {
     expect(monthIndexToFractionalYear(NaN)).toBe(0);
     expect(monthIndexToFractionalYear(-5)).toBe(0);
     expect(monthIndexToFractionalYear("garbage")).toBe(0);
+  });
+});
+
+describe("monthIndexToChartYear", () => {
+  /* Regression: ReferenceLine x values with fractional positions silently
+     drop on Recharts v3 category axes. monthIndexToChartYear snaps to the
+     integer year the event fires in so markers always render. */
+  it("returns 0 for monthIndex 0 (starting-balance year)", () => {
+    expect(monthIndexToChartYear(0)).toBe(0);
+  });
+
+  it("snaps months 1..12 to year 1", () => {
+    expect(monthIndexToChartYear(1)).toBe(1);
+    expect(monthIndexToChartYear(6)).toBe(1);
+    expect(monthIndexToChartYear(12)).toBe(1);
+  });
+
+  it("snaps months 13..24 to year 2", () => {
+    expect(monthIndexToChartYear(13)).toBe(2);
+    expect(monthIndexToChartYear(24)).toBe(2);
+  });
+
+  it("snaps arbitrary mid-horizon months to their year", () => {
+    expect(monthIndexToChartYear(17)).toBe(2);
+    expect(monthIndexToChartYear(36)).toBe(3);
+    expect(monthIndexToChartYear(37)).toBe(4);
+  });
+
+  it("returns 0 for non-finite or negative inputs", () => {
+    expect(monthIndexToChartYear(NaN)).toBe(0);
+    expect(monthIndexToChartYear(-5)).toBe(0);
+    expect(monthIndexToChartYear("garbage")).toBe(0);
   });
 });

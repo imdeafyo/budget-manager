@@ -166,3 +166,22 @@ export function monthIndexToFractionalYear(monthIndex) {
   if (!Number.isFinite(m) || m <= 0) return 0;
   return m / 12;
 }
+
+/* Snap a monthIndex to the integer forecast year in which it fires.
+   The chart's XAxis uses `year` (integer 0..horizon) as a CATEGORY axis,
+   and Recharts v3 ReferenceLine x values on category axes only render
+   reliably when they match an existing category. Fractional x values
+   silently drop or pin to the wrong tick — that was the "doesn't always
+   show on graph" bug.
+
+   monthIndex 1..12  → year 1 (fires during year 1)
+   monthIndex 13..24 → year 2
+   monthIndex 0 or invalid → 0 (the starting-balance year)
+
+   Less sub-year precision than monthIndexToFractionalYear, but the
+   marker actually renders. */
+export function monthIndexToChartYear(monthIndex) {
+  const m = Number(monthIndex);
+  if (!Number.isFinite(m) || m <= 0) return 0;
+  return Math.ceil(m / 12);
+}
