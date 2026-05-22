@@ -1853,7 +1853,7 @@ export default function AdvancedForecastTab({
               )}
             </h3>
             <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 580 }}>
-              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Type a <strong>negative</strong> amount for outflows (money out) or a positive amount for inflows. Events bypass contribution caps and can drive a balance negative — that surfaces planning problems rather than hiding them.
+              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Type a <strong>negative</strong> amount for outflows (money out) or a positive amount for inflows. Events bypass contribution caps and can drive a balance negative — a warning appears below the year-by-year table flagging which accounts went underwater. Negative balances stay flat (no fake interest accrues at the savings return rate); contributions pay them down dollar-for-dollar.
             </div>
           </div>
           <button
@@ -2010,7 +2010,7 @@ export default function AdvancedForecastTab({
             render: () => (
               <>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{POOL_LABELS[p.pool] || p.pool}</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: p.nominal < 0 ? "#C0392B" : "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(p.nominal))}</div>
                 <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Today's $: {fmt(Math.round(p.real))}</div>
                 <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Contributed (today's $): {fmt(Math.round(p.contributions))}</div>
                 <div style={{ fontSize: 10, color: "var(--tx3,#bbb)", marginTop: 2 }}>{p.count} account{p.count === 1 ? "" : "s"}</div>
@@ -2023,7 +2023,12 @@ export default function AdvancedForecastTab({
           render: () => (
             <>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Total at Year {horizon}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(poolSummary.reduce((s, p) => s + p.nominal, 0)))}</div>
+              {(() => {
+                const totalNom = poolSummary.reduce((s, p) => s + p.nominal, 0);
+                return (
+                  <div style={{ fontSize: 22, fontWeight: 800, color: totalNom < 0 ? "#C0392B" : "#2ECC71", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(totalNom))}</div>
+                );
+              })()}
               <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4 }}>Today's $: {fmt(Math.round(poolSummary.reduce((s, p) => s + p.real, 0)))}</div>
             </>
           ),
@@ -2300,9 +2305,15 @@ export default function AdvancedForecastTab({
                   <tr key={row.year} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
                     <td style={{ padding: 6, fontWeight: 700, color: "var(--card-color,#222)" }}>{row.year} <span style={{ color: "var(--tx3,#aaa)", fontWeight: 400 }}>({row.calendarYear})</span></td>
                     <td style={{ padding: 6, textAlign: "right", fontWeight: 700, color: "var(--card-color,#222)" }}>{fmt(Math.round(row.totals.nominal))}</td>
-                    {accounts.map(a => (
-                      <td key={a.id} style={{ padding: 6, textAlign: "right", color: "var(--tx2,#555)" }}>{fmt(Math.round(row.byAccount[a.id]?.nominal || 0))}</td>
-                    ))}
+                    {accounts.map(a => {
+                      const series = projection.accountSeries[a.id]?.[row.year];
+                      const isUnderwater = series?.underwater;
+                      return (
+                        <td key={a.id} style={{ padding: 6, textAlign: "right", color: isUnderwater ? "#C0392B" : "var(--tx2,#555)", fontWeight: isUnderwater ? 600 : 400 }}>
+                          {fmt(Math.round(row.byAccount[a.id]?.nominal || 0))}
+                        </td>
+                      );
+                    })}
                     {accounts.map(a => {
                       const c = row.byAccount[a.id]?.contribution || 0;
                       const series = projection.accountSeries[a.id]?.[row.year];
@@ -2321,6 +2332,31 @@ export default function AdvancedForecastTab({
           {projection.poolWarnings.length > 0 && (
             <div style={{ marginTop: 12, padding: "8px 12px", background: "#FFF3F0", border: "1px solid #FFCDC2", borderRadius: 6, fontSize: 11, color: "#8A4A3F" }}>
               <strong>⚠ Capped {projection.poolWarnings.length} time{projection.poolWarnings.length === 1 ? "" : "s"}.</strong> Some contributions were reduced to fit within IRS pool limits. Toggle "Cap at IRS limit" off on individual accounts to model over-contribution scenarios.
+            </div>
+          )}
+          {projection.underwaterWarnings && projection.underwaterWarnings.length > 0 && (
+            <div style={{ marginTop: 12, padding: "10px 12px", background: "#FBEAE7", border: "1px solid #E8B5A8", borderRadius: 6, fontSize: 12, color: "#6B2C1F" }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                ⚠ {projection.underwaterWarnings.length} account{projection.underwaterWarnings.length === 1 ? "" : "s"} went underwater
+              </div>
+              <div style={{ fontSize: 11, marginBottom: 8, color: "#8A4A3F" }}>
+                Negative balances stay flat in the projection (no fake interest at the savings return rate). Contributions reduce the debt dollar-for-dollar. The plan needs adjustment — move the event later, scale it back, or fund it from another account.
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
+                {projection.underwaterWarnings.map(w => {
+                  const acct = accounts.find(a => a.id === w.accountId);
+                  const label = (acct?.nickname || "").trim() || (acct ? `${acct.owner} ${acct.type}` : w.accountId);
+                  return (
+                    <li key={w.accountId} style={{ marginBottom: 2 }}>
+                      <strong>{label}</strong> — first underwater in year {w.firstNegativeYear}.
+                      {w.endedNegative
+                        ? <> Ends at <strong style={{ color: "#C0392B" }}>{fmt(Math.round(w.finalBalance))}</strong> after {horizon}y.</>
+                        : <> Recovered to <strong style={{ color: "#2ECC71" }}>{fmt(Math.round(w.finalBalance))}</strong> by year {horizon}.</>
+                      }
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
         </Card>

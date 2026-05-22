@@ -339,7 +339,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   } = opts || {};
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
-    return { years: [], accountSeries: {}, poolWarnings: [] };
+    return { years: [], accountSeries: {}, poolWarnings: [], underwaterWarnings: [] };
   }
   if (typeof getPoolLimit !== "function" || !accountTypeToPool) {
     throw new Error("forecastGrowthAccounts requires getPoolLimit and accountTypeToPool in opts");
@@ -464,6 +464,16 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   const oneTimeCursor = {};
   for (const a of accounts) oneTimeCursor[a.id] = 0;
 
+  /* Per-account "first year balance went negative" tracker. Null until
+     the balance crosses below zero for the first time. Set ONCE on the
+     first negative crossing and persists across years. Surfaced in the
+     final return so the Advanced tab UI can warn on underwater accounts
+     and highlight from `firstNegativeYear` onward. The check fires
+     inside the monthly loop on the end-of-month balance — both growth
+     and one-time events count as crossing triggers. */
+  const firstNegativeYear = {};
+  for (const a of accounts) firstNegativeYear[a.id] = null;
+
   for (let y = 1; y <= years; y++) {
     const calendarYear = baseYear + y;
 
@@ -570,14 +580,32 @@ export function forecastGrowthAccounts(accounts, years, opts) {
           }
         }
         const effectiveMonthly = baseMonthlyC + extraMonthlyDelta[a.id];
-        bal = bal * (1 + monthlyR) + effectiveMonthly;
+        /* Underwater handling: only the POSITIVE portion of the balance
+           compounds at the account's return rate. A negative balance
+           ("underwater") stays flat in nominal terms — contributions
+           reduce it back toward zero, but no fake "interest on debt"
+           accrues at the savings return rate, which would be numerically
+           incoherent. When a balance crosses back above zero, the
+           positive portion automatically resumes compounding because
+           `Math.max(bal, 0)` flips on.
+           Real debt servicing (mortgages, loans, HELOCs) accrues at a
+           BORROWING rate, not the savings rate — see Phase 14 (Loans)
+           on the roadmap. This flat-negative behavior is the right
+           zero-config default for surfacing infeasibility until that
+           ships. */
+        const positivePortion = Math.max(bal, 0);
+        const negativePortion = Math.min(bal, 0);
+        bal = positivePortion * (1 + monthlyR) + negativePortion + effectiveMonthly;
         eventYearContrib += extraMonthlyDelta[a.id];
         /* Fire all one-time events whose monthIndex matches this absolute
            month. Applied AFTER growth + contribution for the month so the
            lump-sum hits the post-contribution balance — matches the user
            intuition "I withdrew $30k in June" → June's ending balance is
            $30k lower. Negative balances are allowed: the forecast should
-           surface infeasible plans visibly rather than silently capping. */
+           surface infeasible plans visibly rather than silently capping.
+           The underwater warning surface (firstNegativeYear) is how that
+           visibility happens — see the per-account tracker initialized
+           above. */
         if (acctOneTime) {
           while (
             oneTimeCursor[a.id] < acctOneTime.length &&
@@ -588,6 +616,16 @@ export function forecastGrowthAccounts(accounts, years, opts) {
             oneTimeYearAmount += amt;
             oneTimeCursor[a.id] += 1;
           }
+        }
+        /* Record the first year this balance dipped below zero. Checked
+           after both monthly growth+contribution and one-time events so
+           any of them can trigger the flag. Set ONCE — once flagged, an
+           account remains "has been underwater" for the rest of the
+           projection (even if contributions later push it positive
+           again), so the UI can still surface that the plan crossed
+           into infeasibility at some point. */
+        if (bal < 0 && firstNegativeYear[a.id] === null) {
+          firstNegativeYear[a.id] = y;
         }
       }
       const yearActualContrib = yearAnnual + eventYearContrib;
@@ -621,6 +659,12 @@ export function forecastGrowthAccounts(accounts, years, opts) {
            inheritance). Does NOT count toward `contribution` — these
            are balance adjustments, not contributions. */
         oneTimeAmount: oneTimeYearAmount,
+        /* True for any year this account's ending balance is negative.
+           Distinct from `firstNegativeYear` (which is set once and
+           sticks) — `underwater` flips back to false if contributions
+           recover the balance above zero. The UI uses this for per-row
+           highlighting in the year-by-year table. */
+        underwater: bal < 0,
       });
       byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id], contribCumReal: cumContribsReal[a.id] };
 
@@ -646,7 +690,30 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     });
   }
 
-  return { years: yearRows, accountSeries, poolWarnings };
+  /* Assemble per-account underwater warnings — one entry per account that
+     went negative at any point during the projection. The UI uses this
+     for the warning banner below the year-by-year table, analogous to
+     poolWarnings. firstNegativeYear is the trigger year; finalBalance
+     lets the banner show the ending shortfall ("$X short at end of
+     30y"). Sorted by firstNegativeYear so the banner reads
+     chronologically. */
+  const underwaterWarnings = [];
+  for (const a of accounts) {
+    if (firstNegativeYear[a.id] !== null) {
+      underwaterWarnings.push({
+        accountId: a.id,
+        nickname: a.nickname || "",
+        type: a.type,
+        owner: a.owner,
+        firstNegativeYear: firstNegativeYear[a.id],
+        finalBalance: balances[a.id],
+        endedNegative: balances[a.id] < 0,
+      });
+    }
+  }
+  underwaterWarnings.sort((p, q) => p.firstNegativeYear - q.firstNegativeYear);
+
+  return { years: yearRows, accountSeries, poolWarnings, underwaterWarnings };
 }
 
 /* ── How many years until annual contribution hits the pool limit? ──

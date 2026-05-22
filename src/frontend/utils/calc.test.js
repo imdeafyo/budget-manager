@@ -1224,6 +1224,101 @@ describe("forecastGrowthAccounts — appliedEndingEvents (ending obligations)", 
     expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(-25000, 5);
   });
 
+  it("does NOT compound the negative portion of a balance at the return rate", () => {
+    /* Regression: a -$9M event on a 4%-return account previously
+       compounded the negative balance, producing ~-$29M after 30y. The
+       correct behavior is that the negative portion stays flat (no
+       fake "interest on debt" at the savings rate) — debt servicing
+       would need a separate borrow rate, which is Phase 14 territory. */
+    const accounts = [
+      { id: "tx", name: "Tax", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 4, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "tx", monthIndex: 1, amount: -9000000 }];
+    const r = forecastGrowthAccounts(accounts, 30, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    // Without compounding the negative portion, the balance stays at exactly -$9M.
+    expect(r.years[30].byAccount.tx.nominal).toBeCloseTo(-9000000, 5);
+    // Sanity check: the OLD buggy math would have produced ~-$29.2M.
+    expect(r.years[30].byAccount.tx.nominal).toBeGreaterThan(-10000000);
+  });
+
+  it("contributions pay down a negative balance dollar-for-dollar (no return on debt)", () => {
+    /* When the balance is negative, contributions reduce it but no
+       growth accrues to either side. -$100k starting underwater + $20k/yr
+       in contributions should be exactly -$80k after year 1, with no
+       4% return reducing the paydown speed. */
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 4, contribAmount: 20000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 1, amount: -100000 }];
+    const r = forecastGrowthAccounts(accounts, 5, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(-80000, 5);
+    expect(r.years[2].byAccount.cash.nominal).toBeCloseTo(-60000, 5);
+    expect(r.years[3].byAccount.cash.nominal).toBeCloseTo(-40000, 5);
+    expect(r.years[4].byAccount.cash.nominal).toBeCloseTo(-20000, 5);
+    expect(r.years[5].byAccount.cash.nominal).toBeCloseTo(0, 5);
+  });
+
+  it("resumes positive compounding once a balance climbs back above zero", () => {
+    /* The Math.max(bal, 0) gate flips on the moment the balance goes
+       positive again — no special-case "remember you were underwater"
+       logic required for the math. The `firstNegativeYear` flag in the
+       warnings output is what surfaces the history. */
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 4, contribAmount: 20000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 1, amount: -100000 }];
+    const r = forecastGrowthAccounts(accounts, 7, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    // Year 5 ends at 0 (last paydown year); year 6 is the first year that
+    // gets actual growth. $20k contribution + 4% return should produce
+    // ~$20,364 (monthly compounding on the rising balance).
+    expect(r.years[5].byAccount.cash.nominal).toBeCloseTo(0, 5);
+    expect(r.years[6].byAccount.cash.nominal).toBeGreaterThan(20000);
+    expect(r.years[6].byAccount.cash.nominal).toBeLessThan(21000);
+    // And the warning persists even though the account is no longer underwater
+    expect(r.underwaterWarnings.length).toBe(1);
+    expect(r.underwaterWarnings[0].endedNegative).toBe(false);
+    expect(r.underwaterWarnings[0].firstNegativeYear).toBe(1);
+  });
+
+  it("populates underwaterWarnings for each account that went negative", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "joint", type: "taxable", startBalance: 50000, annualReturn: 4, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "b", name: "B", owner: "joint", type: "taxable", startBalance: 10000, annualReturn: 4, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "c", name: "C", owner: "joint", type: "taxable", startBalance: 5000,  annualReturn: 4, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [
+      { accountId: "b", monthIndex: 1,  amount: -50000 }, // year 1
+      { accountId: "c", monthIndex: 25, amount: -50000 }, // year 3
+      // a stays positive throughout
+    ];
+    const r = forecastGrowthAccounts(accounts, 5, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    expect(r.underwaterWarnings.length).toBe(2);
+    // Sorted by firstNegativeYear ascending
+    expect(r.underwaterWarnings[0].accountId).toBe("b");
+    expect(r.underwaterWarnings[0].firstNegativeYear).toBe(1);
+    expect(r.underwaterWarnings[1].accountId).toBe("c");
+    expect(r.underwaterWarnings[1].firstNegativeYear).toBe(3);
+    // Account a never went underwater — not in warnings
+    expect(r.underwaterWarnings.find(w => w.accountId === "a")).toBeUndefined();
+  });
+
+  it("flags per-year underwater state in accountSeries", () => {
+    /* `underwater` on each series row reflects that year's ending state.
+       This is what the UI uses for per-row highlighting in the
+       year-by-year table — distinct from `firstNegativeYear` (which
+       sticks once set). */
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 4, contribAmount: 20000, annualIncrease: 0, capAtLimit: false },
+    ];
+    const events = [{ accountId: "cash", monthIndex: 1, amount: -50000 }];
+    const r = forecastGrowthAccounts(accounts, 5, { ...baseOpts, inflationPct: 0, appliedOneTimeEvents: events });
+    // Underwater for years 1, 2 (-$30k, -$10k), recovers in year 3 (+$10k)
+    expect(r.accountSeries.cash[1].underwater).toBe(true);
+    expect(r.accountSeries.cash[2].underwater).toBe(true);
+    expect(r.accountSeries.cash[3].underwater).toBe(false);
+    expect(r.accountSeries.cash[4].underwater).toBe(false);
+  });
+
   it("does NOT count one-time events as contributions", () => {
     const accounts = [
       { id: "tx", name: "Tax", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 1200, annualIncrease: 0, capAtLimit: false },
