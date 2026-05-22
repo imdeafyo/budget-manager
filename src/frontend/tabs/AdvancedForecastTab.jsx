@@ -1853,7 +1853,7 @@ export default function AdvancedForecastTab({
               )}
             </h3>
             <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 580 }}>
-              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Type a <strong>negative</strong> amount for outflows (money out) or a positive amount for inflows. Events bypass contribution caps and can drive a balance negative — a warning appears below the year-by-year table flagging which accounts went underwater. Negative balances stay flat (no fake interest accrues at the savings return rate); contributions pay them down dollar-for-dollar.
+              Dated lump-sum cash events on a specific account: a car purchase from cash, an inheritance, a 401(k) rollover. Type a <strong>negative</strong> amount for outflows (money out) or a positive amount for inflows. Events bypass contribution caps and can drive a balance negative — a warning appears in this section flagging which accounts went underwater. Negative balances stay flat (no fake interest accrues at the savings return rate); contributions pay them down dollar-for-dollar.
             </div>
           </div>
           <button
@@ -1994,6 +1994,36 @@ export default function AdvancedForecastTab({
             </table>
           </div>
         )}
+        {/* Underwater warning — placed at the SOURCE of the problem (the
+            One-time Events section, where the user just typed a negative
+            amount) rather than far down under the year-by-year table.
+            Surfaces immediately on entry of an event that drives any
+            account below zero. */}
+        {projection.underwaterWarnings && projection.underwaterWarnings.length > 0 && (
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "#FBEAE7", border: "1px solid #E8B5A8", borderRadius: 6, fontSize: 12, color: "#6B2C1F" }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              ⚠ {projection.underwaterWarnings.length} account{projection.underwaterWarnings.length === 1 ? "" : "s"} went underwater
+            </div>
+            <div style={{ fontSize: 11, marginBottom: 8, color: "#8A4A3F" }}>
+              Negative balances stay flat in the projection (no fake interest at the savings return rate). Contributions reduce the debt dollar-for-dollar. The plan needs adjustment — move the event later, scale it back, or fund it from another account.
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
+              {projection.underwaterWarnings.map(w => {
+                const acct = accounts.find(a => a.id === w.accountId);
+                const label = (acct?.nickname || "").trim() || (acct ? `${acct.owner} ${acct.type}` : w.accountId);
+                return (
+                  <li key={w.accountId} style={{ marginBottom: 2 }}>
+                    <strong>{label}</strong> — first underwater in year {w.firstNegativeYear}.
+                    {w.endedNegative
+                      ? <> Ends at <strong style={{ color: "#C0392B" }}>{fmt(Math.round(w.finalBalance))}</strong> after {horizon}y.</>
+                      : <> Recovered to <strong style={{ color: "#2ECC71" }}>{fmt(Math.round(w.finalBalance))}</strong> by year {horizon}.</>
+                    }
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </Card>
 
       {/* Per-pool summary cards — moved above the chart so the headline
@@ -2078,7 +2108,17 @@ export default function AdvancedForecastTab({
         const missing = defIds.filter(id => !saved.includes(id));
         const finalIds = [...saved, ...missing];
         const finalCards = finalIds.map(id => cardDefs.find(c => c.id === id)).filter(Boolean);
-        const cols = mob ? "1fr 1fr" : `repeat(${Math.min(finalCards.length, 6)}, 1fr)`;
+        /* Card grid layout: previously hardcoded `repeat(N, 1fr)` up to 6
+           columns on desktop, which forced all cards into a single row
+           regardless of viewport width — cards overflowed off-screen
+           when content exceeded the shrunk column width.
+           `auto-fit, minmax(180px, 1fr)` lets the browser decide how
+           many columns fit at the current width, wrapping naturally to
+           a second row when needed. 180px is the floor that keeps card
+           text legible (typical content: 22px headline number + 11px
+           subtitle lines). Mobile retains the explicit 2-col layout so
+           cards don't shrink to one column on narrow phones. */
+        const cols = mob ? "1fr 1fr" : `repeat(auto-fit, minmax(180px, 1fr))`;
         return (
           <div style={{ display: "grid", gridTemplateColumns: cols, gap: 12 }}>
             {finalCards.map(c => {
@@ -2332,31 +2372,6 @@ export default function AdvancedForecastTab({
           {projection.poolWarnings.length > 0 && (
             <div style={{ marginTop: 12, padding: "8px 12px", background: "#FFF3F0", border: "1px solid #FFCDC2", borderRadius: 6, fontSize: 11, color: "#8A4A3F" }}>
               <strong>⚠ Capped {projection.poolWarnings.length} time{projection.poolWarnings.length === 1 ? "" : "s"}.</strong> Some contributions were reduced to fit within IRS pool limits. Toggle "Cap at IRS limit" off on individual accounts to model over-contribution scenarios.
-            </div>
-          )}
-          {projection.underwaterWarnings && projection.underwaterWarnings.length > 0 && (
-            <div style={{ marginTop: 12, padding: "10px 12px", background: "#FBEAE7", border: "1px solid #E8B5A8", borderRadius: 6, fontSize: 12, color: "#6B2C1F" }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                ⚠ {projection.underwaterWarnings.length} account{projection.underwaterWarnings.length === 1 ? "" : "s"} went underwater
-              </div>
-              <div style={{ fontSize: 11, marginBottom: 8, color: "#8A4A3F" }}>
-                Negative balances stay flat in the projection (no fake interest at the savings return rate). Contributions reduce the debt dollar-for-dollar. The plan needs adjustment — move the event later, scale it back, or fund it from another account.
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
-                {projection.underwaterWarnings.map(w => {
-                  const acct = accounts.find(a => a.id === w.accountId);
-                  const label = (acct?.nickname || "").trim() || (acct ? `${acct.owner} ${acct.type}` : w.accountId);
-                  return (
-                    <li key={w.accountId} style={{ marginBottom: 2 }}>
-                      <strong>{label}</strong> — first underwater in year {w.firstNegativeYear}.
-                      {w.endedNegative
-                        ? <> Ends at <strong style={{ color: "#C0392B" }}>{fmt(Math.round(w.finalBalance))}</strong> after {horizon}y.</>
-                        : <> Recovered to <strong style={{ color: "#2ECC71" }}>{fmt(Math.round(w.finalBalance))}</strong> by year {horizon}.</>
-                      }
-                    </li>
-                  );
-                })}
-              </ul>
             </div>
           )}
         </Card>
