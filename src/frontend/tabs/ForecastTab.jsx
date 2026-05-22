@@ -264,7 +264,7 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   // it's a separate decision from this slice.)
   const yearsToGoal = useMemo(() => targetAmount > 0 ? crossoverYear("nominal", targetAmount) : null, [targetAmount, simpleSeries]);
 
-  const horizonOpts = [1, 5, 10, 20, 30];
+  const horizonOpts = [1, 5, 10, 20, 30, 40, 50];
   const modeBtn = (mode, val, label) => (
     <button onClick={() => setValueMode(val)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: mode === val ? "#4ECDC4" : "var(--input-bg,#f5f5f5)", color: mode === val ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>{label}</button>
   );

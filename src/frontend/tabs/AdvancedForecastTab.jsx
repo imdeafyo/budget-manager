@@ -980,7 +980,7 @@ export default function AdvancedForecastTab({
     return { pool, limit, ageNow, yearsToHit, eff };
   };
 
-  const horizonOpts = [1, 5, 10, 20, 30];
+  const horizonOpts = [1, 5, 10, 20, 30, 40, 50];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -2015,8 +2015,8 @@ export default function AdvancedForecastTab({
                   <li key={w.accountId} style={{ marginBottom: 2 }}>
                     <strong>{label}</strong> — first underwater in year {w.firstNegativeYear}.
                     {w.endedNegative
-                      ? <> Ends at <strong style={{ color: "#C0392B" }}>{fmt(Math.round(w.finalBalance))}</strong> after {horizon}y.</>
-                      : <> Recovered to <strong style={{ color: "#2ECC71" }}>{fmt(Math.round(w.finalBalance))}</strong> by year {horizon}.</>
+                      ? <> Still <strong style={{ color: "#C0392B" }}>{fmt(Math.round(w.finalBalance))}</strong> short at end of {horizon}y horizon.</>
+                      : <> Recovered to <strong style={{ color: "#2ECC71" }}>{fmt(Math.round(w.finalBalance))}</strong> by end of {horizon}y horizon.</>
                     }
                   </li>
                 );
