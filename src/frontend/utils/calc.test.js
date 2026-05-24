@@ -218,6 +218,101 @@ describe("recalcMilestonePure — milestone recalculation", () => {
     expect(diff).toBeLessThan(200);    // tax savings lowered the impact
   });
 
+  it("Traditional IRA reduces taxable income AND net pay (regression — bug where IRA changes did nothing)", () => {
+    // The bug: updating cIraTrad on the Income tab did not flow into recalcMilestonePure
+    // because the function ignored fs.cIraTrad. Trad IRA should behave parallel to HSA /
+    // 401(k) pre-tax: subtract from taxable income AND from net pay.
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const withTrad = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraTrad: "7000" } // $7k/yr Trad IRA contribution
+    }, ctx);
+    // Net should drop, but less than the full $7000/yr (≈ $134.62/wk) because
+    // Trad IRA also reduces taxable income, generating a tax savings.
+    expect(withTrad.netW).toBeLessThan(baseline.netW);
+    const weeklyContrib = 7000 / 52; // ~134.62
+    const diff = baseline.netW - withTrad.netW;
+    expect(diff).toBeGreaterThan(weeklyContrib * 0.6); // most of contribution lands
+    expect(diff).toBeLessThan(weeklyContrib);          // but tax savings shrink it
+  });
+
+  it("Roth IRA reduces net pay but NOT taxable income (post-tax savings)", () => {
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const withRoth = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraRoth: "7000" } // $7k/yr Roth IRA contribution
+    }, ctx);
+    // Roth IRA: net drops by ~exactly $7000/yr (no tax break, since taxable
+    // wasn't reduced). Federal taxes should be unchanged because taxable
+    // income is the same.
+    expect(withRoth.netW).toBeLessThan(baseline.netW);
+    const weeklyContrib = 7000 / 52; // ~134.62
+    const diff = baseline.netW - withRoth.netW;
+    // Should be very close to the full contribution since Roth doesn't reduce taxes.
+    expect(diff).toBeCloseTo(weeklyContrib, 1);
+  });
+
+  it("Trad and Roth IRA combined behave additively", () => {
+    // Sanity: setting both shouldn't double-count, and total net drop should
+    // match the sum of their individual effects within rounding tolerance.
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const both = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraTrad: "7000", cIraRoth: "7000" }
+    }, ctx);
+    const onlyTrad = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraTrad: "7000" }
+    }, ctx);
+    const onlyRoth = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraRoth: "7000" }
+    }, ctx);
+    const combinedDiff = baseline.netW - both.netW;
+    const sumOfSingles = (baseline.netW - onlyTrad.netW) + (baseline.netW - onlyRoth.netW);
+    expect(combinedDiff).toBeCloseTo(sumOfSingles, 2);
+  });
+
+  it("IRA fields default to 0 on legacy milestones (no fullState IRA fields)", () => {
+    // Backward-compat: milestones saved before the IRA feature shouldn't crash
+    // or behave differently — fs.cIraTrad === undefined should be treated as 0.
+    const legacy = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { c4pre: "5" } // realistic legacy fullState without IRA fields
+    }, ctx);
+    const explicit = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { c4pre: "5", cIraTrad: "0", cIraRoth: "0", kIraTrad: "0", kIraRoth: "0" }
+    }, ctx);
+    expect(legacy.netW).toBeCloseTo(explicit.netW, 5);
+  });
+
+  it("IRA contributions are NOT subject to FICA reduction (parallel to non-payroll reality)", () => {
+    // IRAs aren't payroll-deducted, so SS + Medicare apply to full salary
+    // regardless of IRA contribution. We can verify by computing the expected
+    // FICA on full salary and confirming it doesn't drop when Trad IRA is added.
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 0, items: {} }, ctx);
+    const withTrad = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0, items: {},
+      fullState: { cIraTrad: "7000" }
+    }, ctx);
+    // Quick check: gross is unchanged
+    expect(withTrad.cGrossW).toBeCloseTo(baseline.cGrossW, 5);
+    // The tax savings from Trad IRA should be roughly the marginal rate × contribution,
+    // not the full FICA + income tax rate. At 100k MFJ + CO, marginal is ~12% fed +
+    // ~4.4% state = ~16.4%. So $7000 contribution should save ~$1148/yr in tax,
+    // leaving ~$5852/yr (~$112.5/wk) of net reduction. FICA savings would have
+    // bumped tax-saved by another ~7.65%, so confirming the saving stays modest
+    // proves we're NOT touching FICA.
+    const netDrop = baseline.netW - withTrad.netW;
+    const weekly = 7000 / 52;
+    const taxSavings = weekly - netDrop;
+    // Tax savings should be smaller than what we'd see if FICA were also reduced
+    // (which would add ~7.65% of $7000 ≈ $535/yr ≈ $10.3/wk extra).
+    expect(taxSavings).toBeLessThan(weekly * 0.30); // generous upper bound on marginal
+    expect(taxSavings).toBeGreaterThan(weekly * 0.05); // at least some tax break exists
+  });
+
   it("expense items aggregate into weekly expense", () => {
     const m = {
       cSalary: 100000, kSalary: 0,

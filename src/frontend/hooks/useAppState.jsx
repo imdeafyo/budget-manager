@@ -253,11 +253,11 @@ export default function useAppState() {
   const [dragChart, setDragChart] = useState(null);
   const [collapsed, setCollapsed] = useState({});
   const toggleSec = s => setCollapsed(p => ({ ...p, [s]: !p[s] }));
-  const allExpanded = !collapsed.nec && !collapsed.dis && !collapsed.sav && !collapsed.preTax && !collapsed.postTax && !collapsed.fedTax && !collapsed.stTax && !collapsed.preSav && !collapsed.eaip && !collapsed.eaipTax;
-  const allCollapsed = collapsed.nec && collapsed.dis && collapsed.sav && collapsed.preTax && collapsed.postTax && collapsed.fedTax && collapsed.stTax && collapsed.preSav && collapsed.eaip && collapsed.eaipTax;
+  const allExpanded = !collapsed.nec && !collapsed.dis && !collapsed.sav && !collapsed.preTax && !collapsed.postTax && !collapsed.postSav && !collapsed.fedTax && !collapsed.stTax && !collapsed.preSav && !collapsed.eaip && !collapsed.eaipTax;
+  const allCollapsed = collapsed.nec && collapsed.dis && collapsed.sav && collapsed.preTax && collapsed.postTax && collapsed.postSav && collapsed.fedTax && collapsed.stTax && collapsed.preSav && collapsed.eaip && collapsed.eaipTax;
   const isMixed = !allExpanded && !allCollapsed;
-  const expandAll = () => setCollapsed({ nec: false, dis: false, sav: false, preTax: false, postTax: false, fedTax: false, stTax: false, preSav: false, eaip: false, eaipTax: false });
-  const collapseAll = () => setCollapsed({ nec: true, dis: true, sav: true, preTax: true, postTax: true, fedTax: true, stTax: true, preSav: true, eaip: true, eaipTax: true });
+  const expandAll = () => setCollapsed({ nec: false, dis: false, sav: false, preTax: false, postTax: false, postSav: false, fedTax: false, stTax: false, preSav: false, eaip: false, eaipTax: false });
+  const collapseAll = () => setCollapsed({ nec: true, dis: true, sav: true, preTax: true, postTax: true, postSav: true, fedTax: true, stTax: true, preSav: true, eaip: true, eaipTax: true });
   const toggleAll = () => { if (allExpanded) collapseAll(); else expandAll(); };
   const [includeEaip, setIncludeEaip] = useState(false);
 
@@ -765,7 +765,16 @@ export default function useAppState() {
     const c4preW = cs * cPrePct / 52, c4roW = cs * cRoPct / 52;
     const k4preW = ks * kPrePct / 52, k4roW = ks * kRoPct / 52;
     const c4w = c4preW + c4roW, k4w = k4preW + k4roW;
-    const cTxW = cw - cPreW - c4preW, kTxW = kw - kPreW - k4preW;
+    // IRA contributions are entered as annual dollars on the Income tab.
+    // Trad IRA flows alongside HSA/Pre-Tax 401(k) — reduces taxable income
+    // AND net paycheck (parallel to HSA: the money is committed to savings,
+    // so it's "not in take-home" for budgeting purposes). Roth IRA only
+    // reduces net paycheck (post-tax cash outflow into a planned savings
+    // bucket). Both are intentionally not subject to FICA reduction since
+    // IRAs aren't payroll-deducted.
+    const cIraTradW = evalF(cIraTrad) / 52, cIraRothW = evalF(cIraRoth) / 52;
+    const kIraTradW = evalF(kIraTrad) / 52, kIraRothW = evalF(kIraRoth) / 52;
+    const cTxW = cw - cPreW - c4preW - cIraTradW, kTxW = kw - kPreW - k4preW - kIraTradW;
     const combTxA = (cTxW + kTxW) * 52;
     const br = fil === "mfj" ? tax.fedMFJ : tax.fedSingle;
     const sd = fil === "mfj" ? tax.stdMFJ : tax.stdSingle;
@@ -784,10 +793,23 @@ export default function useAppState() {
     const kStMR = getStateMarg(kTxW * 52, p2s.abbr || "", fil);
     const cFL = cw * (p1s.famli || 0) / 100, kFL = kw * (p2s.famli || 0) / 100;
     const cTx = cFed + cSS + cMc + cCO + cFL, kTx = kFed + kSS + kMc + kCO + kFL;
-    const cPostW = c4roW + postDed.reduce((s, d) => s + evalF(d.c), 0);
-    const kPostW = k4roW + postDed.reduce((s, d) => s + evalF(d.k), 0);
-    const cNet = cw - cPreW - c4w - cTx - postDed.reduce((s, d) => s + evalF(d.c), 0);
-    const kNet = kw - kPreW - k4w - kTx - postDed.reduce((s, d) => s + evalF(d.k), 0);
+    // Post-tax bucket is split into two display groups: "Post-Tax Deductions"
+    // (postDed items only) and "Post-Tax Savings" (Roth 401(k) + Roth IRA).
+    // cPostW retains its legacy meaning (everything that reduces net beyond
+    // taxes), for any consumer that needs the lump. cPostDedW / cPostSavW
+    // expose the split for BudgetTab to render the new section structure.
+    const cPostDedW = postDed.reduce((s, d) => s + evalF(d.c), 0);
+    const kPostDedW = postDed.reduce((s, d) => s + evalF(d.k), 0);
+    const cPostSavW = c4roW + cIraRothW;
+    const kPostSavW = k4roW + kIraRothW;
+    const cPostW = cPostDedW + cPostSavW;
+    const kPostW = kPostDedW + kPostSavW;
+    // Net = gross − pre-tax deductions − all 401(k) (pre + roth) − Trad IRA
+    //       − taxes − post-tax deductions − Roth IRA. Trad IRA already lowered
+    //       cTxW so its tax effect flows through cTx automatically; we still
+    //       subtract it as a cash outflow because the money is committed.
+    const cNet = cw - cPreW - c4w - cIraTradW - cTx - cPostDedW - cIraRothW;
+    const kNet = kw - kPreW - k4w - kIraTradW - kTx - kPostDedW - kIraRothW;
     const cTotalPct = evalF(c4pre) + evalF(c4ro), kTotalPct = evalF(k4pre) + evalF(k4ro);
     const cMP = calcMatch(cTotalPct, tax.cMatchTiers || [], tax.cMatchBase || 0);
     const kMP = calcMatch(kTotalPct, tax.kMatchTiers || [], tax.kMatchBase || 0);
@@ -806,8 +828,8 @@ export default function useAppState() {
     const kEaipTax = kEaipFed + kEaipSS + kEaipMc + kEaipSt + kEaipFL;
     const cEaipNet = cEaipGross - cEaipTax, kEaipNet = kEaipGross - kEaipTax;
     const eaipNet = cEaipNet + kEaipNet;
-    return { cs, ks, cw, kw, cPreW, kPreW, c4w, k4w, c4preW, k4preW, c4roW, k4roW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
-  }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip]);
+    return { cs, ks, cw, kw, cPreW, kPreW, c4w, k4w, c4preW, k4preW, c4roW, k4roW, cIraTradW, cIraRothW, kIraTradW, kIraRothW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cPostDedW, kPostDedW, cPostSavW, kPostSavW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
+  }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip, cIraTrad, cIraRoth, kIraTrad, kIraRoth]);
 
   const moC = v => v * 48 / 12, y4 = v => v * 48, y5 = v => v * 52;
   const hlW = evalF(hlThresh);

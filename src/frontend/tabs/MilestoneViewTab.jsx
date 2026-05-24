@@ -33,7 +33,14 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
           const sc4roW = mCS * Math.min(evalF(sFS.c4ro || 0) / 100, 1) / 52;
           const sk4preW = mKS * Math.min(evalF(sFS.k4pre || 0) / 100, 1) / 52;
           const sk4roW = mKS * Math.min(evalF(sFS.k4ro || 0) / 100, 1) / 52;
-          const scTxW = scw - scPreW - sc4preW, skTxW = skw - skPreW - sk4preW;
+          // IRA contributions (annual $ stored in fullState). Trad reduces
+          // taxable income + net (parallel to HSA/pre-tax 401k); Roth reduces
+          // net only. Legacy milestones default to 0 via the || 0 fallback.
+          const scIraTradW = evalF(sFS.cIraTrad || 0) / 52;
+          const scIraRothW = evalF(sFS.cIraRoth || 0) / 52;
+          const skIraTradW = evalF(sFS.kIraTrad || 0) / 52;
+          const skIraRothW = evalF(sFS.kIraRoth || 0) / 52;
+          const scTxW = scw - scPreW - sc4preW - scIraTradW, skTxW = skw - skPreW - sk4preW - skIraTradW;
           const sBr = mFil === "mfj" ? mTaxData.fedMFJ : mTaxData.fedSingle;
           const sSd = mFil === "mfj" ? mTaxData.stdMFJ : mTaxData.stdSingle;
           const sCombTxA = (scTxW + skTxW) * 52;
@@ -48,8 +55,8 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
           const scFL = scw * (mP1s.famli || 0) / 100, skFL = skw * (mP2s.famli || 0) / 100;
           const scPostW = sPostDed.reduce((s, d) => s + evalF(d.c), 0);
           const skPostW = sPostDed.reduce((s, d) => s + evalF(d.k), 0);
-          const scNet = scw - scPreW - sc4preW - sc4roW - scFed - scSS - scMc - scSt - scFL - scPostW;
-          const skNet = skw - skPreW - sk4preW - sk4roW - skFed - skSS - skMc - skSt - skFL - skPostW;
+          const scNet = scw - scPreW - sc4preW - sc4roW - scIraTradW - scIraRothW - scFed - scSS - scMc - scSt - scFL - scPostW;
+          const skNet = skw - skPreW - sk4preW - sk4roW - skIraTradW - skIraRothW - skFed - skSS - skMc - skSt - skFL - skPostW;
           const mNetW = scNet + skNet;
           const netY = mNetW * 48;
           const netY52 = mNetW * 52;
@@ -204,10 +211,12 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                   <Row label="Pre-Tax Deductions" wk={-(scPreW + skPreW)} mo={-(scPreW + skPreW) * 52 / 12} y48={-(scPreW + skPreW) * 48} y52={-(scPreW + skPreW) * 52} color="var(--c-pretax, #c0392b)" />
                 </>}
 
-                {(sc4preW + sk4preW > 0 || sc4roW + sk4roW > 0) && <>
-                  <SH color="var(--c-presav, #1ABC9C)">401(k) Contributions</SH>
+                {(sc4preW + sk4preW > 0 || sc4roW + sk4roW > 0 || scIraTradW + skIraTradW > 0 || scIraRothW + skIraRothW > 0) && <>
+                  <SH color="var(--c-presav, #1ABC9C)">Retirement Contributions</SH>
                   {sc4preW + sk4preW > 0 && <Row label="💰 401(k) Pre-Tax" wk={sc4preW + sk4preW} mo={(sc4preW + sk4preW) * 52 / 12} y48={(sc4preW + sk4preW) * 48} y52={(sc4preW + sk4preW) * 52} color="var(--c-presav, #1ABC9C)" />}
-                  {sc4roW + sk4roW > 0 && <Row label="Roth 401(k)" wk={-(sc4roW + sk4roW)} mo={-(sc4roW + sk4roW) * 52 / 12} y48={-(sc4roW + sk4roW) * 48} y52={-(sc4roW + sk4roW) * 52} color="var(--c-posttax, #9B59B6)" />}
+                  {scIraTradW + skIraTradW > 0 && <Row label="💰 Traditional IRA" wk={scIraTradW + skIraTradW} mo={(scIraTradW + skIraTradW) * 52 / 12} y48={(scIraTradW + skIraTradW) * 48} y52={(scIraTradW + skIraTradW) * 52} color="var(--c-presav, #1ABC9C)" />}
+                  {sc4roW + sk4roW > 0 && <Row label="💰 Roth 401(k)" wk={-(sc4roW + sk4roW)} mo={-(sc4roW + sk4roW) * 52 / 12} y48={-(sc4roW + sk4roW) * 48} y52={-(sc4roW + sk4roW) * 52} color="var(--c-posttax, #9B59B6)" />}
+                  {scIraRothW + skIraRothW > 0 && <Row label="💰 Roth IRA" wk={-(scIraRothW + skIraRothW)} mo={-(scIraRothW + skIraRothW) * 52 / 12} y48={-(scIraRothW + skIraRothW) * 48} y52={-(scIraRothW + skIraRothW) * 52} color="var(--c-posttax, #9B59B6)" />}
                 </>}
 
                 <SH color="var(--c-taxable, #556FB5)">Taxable Pay</SH>
@@ -280,6 +289,10 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                 const mC4ro = fs.c4ro !== undefined ? fs.c4ro : "0";
                 const mK4pre = fs.k4pre !== undefined ? fs.k4pre : "0";
                 const mK4ro = fs.k4ro !== undefined ? fs.k4ro : "0";
+                const mCIraTrad = fs.cIraTrad !== undefined ? fs.cIraTrad : "0";
+                const mCIraRoth = fs.cIraRoth !== undefined ? fs.cIraRoth : "0";
+                const mKIraTrad = fs.kIraTrad !== undefined ? fs.kIraTrad : "0";
+                const mKIraRoth = fs.kIraRoth !== undefined ? fs.kIraRoth : "0";
                 return <>
                   <Card style={{ marginBottom: 20 }}>
                     <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>401(k) Contributions <span style={{ fontSize: 11, fontWeight: 500, color: "#999" }}>(% of salary)</span></h3>
@@ -293,6 +306,20 @@ export default function MilestoneViewTab({ mob, viewingMs, setViewingMs, milesto
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Roth %</div>
                       <NI value={String(mC4ro)} onChange={v => updateMsFS("c4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
                       <NI value={String(mK4ro)} onChange={v => updateMsFS("k4ro", v)} onBlurResolve prefix="" style={{ height: 32 }} />
+                    </div>
+                  </Card>
+                  <Card style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>IRA Contributions <span style={{ fontSize: 11, fontWeight: 500, color: "#999" }}>(annual $)</span></h3>
+                    <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 1fr", gap: 8, alignItems: "center" }}>
+                      <div />
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p1Name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 11, color: "#999", textAlign: "center" }}>{p2Name}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Traditional</div>
+                      <NI value={String(mCIraTrad)} onChange={v => updateMsFS("cIraTrad", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
+                      <NI value={String(mKIraTrad)} onChange={v => updateMsFS("kIraTrad", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--tx2, #555)" }}>Roth</div>
+                      <NI value={String(mCIraRoth)} onChange={v => updateMsFS("cIraRoth", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
+                      <NI value={String(mKIraRoth)} onChange={v => updateMsFS("kIraRoth", v)} onBlurResolve prefix="$" style={{ height: 32 }} />
                     </div>
                   </Card>
                   <Card style={{ marginBottom: 20 }}>

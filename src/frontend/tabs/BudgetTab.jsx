@@ -4,7 +4,7 @@ import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
 
-export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
+export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cIraTrad, cIraRoth, kIraTrad, kIraRoth, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
   // Save Milestone modal — moved from ChartsTab. Opens when 📸 button is clicked.
   const [showSaveMs, setShowSaveMs] = useState(false);
   const _Cf = C_full || C;
@@ -25,7 +25,7 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
       eaipNet: _Cf.eaipNet, eaipGross: _Cf.eaipGross, cEaipNet: _Cf.cEaipNet, kEaipNet: _Cf.kEaipNet,
       cEaipPct: evalF(cEaip), kEaipPct: evalF(kEaip),
       items: itemMs,
-      fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, exp, sav, cats, savCats, transferCats, incomeCats, tax },
+      fullState: { cSal, kSal, fil, cEaip, kEaip, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cIraTrad, cIraRoth, kIraTrad, kIraRoth, exp, sav, cats, savCats, transferCats, incomeCats, tax },
     }]);
     log.info("milestone.save", { id: newId, date: dateUsed, label: labelUsed, itemCount: Object.keys(itemMs).length });
     setMsLabel(""); setMsDate("");
@@ -157,8 +157,11 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         {showPerPerson && preDed.filter(d => d.n.toLowerCase().includes("hsa")).map((d, i) => { const cv = evalF(d.c), kv = evalF(d.k); return (cv > 0 || kv > 0) ? <div key={"hsp" + i}><Row label={`  ↳ ${p1Name} HSA`} wk={cv} mo={moC(cv)} y48={y4(cv)} y52={y5(cv)} color="var(--c-presav, #48C9B0)" /><Row label={`  ↳ ${p2Name} HSA`} wk={kv} mo={moC(kv)} y48={y4(kv)} y52={y5(kv)} color="var(--c-presav, #48C9B0)" /></div> : null; })}
         {C.c4preW + C.k4preW > 0 && <Row label="💰 401(k) Pre-Tax" wk={C.c4preW + C.k4preW} mo={moC(C.c4preW + C.k4preW)} y48={y4(C.c4preW + C.k4preW)} y52={y5(C.c4preW + C.k4preW)} color="var(--c-presav, #1ABC9C)" />}
         {showPerPerson && C.c4preW > 0 && <Row label={`  ↳ ${p1Name} Pre-Tax`} wk={C.c4preW} mo={moC(C.c4preW)} y48={y4(C.c4preW)} y52={y5(C.c4preW)} color="var(--c-presav, #48C9B0)" />}
-        {showPerPerson && C.k4preW > 0 && <Row label={`  ↳ ${p2Name} Pre-Tax`} wk={C.k4preW} mo={moC(C.k4preW)} y48={y4(C.k4preW)} y52={y5(C.k4preW)} color="var(--c-presav, #48C9B0)" />}</>}
-        {(() => { const hsaW = preDed.filter(d => d.n.toLowerCase().includes("hsa")).reduce((s, d) => s + evalF(d.c) + evalF(d.k), 0); const preTax401 = C.c4preW + C.k4preW; const total = hsaW + preTax401; return total > 0 ? <Row label="Total Pre-Tax Savings" wk={total} mo={moC(total)} y48={y4(total)} y52={y5(total)} bold border color="var(--c-presav, #1ABC9C)" /> : null; })()}
+        {showPerPerson && C.k4preW > 0 && <Row label={`  ↳ ${p2Name} Pre-Tax`} wk={C.k4preW} mo={moC(C.k4preW)} y48={y4(C.k4preW)} y52={y5(C.k4preW)} color="var(--c-presav, #48C9B0)" />}
+        {(C.cIraTradW || 0) + (C.kIraTradW || 0) > 0 && <Row label="💰 Traditional IRA" wk={(C.cIraTradW || 0) + (C.kIraTradW || 0)} mo={moC((C.cIraTradW || 0) + (C.kIraTradW || 0))} y48={y4((C.cIraTradW || 0) + (C.kIraTradW || 0))} y52={y5((C.cIraTradW || 0) + (C.kIraTradW || 0))} color="var(--c-presav, #1ABC9C)" />}
+        {showPerPerson && (C.cIraTradW || 0) > 0 && <Row label={`  ↳ ${p1Name} Trad IRA`} wk={C.cIraTradW} mo={moC(C.cIraTradW)} y48={y4(C.cIraTradW)} y52={y5(C.cIraTradW)} color="var(--c-presav, #48C9B0)" />}
+        {showPerPerson && (C.kIraTradW || 0) > 0 && <Row label={`  ↳ ${p2Name} Trad IRA`} wk={C.kIraTradW} mo={moC(C.kIraTradW)} y48={y4(C.kIraTradW)} y52={y5(C.kIraTradW)} color="var(--c-presav, #48C9B0)" />}</>}
+        {(() => { const hsaW = preDed.filter(d => d.n.toLowerCase().includes("hsa")).reduce((s, d) => s + evalF(d.c) + evalF(d.k), 0); const preTax401 = C.c4preW + C.k4preW; const iraTradW = (C.cIraTradW || 0) + (C.kIraTradW || 0); const total = hsaW + preTax401 + iraTradW; return total > 0 ? <Row label="Total Pre-Tax Savings" wk={total} mo={moC(total)} y48={y4(total)} y52={y5(total)} bold border color="var(--c-presav, #1ABC9C)" /> : null; })()}
 
         <SH>Taxable Pay</SH>
         <Row label="Combined Taxable" wk={C.cTxW + C.kTxW} mo={moC(C.cTxW + C.kTxW)} y48={y4(C.cTxW + C.kTxW)} y52={y5(C.cTxW + C.kTxW)} bold color="var(--c-taxable, #556FB5)" />
@@ -191,10 +194,22 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         {(() => { const t = C.cTx + C.kTx; return <Row label="Total Taxes" wk={-t} mo={-moC(t)} y48={-y4(t)} y52={-y5(t)} bold border color="var(--c-totaltax, #E8573A)" />; })()}
         {showPerPerson && <div style={{ padding: "4px 0", fontSize: 12, color: "var(--tx3,#888)" }}>{p1Name} total tax: {fmt(C.cTx)}/wk ({fmt(C.cTx * 52)}/yr) • {p2Name} total tax: {fmt(C.kTx)}/wk ({fmt(C.kTx * 52)}/yr)</div>}
 
-        {(C.cPostW + C.kPostW > 0) && <><CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.postTax} onToggle={() => toggleSec("postTax")}>Post-Tax Deductions</CSH>
-          {!collapsed.postTax && <>{C.c4roW + C.k4roW > 0 && <><Row label="Roth 401(k)" wk={-(C.c4roW + C.k4roW)} mo={-moC(C.c4roW + C.k4roW)} y48={-y4(C.c4roW + C.k4roW)} y52={-y5(C.c4roW + C.k4roW)} color="var(--c-posttax, #9B59B6)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.c4roW} mo={-moC(C.c4roW)} y48={-y4(C.c4roW)} y52={-y5(C.c4roW)} color="var(--c-posttax2, #C39BD3)" /><Row label={`  ↳ ${p2Name}`} wk={-C.k4roW} mo={-moC(C.k4roW)} y48={-y4(C.k4roW)} y52={-y5(C.k4roW)} color="var(--c-posttax2, #C39BD3)" /></>}</>}
-          {postDed.map((d, i) => { const cv = evalF(d.c), kv = evalF(d.k), v = cv + kv; return v > 0 ? <div key={i}><Row label={d.n} wk={-v} mo={-moC(v)} y48={-y4(v)} y52={-y5(v)} color="var(--c-posttax, #9B59B6)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-cv} mo={-moC(cv)} y48={-y4(cv)} y52={-y5(cv)} color="var(--c-posttax2, #C39BD3)" /><Row label={`  ↳ ${p2Name}`} wk={-kv} mo={-moC(kv)} y48={-y4(kv)} y52={-y5(kv)} color="var(--c-posttax2, #C39BD3)" /></>}</div> : null; })}</>}
-          <Row label="Total Post-Tax Deductions" wk={-(C.cPostW + C.kPostW)} mo={-moC(C.cPostW + C.kPostW)} y48={-y4(C.cPostW + C.kPostW)} y52={-y5(C.cPostW + C.kPostW)} bold border color="var(--c-posttax, #9B59B6)" />
+        {(C.cPostDedW + C.kPostDedW > 0) && <><CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.postTax} onToggle={() => toggleSec("postTax")}>Post-Tax Deductions</CSH>
+          {!collapsed.postTax && <>{postDed.map((d, i) => { const cv = evalF(d.c), kv = evalF(d.k), v = cv + kv; return v > 0 ? <div key={i}><Row label={d.n} wk={-v} mo={-moC(v)} y48={-y4(v)} y52={-y5(v)} color="var(--c-posttax, #9B59B6)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-cv} mo={-moC(cv)} y48={-y4(cv)} y52={-y5(cv)} color="var(--c-posttax2, #C39BD3)" /><Row label={`  ↳ ${p2Name}`} wk={-kv} mo={-moC(kv)} y48={-y4(kv)} y52={-y5(kv)} color="var(--c-posttax2, #C39BD3)" /></>}</div> : null; })}</>}
+          <Row label="Total Post-Tax Deductions" wk={-(C.cPostDedW + C.kPostDedW)} mo={-moC(C.cPostDedW + C.kPostDedW)} y48={-y4(C.cPostDedW + C.kPostDedW)} y52={-y5(C.cPostDedW + C.kPostDedW)} bold border color="var(--c-posttax, #9B59B6)" />
+        </>}
+
+        {/* Post-Tax Savings — Roth 401(k) + Roth IRA. These are subtracted from
+            net paycheck (they reduce take-home cash available for budgeting)
+            but are conceptually savings, not consumption — hence the separate
+            section parallel to Pre-Tax Savings. Display values are negative
+            (reducing net) to match Post-Tax Deductions visually. */}
+        {(C.cPostSavW + C.kPostSavW > 0) && <><CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.postSav} onToggle={() => toggleSec("postSav")}>Post-Tax Savings</CSH>
+          {!collapsed.postSav && <>{C.c4roW + C.k4roW > 0 && <><Row label="💰 Roth 401(k)" wk={-(C.c4roW + C.k4roW)} mo={-moC(C.c4roW + C.k4roW)} y48={-y4(C.c4roW + C.k4roW)} y52={-y5(C.c4roW + C.k4roW)} color="var(--c-posttax, #9B59B6)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.c4roW} mo={-moC(C.c4roW)} y48={-y4(C.c4roW)} y52={-y5(C.c4roW)} color="var(--c-posttax2, #C39BD3)" /><Row label={`  ↳ ${p2Name}`} wk={-C.k4roW} mo={-moC(C.k4roW)} y48={-y4(C.k4roW)} y52={-y5(C.k4roW)} color="var(--c-posttax2, #C39BD3)" /></>}</>}
+          {(C.cIraRothW || 0) + (C.kIraRothW || 0) > 0 && <Row label="💰 Roth IRA" wk={-((C.cIraRothW || 0) + (C.kIraRothW || 0))} mo={-moC((C.cIraRothW || 0) + (C.kIraRothW || 0))} y48={-y4((C.cIraRothW || 0) + (C.kIraRothW || 0))} y52={-y5((C.cIraRothW || 0) + (C.kIraRothW || 0))} color="var(--c-posttax, #9B59B6)" />}
+          {showPerPerson && (C.cIraRothW || 0) > 0 && <Row label={`  ↳ ${p1Name} Roth IRA`} wk={-C.cIraRothW} mo={-moC(C.cIraRothW)} y48={-y4(C.cIraRothW)} y52={-y5(C.cIraRothW)} color="var(--c-posttax2, #C39BD3)" />}
+          {showPerPerson && (C.kIraRothW || 0) > 0 && <Row label={`  ↳ ${p2Name} Roth IRA`} wk={-C.kIraRothW} mo={-moC(C.kIraRothW)} y48={-y4(C.kIraRothW)} y52={-y5(C.kIraRothW)} color="var(--c-posttax2, #C39BD3)" />}</>}
+          <Row label="Total Post-Tax Savings" wk={-(C.cPostSavW + C.kPostSavW)} mo={-moC(C.cPostSavW + C.kPostSavW)} y48={-y4(C.cPostSavW + C.kPostSavW)} y52={-y5(C.cPostSavW + C.kPostSavW)} bold border color="var(--c-posttax, #9B59B6)" />
         </>}
 
         <div style={{ marginTop: 8, padding: "10px 0", borderTop: "3px solid #1a1a1a", borderBottom: "3px solid #1a1a1a" }}>

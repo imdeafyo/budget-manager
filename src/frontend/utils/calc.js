@@ -108,7 +108,15 @@ export function recalcMilestonePure(mObj, ctx) {
   const k4roPct = Math.min(evalF(fs.k4ro || 0) / 100, 1);
   const c4preW = sCS * c4prePct / 52, c4roW = sCS * c4roPct / 52;
   const k4preW = sKS * k4prePct / 52, k4roW = sKS * k4roPct / 52;
-  const cTxW = sw1 - cPreW - c4preW, kTxW = sw2 - kPreW - k4preW;
+  // IRA contributions are annual $ in fullState (cIraTrad/cIraRoth/...);
+  // Trad reduces taxable income AND net pay (parallel to HSA/pre-tax 401(k)),
+  // Roth only reduces net pay (post-tax cash outflow). Both bypass FICA.
+  // Legacy milestones predating IRA fields default to 0 via fallback.
+  const cIraTradW = evalF(fs.cIraTrad || 0) / 52;
+  const cIraRothW = evalF(fs.cIraRoth || 0) / 52;
+  const kIraTradW = evalF(fs.kIraTrad || 0) / 52;
+  const kIraRothW = evalF(fs.kIraRoth || 0) / 52;
+  const cTxW = sw1 - cPreW - c4preW - cIraTradW, kTxW = sw2 - kPreW - k4preW - kIraTradW;
   const sBr = sF === "mfj" ? sTD.fedMFJ : sTD.fedSingle;
   const sSd = sF === "mfj" ? sTD.stdMFJ : sTD.stdSingle;
   const sCTA = (cTxW + kTxW) * 52;
@@ -121,8 +129,8 @@ export function recalcMilestonePure(mObj, ctx) {
   const st1 = calcStateTax(cTxW * 52, sP1.abbr || "", sF) / 52;
   const st2 = calcStateTax(kTxW * 52, sP2.abbr || "", sF) / 52;
   const fl1 = sw1 * (sP1.famli || 0) / 100, fl2 = sw2 * (sP2.famli || 0) / 100;
-  const n1 = sw1 - cPreW - c4preW - c4roW - f1 - ss1 - mc1 - st1 - fl1 - mPostDed.reduce((s, d) => s + evalF(d.c), 0);
-  const n2 = sw2 - kPreW - k4preW - k4roW - f2 - ss2 - mc2 - st2 - fl2 - mPostDed.reduce((s, d) => s + evalF(d.k), 0);
+  const n1 = sw1 - cPreW - c4preW - c4roW - cIraTradW - cIraRothW - f1 - ss1 - mc1 - st1 - fl1 - mPostDed.reduce((s, d) => s + evalF(d.c), 0);
+  const n2 = sw2 - kPreW - k4preW - k4roW - kIraTradW - kIraRothW - f2 - ss2 - mc2 - st2 - fl2 - mPostDed.reduce((s, d) => s + evalF(d.k), 0);
   const nW = n1 + n2;
   const gW = sw1 + sw2;
   const eW = (nec + dis) / 48;
