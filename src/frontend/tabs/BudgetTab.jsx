@@ -137,11 +137,10 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
     <div>
 
       <Card style={{ overflowX: "auto" }}>
-        {/* Column header row used to live here. It's now rendered inside the
-            outer sticky header in App.jsx so it stays pinned below the
-            title/tabs/tools chrome instead of fighting for the same top:0
-            stick position. The grid column widths here must continue to
-            match what App.jsx's header strip uses: 1.8fr 1fr 1fr 1fr 1fr. */}
+        {(() => { const cols = ["1.8fr", visCols.wk && "1fr", visCols.mo && "1fr", visCols.y48 && "1fr", visCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (visCols.wk) hdrs.push("Weekly"); if (visCols.mo) hdrs.push("Monthly"); if (visCols.y48) hdrs.push("Yr (48)"); if (visCols.y52) hdrs.push("Yr (52)"); return (
+        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
+          {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
+        </div>); })()}
 
         <SH>Income</SH>
         <Row label={p1Name + " Salary"} wk={C.cw} mo={moC(C.cw)} y48={y4(C.cw)} y52={y5(C.cw)} bold />
@@ -231,8 +230,15 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.n + "_" + item.idx} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
         <Row label="Total Savings" wk={-tSavW} mo={-moC(tSavW)} y48={-y4(tSavW)} y52={-y5(tSavW)} bold border color="#2ECC71" />
 
+        {/* The three "Remaining/Total Savings/Total Annual Savings" rows below
+            sit on hardcoded pale-pink / pale-green backgrounds that don't
+            theme-shift. In dark mode `var(--tx)` flips to a light color and
+            the labels become invisible against those pale backgrounds. Pass
+            an explicit dark `color` so the label stays readable in every
+            theme; `signed` still drives per-cell value coloring because
+            value cells use cellColor(signed, fallback, v) and `signed` wins. */}
         <div style={{ marginTop: 8, padding: "10px 8px", background: remW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold signed />
+          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold signed color="#1a1a1a" />
         </div>
         {/* Total Savings + Remaining — the budget tab's view of "savings I'm
             committing to from my paycheck-after-retirement." When overspent
@@ -240,7 +246,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             row reflects that by going below tSavW and tinting red. Previously
             this was floored at Math.max(0, remW) which hid the overspend. */}
         <div style={{ marginTop: 4, padding: "6px 8px", background: totalSavPlusRemW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold signed />
+          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold signed color="#1a1a1a" />
         </div>
         {/* Total Annual Savings — adds retirement contributions (401(k) pre+Roth,
             IRA Trad+Roth, both partners) that were already subtracted from C.net
@@ -248,7 +254,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             actually saving per year" answer. Only shown when retirement > 0,
             otherwise it'd duplicate the row above. */}
         {retirementW > 0 && <div style={{ marginTop: 4, padding: "6px 8px", background: totalAllSavingsW >= 0 ? "#e8f6ed" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold signed />
+          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold signed color="#1a1a1a" />
           <div style={{ padding: "2px 0 0", fontSize: 10, color: "var(--tx3,#888)", textAlign: "right" }}>incl. 401(k) + IRA: {fmt(y5(retirementW))}/yr</div>
         </div>}
 
