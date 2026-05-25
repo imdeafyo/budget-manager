@@ -472,6 +472,15 @@ export default function useAppState() {
             if (!Array.isArray(d.forecast.oneTimeEvents)) {
               merged.oneTimeEvents = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
             }
+            /* fireConfig (Phase 15): tax-aware FIRE config object. Saves
+               predating Phase 15 won't have this key — reads in
+               ForecastTab/AdvancedForecastTab default each field. If a
+               saved value is present but not a plain object, drop to {}.
+               (Future-proof: per-key validation happens at the read
+               site, so we don't need shape validation here.) */
+            if (d.forecast.fireConfig != null && typeof d.forecast.fireConfig !== "object") {
+              merged.fireConfig = (prev && typeof prev.fireConfig === "object") ? prev.fireConfig : {};
+            }
             /* === One-time localStorage → st.forecast migration (DISABLED) ===
                This shim seeds st.forecast.* from this device's localStorage
                on first load after the migration deploy. It's now disabled

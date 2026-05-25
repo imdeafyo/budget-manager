@@ -6,6 +6,7 @@ import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
+import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
 
 /* ── Account type display metadata ──
    Account `type` strings map to (a) IRS pool for limit checking
@@ -142,16 +143,37 @@ export default function AdvancedForecastTab({
   const fireMultiplier = (forecast && forecast.fireMultiplier != null) ? forecast.fireMultiplier : "25";
   const setFireMultiplier = (v) => setFc("fireMultiplier", v);
 
-  // FIRE derivations — minimal version of Simple's logic. Uses tExpW × 48
-  // (paycheck-basis annual expenses) as the FIRE expense baseline; the
-  // contribSource / actuals override Simple offers will land later if
-  // wanted here too.
-  const fireMultiplierNum = useMemo(() => {
-    const v = evalF(fireMultiplier);
-    return isFinite(v) && v > 0 ? v : 25;
-  }, [fireMultiplier]);
+  /* Phase 15 — Tax-aware FIRE config, shared with Simple tab via
+     forecast.fireConfig. See ForecastTab.jsx for the full doc; Advanced has
+     a structural advantage: the user's actual account list with projected
+     balances is right here, so the tax-character mix is derived live from
+     the projection (extractMixFromProjection on the result year) rather
+     than a one-shot estimate. */
+  const fireConfig = (forecast && typeof forecast.fireConfig === "object" && forecast.fireConfig) ? forecast.fireConfig : {};
+  const setFireCfg = (key, v) => setFc("fireConfig", { ...fireConfig, [key]: v });
+  const swr = (typeof fireConfig.swr === "number" && fireConfig.swr > 0) ? fireConfig.swr : 0.04;
+  const setSwr = (v) => setFireCfg("swr", v);
+  const useSimpleMultiplier = !!fireConfig.useSimpleMultiplier;
+  const setUseSimpleMultiplier = (v) => setFireCfg("useSimpleMultiplier", v);
+  const retirementSpendingOverride = (typeof fireConfig.retirementSpendingOverride === "number") ? fireConfig.retirementSpendingOverride : null;
+  const setRetirementSpendingOverride = (v) => setFireCfg("retirementSpendingOverride", v);
+  const ltcgRate = (typeof fireConfig.ltcgRate === "number" && fireConfig.ltcgRate >= 0) ? fireConfig.ltcgRate : 0.15;
+  const setLtcgRate = (v) => setFireCfg("ltcgRate", v);
+  const [showFireBreakdown, setShowFireBreakdown] = useState(() => { try { return localStorage.getItem("forecast-adv-fire-breakdown") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("forecast-adv-fire-breakdown", showFireBreakdown ? "1" : "0"); } catch {} }, [showFireBreakdown]);
+
   const fireAnnualExpenses = useMemo(() => tExpW * 48, [tExpW]);
-  const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
+  const fireSpending = useMemo(() => {
+    return retirementSpendingOverride != null ? retirementSpendingOverride : fireAnnualExpenses;
+  }, [retirementSpendingOverride, fireAnnualExpenses]);
+
+  const taxConfig = useMemo(() => ({
+    year: String(tax?.year || "2026"),
+    filing: "mfj",
+    stateAbbr: tax?.p1State?.abbr || tax?.p2State?.abbr || "",
+    ltcgRate,
+    stateTaxesLTCG: true,
+  }), [tax, ltcgRate]);
 
   const accountsRaw = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
 
@@ -844,6 +866,24 @@ export default function AdvancedForecastTab({
     });
   }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events, resolvedOneTime.events]);
 
+  /* Phase 15 — derive tax-aware FIRE target from the live projection.
+     We extract the account mix at the FINAL projection year (horizon) as
+     the "at-FI" balance composition. This is conservative: if the user
+     reaches FI earlier, the mix is roughly similar (proportions don't
+     swing wildly year-to-year). Using horizon means the target reflects
+     the user's currently-projected end-state portfolio. */
+  const fireAccountMix = useMemo(() => {
+    if (useSimpleMultiplier) return { ordinary: 0, ltcg: 0, taxfree: 0 };
+    return extractMixFromProjection(accounts, projection.accountSeries, horizon);
+  }, [useSimpleMultiplier, accounts, projection, horizon]);
+
+  const fireResult = useMemo(() => {
+    return computeFireTarget(fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier);
+  }, [fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier]);
+
+  const fireTarget = fireResult.target;
+  const fireMultiplierNum = fireResult.multiplierEquivalent || 25;
+
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.
      Also includes:
@@ -1013,29 +1053,35 @@ export default function AdvancedForecastTab({
           <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
           <span style={{ width: 1, height: 16, background: "var(--bdr,#ddd)", margin: "0 8px" }} />
           {/* FIRE controls grouped into a single visually-bound chunk:
-              toggle + multiplier + target. Border + tinted background ties
+              toggle + withdrawal rate + target. Border + tinted background ties
               them together so they don't read as three independent items
               strung across the toolbar. Today's-$ check shows underneath
               when reachable so the user can sanity-check the future-$
-              number. */}
+              number. Full configuration (spending override, tax breakdown,
+              etc.) lives on the Simple Forecast tab card. */}
           <span style={{ display: "inline-flex", flexDirection: "column", padding: fireEnabled ? "6px 10px" : "4px 8px", borderRadius: 8, background: fireEnabled ? "rgba(243,156,18,0.08)" : "transparent", border: fireEnabled ? "1px solid rgba(243,156,18,0.25)" : "1px solid transparent", gap: 3 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
               <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
               {fireEnabled && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-                  title={"Multiplier × annual expenses = FI target.\n\n• 25× = 4% rule (~30yr retirement)\n• 28-33× = 3-3.5% rule (50+yr horizon)\n• 20× = 5% (aggressive)\n\nLowering = larger target = safer but takes longer."}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>×</span>
+                  title={"Withdrawal rate — how much of the portfolio you withdraw each year in retirement.\n\n• 3% = very conservative, 50+ yr retirement\n• 3.5% = conservative, FIRE-typical\n• 4% = Trinity standard, 30 yr horizon\n• 5% = aggressive\n\nFull config (spending override, tax breakdown) on the Simple Forecast tab."}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>SWR</span>
                   <input
                     type="text"
-                    value={fireMultiplier}
-                    onChange={e => setFireMultiplier(e.target.value)}
+                    value={(swr * 100).toFixed(2)}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      const n = parseFloat(raw);
+                      if (isFinite(n) && n > 0 && n < 50) setSwr(n / 100);
+                    }}
                     onBlur={e => {
                       const v = evalF(e.target.value);
-                      if (!isFinite(v) || v <= 0) setFireMultiplier("25");
-                      else setFireMultiplier(String(v));
+                      if (!isFinite(v) || v <= 0 || v >= 50) setSwr(0.04);
+                      else setSwr(v / 100);
                     }}
-                    style={{ width: 50, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
+                    style={{ width: 54, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
+                  <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
                 </span>
               )}
               {fireEnabled && fireTarget > 0 && (() => {
@@ -1047,7 +1093,7 @@ export default function AdvancedForecastTab({
                   : `at year ${horizon}`;
                 return (
                   <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}
-                    title={`${fireMultiplierNum}× ${fmt(fireAnnualExpenses)}/yr today, inflated to year ${refYear.toFixed(1)}.\nTarget grows with inflation each year — that's the orange dashed line on the chart.`}>
+                    title={`${fireMultiplierNum.toFixed(1)}× effective multiplier${useSimpleMultiplier ? "" : " (after tax gross-up)"} on ${fmt(fireSpending)}/yr spending.\nInflated from today to year ${refYear.toFixed(1)} for the chart.\nFull breakdown on Simple Forecast tab.`}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target {yearLabel}:</span>
                     <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(futureTarget)}</strong>
                   </span>
@@ -1056,13 +1102,15 @@ export default function AdvancedForecastTab({
             </span>
             {/* Today's-$ check — shows the FI target in today's purchasing
                 power as a stable cross-reference. Number changes very slowly
-                (only when expenses or multiplier change), unlike the
-                future-$ display which jumps with inflation/year. Helpful
-                sanity check. */}
+                (only when expenses or SWR change), unlike the future-$
+                display which jumps with inflation/year. Helpful sanity check. */}
             {fireEnabled && fireTarget > 0 && (
               <span style={{ fontSize: 11, color: "var(--tx3,#888)", paddingLeft: 38 }}
-                title="FI target in today's purchasing power. Does not depend on inflation rate. Useful as a stable check while you're tuning the future-$ number above.">
+                title={`FI target in today's purchasing power. ${useSimpleMultiplier ? "Classic rule — tax estimate disabled." : `Tax-adjusted: ${((fireResult.tax?.effectiveRate || 0) * 100).toFixed(1)}% effective on withdrawals.`}\nDoes not depend on inflation rate.`}>
                 Today's $: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(fireTarget)}</strong>
+                {!useSimpleMultiplier && fireResult.tax && fireResult.tax.totalTax > 0 && (
+                  <span style={{ marginLeft: 6, fontStyle: "italic" }}>· {fireMultiplierNum.toFixed(1)}× spending (tax-adj.)</span>
+                )}
               </span>
             )}
           </span>

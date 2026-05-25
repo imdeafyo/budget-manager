@@ -1,8 +1,10 @@
 import { useMemo, useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { forecastGrowth, fmt, fmtCompact, evalF } from "../utils/calc.js";
+import { forecastGrowth, fmt, fmtCompact, evalF, forecastGrowthAccounts } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
+import { computeFireTarget, computeTaxCharacterMix, extractMixFromProjection } from "../utils/fireTarget.js";
+import { ACCOUNT_TYPE_TO_POOL, getPoolLimit, defaultForecastAccounts } from "../data/taxDB.js";
 
 export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRemW, includeEaip, transactions = [], cats = [], savCats = [], transferCats = [], incomeCats = [], preDed = [], hsaEmployerMatchAnnual = 0, forecast = {}, setForecast, tax = {}, setTax, p1Name = "Person 1", p2Name = "Person 2", cSal = "0", kSal = "0", c4pre = "0", c4ro = "0", k4pre = "0", k4ro = "0" }) {
   /* Scenario inputs live on st.forecast.* so they sync across devices.
@@ -77,6 +79,33 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const setFireEnabled = (v) => setFc("fireEnabled", v);
   const fireMultiplier = F.fireMultiplier ?? "25";
   const setFireMultiplier = (v) => setFc("fireMultiplier", v);
+
+  /* Phase 15 — Tax-aware FIRE config. Lives under forecast.fireConfig so both
+     Simple and Advanced tabs see the same numbers. When `useSimpleMultiplier`
+     is true (escape hatch toggle), the math collapses back to the classic
+     `multiplier × spending` rule and respects `fireMultiplier` above.
+     Otherwise the new pipeline is used:
+       - swr drives the divisor (1/swr is the "effective multiplier")
+       - retirementSpendingOverride: null → use current budgeted/actual
+         expenses; number → use that fixed amount in today's dollars
+       - ltcgRate: long-term capital gains rate (default 0.15)
+       - account mix: Simple tab approximates from a one-shot projection
+         using defaultForecastAccounts seeded with initialBalance; Advanced
+         uses live accountSeries at the target year. */
+  const fireConfig = (F && typeof F.fireConfig === "object" && F.fireConfig) ? F.fireConfig : {};
+  const setFireCfg = (key, v) => setFc("fireConfig", { ...fireConfig, [key]: v });
+  const swr = (typeof fireConfig.swr === "number" && fireConfig.swr > 0) ? fireConfig.swr : 0.04;
+  const setSwr = (v) => setFireCfg("swr", v);
+  const useSimpleMultiplier = !!fireConfig.useSimpleMultiplier;
+  const setUseSimpleMultiplier = (v) => setFireCfg("useSimpleMultiplier", v);
+  // null = use current spending (default). Number = override.
+  const retirementSpendingOverride = (typeof fireConfig.retirementSpendingOverride === "number") ? fireConfig.retirementSpendingOverride : null;
+  const setRetirementSpendingOverride = (v) => setFireCfg("retirementSpendingOverride", v);
+  const ltcgRate = (typeof fireConfig.ltcgRate === "number" && fireConfig.ltcgRate >= 0) ? fireConfig.ltcgRate : 0.15;
+  const setLtcgRate = (v) => setFireCfg("ltcgRate", v);
+  // Display: toggle the expanded tax breakdown card section. Per-device.
+  const [showFireBreakdown, setShowFireBreakdown] = useState(() => { try { return localStorage.getItem("forecast-simple-fire-breakdown") === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem("forecast-simple-fire-breakdown", showFireBreakdown ? "1" : "0"); } catch {} }, [showFireBreakdown]);
 
   const r = evalF(returnPct);
   const i = evalF(inflationPct);
@@ -177,11 +206,17 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
   const targetMonthsNum = Math.max(0, evalF(targetMonths));
   const targetAmount = monthlyExpenses * targetMonthsNum;
 
-  /* FIRE — financial independence target.
-     Annual expenses source follows the contribution-source toggle:
-     - "budget"  → tExpW × 48 (annualized weekly budget)
-     - actuals/N → annualized actual expenses from the window
-     Target = annualExpenses × multiplier. Default multiplier 25 (4% rule).
+  /* Phase 15 — Tax-aware FIRE target.
+     Spending source still follows the contribution-source toggle when the
+     override is null. The override (retirementSpendingOverride) lets users
+     project a different lifestyle in retirement (more travel, paid-off
+     mortgage, etc.) without changing the rest of the app.
+
+     For Simple tab, the tax-character mix is derived from the user's
+     configured accounts on the Advanced tab (forecast.accounts). Falls back
+     to defaultForecastAccounts() so first-time Simple users see realistic
+     numbers; we estimate the projected balance at the FI year using the
+     same forecastGrowthAccounts the Advanced tab uses.
 
      Math basis: flat target (today's dollars) compared against the REAL
      balance line (already inflation-adjusted in `forecastGrowth`). This
@@ -189,18 +224,95 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
      to meet it. Years-to-FI uses real return rate (r − i) for the same
      reason: contributions and growth must keep pace with inflation in
      real terms. */
-  const fireMultiplierNum = useMemo(() => {
-    const v = evalF(fireMultiplier);
-    return isFinite(v) && v > 0 ? v : 25;
-  }, [fireMultiplier]);
   const fireAnnualExpenses = useMemo(() => {
     if (contribSource !== "budget" && actualsResult && actualsResult.expenses > 0 && actualsResult.months > 0) {
       return actualsResult.expenses * 12 / actualsResult.months;
     }
     return tExpW * 48;
   }, [contribSource, actualsResult, tExpW]);
-  const fireTarget = useMemo(() => fireAnnualExpenses * fireMultiplierNum, [fireAnnualExpenses, fireMultiplierNum]);
-  const fireWithdrawalRate = useMemo(() => fireMultiplierNum > 0 ? 100 / fireMultiplierNum : 0, [fireMultiplierNum]);
+
+  // Spending used for FIRE math: override if set, else current.
+  const fireSpending = useMemo(() => {
+    return retirementSpendingOverride != null ? retirementSpendingOverride : fireAnnualExpenses;
+  }, [retirementSpendingOverride, fireAnnualExpenses]);
+
+  // Build tax config from the user's tax settings. Use MFJ if either bonus
+  // applies, otherwise default to MFJ (the app's universe is dual-income
+  // households, so MFJ is the right default).
+  const taxConfig = useMemo(() => ({
+    year: String(tax?.year || "2026"),
+    filing: "mfj",
+    // Use p1 state by default — both partners typically file from the same
+    // state, and a single rate is what we want for the FIRE estimate. If
+    // partners are in different states this slightly understates state
+    // tax for the lower-rate partner's residence.
+    stateAbbr: tax?.p1State?.abbr || tax?.p2State?.abbr || "",
+    ltcgRate,
+    stateTaxesLTCG: true, // conservative — most states do
+  }), [tax, ltcgRate]);
+
+  // Tax character mix derivation: project the user's Advanced accounts
+  // forward to estimate balance composition at FI. For first-time users
+  // with no accounts configured, seed defaults. We treat initialBalance
+  // as an aggregate seed proportional to default account weights.
+  const accountsForMixCalc = useMemo(() => {
+    const userAccounts = (forecast && Array.isArray(forecast.accounts) && forecast.accounts.length > 0)
+      ? forecast.accounts
+      : defaultForecastAccounts();
+    // If user has accounts but all zero startBalances, seed proportionally
+    // from initialBalance so the mix calculation has something to work with.
+    const totalStart = userAccounts.reduce((s, a) => s + (Number(a.startBalance) || 0), 0);
+    if (totalStart > 0) return userAccounts;
+    if (init <= 0) return userAccounts;
+    // Distribute initialBalance equally across the default-set 401k_pretax,
+    // ira_roth, and taxable buckets if user hasn't filled in balances.
+    const equalShare = init / 3;
+    return userAccounts.map(a => {
+      if (["401k_pretax", "ira_roth", "taxable"].includes(a.type)) {
+        return { ...a, startBalance: (Number(a.startBalance) || 0) + equalShare };
+      }
+      return a;
+    });
+  }, [forecast, init]);
+
+  // Quick projection just for the mix calc. We don't need full accuracy
+  // here — the proportions matter, not the absolute dollars.
+  const fireMixYear = useMemo(() => {
+    // Use horizon as the year (conservative — assumes user reaches FI at
+    // horizon if they haven't sooner). Advanced will be more precise.
+    return Math.max(1, Number(horizon) || 30);
+  }, [horizon]);
+
+  const fireAccountMix = useMemo(() => {
+    if (useSimpleMultiplier) return { ordinary: 0, ltcg: 0, taxfree: 0 };
+    try {
+      // Lightweight projection — pure compound growth on the user's accounts.
+      // No pool capping, no events, no actuals integration. Just enough to
+      // see how proportions shift over time as Roth vs Traditional grow.
+      const proj = forecastGrowthAccounts(accountsForMixCalc, fireMixYear, {
+        baseYear: new Date().getFullYear(),
+        inflationPct: 0,
+        getPoolLimit: () => Infinity, // skip pool caps for mix calc
+        accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+      });
+      return extractMixFromProjection(accountsForMixCalc, proj.accountSeries, fireMixYear);
+    } catch (e) {
+      // If projection fails (defensive — shouldn't happen) fall back to
+      // start-of-period mix.
+      return computeTaxCharacterMix(accountsForMixCalc.map(a => ({
+        type: a.type, balance: Number(a.startBalance) || 0,
+      })));
+    }
+  }, [useSimpleMultiplier, accountsForMixCalc, fireMixYear]);
+
+  // The new FIRE result — drives everything below.
+  const fireResult = useMemo(() => {
+    return computeFireTarget(fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier);
+  }, [fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier]);
+
+  const fireTarget = fireResult.target;
+  const fireMultiplierNum = fireResult.multiplierEquivalent || 25;
+  const fireWithdrawalRate = swr * 100;
 
   // Forecast must be computed before years-to-X calcs so they can derive
   // crossover years from the array (which already accounts for income
@@ -459,11 +571,12 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
         </div>
       </Card>
 
-      {/* FIRE — Financial Independence calculator. Toggleable; when on,
-          adds a stat card to the summary row, a horizontal target line on
-          the compound-growth chart, and shows full math here. Annual
-          expenses follow the contribution source toggle (budget vs
-          actuals/N-mo). */}
+      {/* FIRE — Financial Independence calculator. Phase 15 makes this
+          tax-aware: estimates withdrawal tax based on the account-type mix
+          at FI, grosses up the spending need, and divides by SWR. Users
+          can override projected retirement spending (travel-heavy etc.)
+          and choose a withdrawal rate (default 4%). Escape hatch toggle
+          restores the classic spending × multiplier math. */}
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: fireEnabled ? 16 : 0, flexWrap: "wrap" }}>
           <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>FIRE — Financial Independence</h3>
@@ -472,45 +585,206 @@ export default function ForecastTab({ mob, C, tSavW, remW, tExpW, totalSavPlusRe
         </div>
         {fireEnabled && (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 2fr", gap: 16, alignItems: "start" }}>
+            {/* Top row: spending input + SWR picker + result card */}
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1.2fr", gap: 16, alignItems: "start" }}>
+              {/* Spending */}
               <div>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  Multiplier (× annual expenses)
-                  <span title={"Inverse of safe withdrawal rate.\n\n• 25× = 4% rule (Trinity Study, ~30yr retirement)\n• 28-33× = 3-3.5% rule (FIRE, 50+ year horizon)\n• 20× = 5% (aggressive, requires flexibility)\n\nLower withdrawal rate = larger target = safer, but takes longer to reach. Most people use 25.\n\nThe withdrawal rate matters because your portfolio has to survive forever — too high and you risk running out during a bad market sequence."} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+                  Retirement Spending /yr
+                  <span title={"Annual after-tax spending you expect in retirement.\n\nDefault: your current expense baseline (from budget or actuals).\n\nOverride this if retirement looks different:\n• travel-heavy early years\n• paid-off mortgage\n• no kids at home\n• PRE-MEDICARE HEALTHCARE — if retiring before 65, ACA marketplace premiums for a couple can be $15-25k/yr until Medicare kicks in. Bake that into your override.\n\nThe tax estimate will gross this up before applying the withdrawal rate."} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
                 </label>
-                <NI value={fireMultiplier} onChange={setFireMultiplier} onBlurResolve />
-                <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>Withdrawal rate: <strong>{fireWithdrawalRate.toFixed(2)}%</strong></div>
-                <div style={{ fontSize: 11, color: "var(--tx3,#888)" }}>Annual expenses: {fmt(fireAnnualExpenses)}</div>
-                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2, fontStyle: "italic" }}>
-                  ({contribSource === "budget" ? "from budget × 48" : `from ${contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6}mo actuals`})
+                <NI
+                  value={retirementSpendingOverride != null ? String(retirementSpendingOverride) : String(Math.round(fireAnnualExpenses))}
+                  onChange={(v) => {
+                    const n = evalF(v);
+                    setRetirementSpendingOverride(isFinite(n) && n >= 0 ? n : null);
+                  }}
+                  onBlurResolve
+                />
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 4, fontStyle: "italic" }}>
+                  {retirementSpendingOverride != null ? (
+                    <button
+                      onClick={() => setRetirementSpendingOverride(null)}
+                      style={{ background: "none", border: "none", color: "#556FB5", cursor: "pointer", padding: 0, fontSize: 10, fontStyle: "italic", textDecoration: "underline" }}
+                      title="Clear override and use current spending"
+                    >reset to current ({fmt(fireAnnualExpenses)})</button>
+                  ) : (
+                    <span>auto: {contribSource === "budget" ? "budget × 48" : `${contribSource === "actual3" ? 3 : contribSource === "actual12" ? 12 : 6}mo actuals`}</span>
+                  )}
                 </div>
-                <div style={{ fontSize: 11, color: "var(--tx2,#555)", marginTop: 6, fontWeight: 700 }}>Target: {fmt(fireTarget)}</div>
               </div>
+              {/* SWR picker */}
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Withdrawal Rate
+                  <span title={"Annual % of portfolio you withdraw to live on. Lower = safer (larger nest egg required), higher = aggressive.\n\n• 3% — very conservative, 50+ year retirement\n• 3.5% — conservative, FIRE-typical\n• 4% — Trinity study standard, 30-year horizon\n• 5% — aggressive, requires flexibility in down markets"} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 9, fontWeight: 700, cursor: "help" }}>?</span>
+                </label>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 4 }}>
+                  {[0.03, 0.035, 0.04, 0.05].map(rate => {
+                    const active = Math.abs(swr - rate) < 0.0001;
+                    return (
+                      <button key={rate}
+                        onClick={() => setSwr(rate)}
+                        style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: active ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: active ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>
+                        {(rate * 100).toFixed(rate === 0.035 ? 1 : 0)}%
+                      </button>
+                    );
+                  })}
+                </div>
+                <NI
+                  value={(swr * 100).toFixed(2)}
+                  onChange={(v) => {
+                    const n = evalF(v);
+                    if (isFinite(n) && n > 0 && n < 50) setSwr(n / 100);
+                  }}
+                  onBlurResolve
+                />
+                <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 4 }}>
+                  ≈ {(100 / (swr * 100)).toFixed(1)}× spending (pre-tax)
+                </div>
+              </div>
+              {/* Result card */}
               <div style={{ padding: 16, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, textAlign: "center" }}>
                 {fireTarget <= 0 ? (
-                  <div style={{ color: "var(--tx3,#888)", fontSize: 13 }}>Set annual expenses and a multiplier to see your FI date.</div>
+                  <div style={{ color: "var(--tx3,#888)", fontSize: 13 }}>Set retirement spending and a withdrawal rate to see your FI date.</div>
                 ) : yearsToFire === 0 ? (
                   <div>
                     <div style={{ fontSize: 28, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Already FI ✓</div>
-                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Your starting balance covers {fireMultiplierNum}× expenses.</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Your starting balance covers {fireMultiplierNum.toFixed(1)}× spending.</div>
                   </div>
                 ) : yearsToFire === null ? (
                   <div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: "#E8573A", fontFamily: "'Fraunces',serif" }}>Unreachable in {horizon} yr</div>
-                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Today's $ balance doesn't reach {fmt(fireTarget)} within your horizon at current settings. Increase contributions, reduce expenses, raise expected return — or extend the horizon to see if it crosses later.</div>
+                    <div style={{ fontSize: 12, color: "var(--tx2,#555)", marginTop: 4 }}>Today's $ balance doesn't reach {fmt(fireTarget)} within your horizon. Increase contributions, reduce spending, raise expected return — or extend the horizon.</div>
                   </div>
                 ) : (
                   <div>
                     <div style={{ fontSize: 32, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{yearsToFire.toFixed(1)} years</div>
                     <div style={{ fontSize: 13, color: "var(--tx2,#555)", marginTop: 4, fontWeight: 600 }}>≈ {new Date(Date.now() + yearsToFire * 365.25 * 86400000).toLocaleDateString(undefined, { year: "numeric", month: "long" })}</div>
-                    <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>at {r}% return, {i}% infl, {g}% income growth, {fmt(annualContribution)}/yr base</div>
+                    <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 6 }}>at {r}% return, {i}% infl, {g}% income growth</div>
                     {yearsToFire > horizon && <div style={{ fontSize: 11, color: "#E8573A", marginTop: 4, fontWeight: 600 }}>⚠️ Beyond your {horizon}yr horizon — extend horizon to see crossover.</div>}
                   </div>
                 )}
               </div>
             </div>
+
+            {/* Target summary: the dollar number with tax breakdown */}
+            <div style={{ marginTop: 16, padding: 14, background: "var(--input-bg,#f8f8f8)", borderRadius: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "auto 1fr auto", gap: 12, alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>FIRE Target</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "var(--tx,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(fireTarget)}</div>
+                  <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 2 }}>
+                    Effective multiplier: <strong>{fireMultiplierNum.toFixed(1)}×</strong> spending
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "var(--tx2,#555)", lineHeight: 1.7 }}>
+                  {useSimpleMultiplier ? (
+                    <>
+                      <div>Spending: <strong>{fmt(fireSpending)}</strong> /yr (after-tax)</div>
+                      <div>Withdrawal rate: <strong>{(swr * 100).toFixed(2)}%</strong></div>
+                      <div style={{ color: "var(--tx3,#888)", fontStyle: "italic" }}>Classic rule — tax estimate disabled</div>
+                    </>
+                  ) : (
+                    <>
+                      <div>After-tax spending need: <strong>{fmt(fireSpending)}</strong></div>
+                      <div>Estimated retirement tax: <strong>{fmt(fireResult.tax?.totalTax || 0)}</strong> ({((fireResult.tax?.effectiveRate || 0) * 100).toFixed(1)}% effective)</div>
+                      <div>Gross withdrawal needed: <strong>{fmt(fireResult.grossNeed)}</strong></div>
+                    </>
+                  )}
+                </div>
+                <div>
+                  {!useSimpleMultiplier && (
+                    <button
+                      onClick={() => setShowFireBreakdown(v => !v)}
+                      style={{ padding: "5px 10px", fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: showFireBreakdown ? "var(--input-bg,#fff)" : "transparent", color: "var(--tx2,#555)", cursor: "pointer" }}>
+                      {showFireBreakdown ? "Hide breakdown ▴" : "Show breakdown ▾"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Expandable tax breakdown */}
+              {!useSimpleMultiplier && showFireBreakdown && fireResult.tax && (
+                <div style={{ marginTop: 14, padding: 12, background: "var(--bg,#fff)", borderRadius: 6, border: "1px solid var(--bdr,#e5e5e5)" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--tx2,#555)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Tax breakdown</div>
+                  <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginBottom: 10, lineHeight: 1.6 }}>
+                    Based on the projected account mix at year {fireMixYear}. Each dollar withdrawn is taxed according to where it sits in your portfolio (Traditional → ordinary income, Roth/HSA → tax-free, Taxable → long-term capital gains).
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14, fontSize: 11 }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: "var(--tx2,#555)", marginBottom: 4 }}>Withdrawal composition</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>Ordinary income (Traditional 401k/IRA, match)</span>
+                        <span><strong>{(fireAccountMix.ordinary * 100).toFixed(1)}%</strong> · {fmt(fireResult.tax.ordinaryIncome)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>Long-term capital gains (Taxable)</span>
+                        <span><strong>{(fireAccountMix.ltcg * 100).toFixed(1)}%</strong> · {fmt(fireResult.tax.ltcgIncome)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>Tax-free (Roth, HSA, Cash)</span>
+                        <span><strong>{(fireAccountMix.taxfree * 100).toFixed(1)}%</strong> · {fmt(fireResult.tax.taxfreeIncome)}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, color: "var(--tx2,#555)", marginBottom: 4 }}>Tax computed</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>Federal (ordinary)</span>
+                        <span>{fmt(fireResult.tax.federalOrdinary)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>Federal LTCG ({(ltcgRate * 100).toFixed(0)}%)</span>
+                        <span>{fmt(fireResult.tax.federalLTCG)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span>State ({taxConfig.stateAbbr || "none"})</span>
+                        <span>{fmt(fireResult.tax.stateTax)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0 0", borderTop: "1px solid var(--bdr,#e5e5e5)", marginTop: 4, fontWeight: 700, color: "var(--tx,#222)" }}>
+                        <span>Total tax</span>
+                        <span>{fmt(fireResult.tax.totalTax)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* LTCG rate override */}
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--bdr,#e5e5e5)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <label style={{ fontSize: 10, color: "var(--tx3,#888)", fontWeight: 600 }}>LTCG rate</label>
+                    <div style={{ width: 80 }}>
+                      <NI
+                        value={(ltcgRate * 100).toFixed(2)}
+                        onChange={(v) => {
+                          const n = evalF(v);
+                          if (isFinite(n) && n >= 0 && n < 50) setLtcgRate(n / 100);
+                        }}
+                        onBlurResolve
+                      />
+                    </div>
+                    <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>%</span>
+                    <span style={{ fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic", marginLeft: "auto" }}>
+                      Tax basis: {taxConfig.year} federal {taxConfig.stateAbbr ? `+ ${taxConfig.stateAbbr}` : ""} brackets (MFJ). Future tax law changes are not predicted.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Simple-mode toggle */}
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--bdr,#e5e5e5)", display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  id="fire-simple-toggle"
+                  checked={useSimpleMultiplier}
+                  onChange={(e) => setUseSimpleMultiplier(e.target.checked)}
+                  style={{ cursor: "pointer" }}
+                />
+                <label htmlFor="fire-simple-toggle" style={{ fontSize: 11, color: "var(--tx2,#555)", cursor: "pointer" }}>
+                  Use classic rule (skip tax estimate) — target = spending ÷ withdrawal rate
+                </label>
+              </div>
+            </div>
+
             <div style={{ marginTop: 12, padding: 12, background: "var(--input-bg,#f8f8f8)", borderRadius: 8, fontSize: 11, color: "var(--tx3,#888)", lineHeight: 1.6 }}>
-              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI is when the <em>today's $</em> balance line crosses the target — derived from the same projection as the chart, so income growth ({g}%) and all other settings flow through automatically. When real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
+              <strong style={{ color: "var(--tx2,#555)" }}>How this works:</strong> Target is in today's dollars (flat line on the chart). Years-to-FI is when the <em>today's $</em> balance line crosses the target — derived from the same projection as the chart, so income growth ({g}%) and all other settings flow through automatically. {!useSimpleMultiplier && <>Tax estimate uses your projected account mix at year {fireMixYear} (configurable on the Advanced tab). </>}When real balance crosses the target, you can sustainably withdraw {fireWithdrawalRate.toFixed(2)}% per year forever — that's "financially independent."
             </div>
           </>
         )}

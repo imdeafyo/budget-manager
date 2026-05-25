@@ -306,6 +306,43 @@ export const ACCOUNT_TYPE_TO_POOL = {
   "custom":  null,
 };
 
+/* Phase 15 — withdrawal tax character per account type.
+   Used by the tax-aware FIRE target math (utils/fireTarget.js) to estimate
+   what fraction of retirement withdrawals will be taxed as ordinary income,
+   what fraction at long-term capital gains, and what fraction is tax-free.
+   This is NOT a withdrawal-order model: we treat the projected portfolio
+   at FI as a single bucket and compute the BLENDED effective tax rate
+   based on where the dollars sit (pro-rata across types).
+
+   Conservative defaults:
+   - 401k_match is "ordinary": employer contributions are always pre-tax
+     regardless of whether the employee portion is Roth.
+   - HSA is "taxfree" assuming qualified medical use — the practical
+     reality for FIRE planning. Non-qualified HSA withdrawals are
+     ordinary income + 20% penalty pre-65, but planning for that case
+     would understate the tool's usefulness.
+   - "cash" is "taxfree" — drawing down a checking/savings balance has
+     no embedded gains to tax. (Interest earned along the way IS taxed,
+     but that's a working-life concern handled elsewhere.)
+   - "custom" defaults to "ordinary" — the conservative default. If a
+     user has a Roth-equivalent custom account they can override the
+     account type to ira_roth.
+   - "taxable" is "ltcg" — assumes long-held positions. Short-term gains
+     get ordinary treatment but FIRE math is by definition long-horizon. */
+export const ACCOUNT_TYPE_TO_TAX_CHARACTER = {
+  "401k_pretax":     "ordinary",
+  "401k_roth":       "taxfree",
+  "401k_match":      "ordinary",
+  "ira_traditional": "ordinary",
+  "ira_roth":        "taxfree",
+  "hsa":             "taxfree",
+  "hsa_cash":        "taxfree",
+  "hsa_invested":    "taxfree",
+  "taxable":         "ltcg",
+  "cash":            "taxfree",
+  "custom":          "ordinary",
+};
+
 /* Default account list for first-time advanced-mode users.
    Display names are derived in the UI from owner + type + nickname; we
    intentionally don't store a `name` field here so renames of P1/P2 flow

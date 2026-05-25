@@ -70,3 +70,53 @@ The cold-boot `CREATE TABLE IF NOT EXISTS …` block legitimately crosses
 500ms on a fresh pod, firing the slow-query warn log. Decide between
 bumping the global threshold or exempting the bootstrap query
 specifically. Needs ~week of log data to triage.
+
+## Phase 15 follow-ups (Tax-aware FIRE target)
+
+### Phase 16 — Time-varying retirement spending (go-go / slow-go / no-go)
+
+The current FIRE math uses a single annual spending number for the
+entire retirement. Real retirement spending is lumpy: travel-heavy
+early years (50-65), settled middle (65-80), healthcare-heavy late
+(80+). Replace the single-spending input with three age-banded
+inputs and compute a present-value-against-SWR target instead of a
+flat multiplier. Math is meaningfully more complex (variable cash
+flow stream); UI is its own design problem. Park until 8A/9B/14 ship
+and the simple single-spending override has been used in anger for a
+few months.
+
+### Healthcare cushion as a structured input
+
+Currently the pre-Medicare healthcare gap is handled by a tooltip
+nudge ("bake it into your spending override"). If users keep getting
+this wrong in real planning sessions, add a separate "Healthcare gap"
+input on the FIRE card: `$X/yr × (yearsUntilMedicare)` added as a
+lump-sum bump to the target. Don't build speculatively — wait for the
+need to be obvious.
+
+### Withdrawal-order modeling
+
+Currently we use pro-rata across account types (50% Traditional + 25%
+Roth → 50% of withdrawals taxed as ordinary income, 25% tax-free).
+Real retirees often optimize: taxable first (let tax-deferred keep
+growing), Roth conversion ladders, RMD-driven sequencing. Adding this
+would let users model strategies but the UI complexity is high and the
+benefit is marginal for planning-time decisions. Don't build unless
+multiple users ask for it.
+
+### State-LTCG nuance
+
+We currently assume all states tax LTCG as ordinary income
+(conservative — overstates target for residents of no-income-tax
+states like FL/TX/NV/WA/etc.). If Corey or a future user moves to one
+of those states, add a per-state override for LTCG treatment. Tiny
+backlog item, only worth doing if it actually bites.
+
+### Different states per partner
+
+`taxConfig.stateAbbr` defaults to `tax.p1State.abbr` and falls back to
+`tax.p2State.abbr`. Most dual-income households file MFJ from one
+state, so this is fine. If a user ever has partners residing in
+different states (rare), the FIRE estimate will slightly understate
+state tax for the higher-rate partner's residence. Surface a warning
+if `p1State.abbr !== p2State.abbr`, or model both states.
