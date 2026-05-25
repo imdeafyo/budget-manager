@@ -137,16 +137,11 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
     <div>
 
       <Card style={{ overflowX: "auto" }}>
-        {(() => { const cols = ["1.8fr", visCols.wk && "1fr", visCols.mo && "1fr", visCols.y48 && "1fr", visCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (visCols.wk) hdrs.push("Weekly"); if (visCols.mo) hdrs.push("Monthly"); if (visCols.y48) hdrs.push("Yr (48)"); if (visCols.y52) hdrs.push("Yr (52)"); return (
-        /* Sticky relative to the page scroll, parked just below the outer
-           sticky header. --header-h is set by App.jsx's ResizeObserver on
-           the outer header so it tracks banner/toolbar/subtab expand state.
-           z-index sits BELOW the header (50) so the header's chrome paints
-           over us when both are pinned. Background must be opaque so rows
-           scrolling underneath don't bleed through. */
-        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: "var(--header-h, 0px)", background: "var(--card-bg, #fff)", zIndex: 10 }}>
-          {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
-        </div>); })()}
+        {/* Column header row used to live here. It's now rendered inside the
+            outer sticky header in App.jsx so it stays pinned below the
+            title/tabs/tools chrome instead of fighting for the same top:0
+            stick position. The grid column widths here must continue to
+            match what App.jsx's header strip uses: 1.8fr 1fr 1fr 1fr 1fr. */}
 
         <SH>Income</SH>
         <Row label={p1Name + " Salary"} wk={C.cw} mo={moC(C.cw)} y48={y4(C.cw)} y52={y5(C.cw)} bold />
