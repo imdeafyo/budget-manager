@@ -138,7 +138,13 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
 
       <Card style={{ overflowX: "auto" }}>
         {(() => { const cols = ["1.8fr", visCols.wk && "1fr", visCols.mo && "1fr", visCols.y48 && "1fr", visCols.y52 && "1fr"].filter(Boolean).join(" "); const hdrs = [""]; if (visCols.wk) hdrs.push("Weekly"); if (visCols.mo) hdrs.push("Monthly"); if (visCols.y48) hdrs.push("Yr (48)"); if (visCols.y52) hdrs.push("Yr (52)"); return (
-        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: 0, background: "var(--card-bg, #fff)", zIndex: 2 }}>
+        /* Sticky relative to the page scroll, parked just below the outer
+           sticky header. --header-h is set by App.jsx's ResizeObserver on
+           the outer header so it tracks banner/toolbar/subtab expand state.
+           z-index sits BELOW the header (50) so the header's chrome paints
+           over us when both are pinned. Background must be opaque so rows
+           scrolling underneath don't bleed through. */
+        <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", borderBottom: "2px solid var(--bdr2, #d0cdc8)", position: "sticky", top: "var(--header-h, 0px)", background: "var(--card-bg, #fff)", zIndex: 10 }}>
           {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
         </div>); })()}
 
@@ -199,17 +205,17 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
           <Row label="Total Post-Tax Deductions" wk={-(C.cPostDedW + C.kPostDedW)} mo={-moC(C.cPostDedW + C.kPostDedW)} y48={-y4(C.cPostDedW + C.kPostDedW)} y52={-y5(C.cPostDedW + C.kPostDedW)} bold border color="var(--c-posttax, #9B59B6)" />
         </>}
 
-        {/* Post-Tax Savings — Roth 401(k) + Roth IRA. These are subtracted from
-            net paycheck (they reduce take-home cash available for budgeting)
-            but are conceptually savings, not consumption — hence the separate
-            section parallel to Pre-Tax Savings. Display values are negative
-            (reducing net) to match Post-Tax Deductions visually. */}
-        {(C.cPostSavW + C.kPostSavW > 0) && <><CSH color="var(--c-posttax, #9B59B6)" collapsed={collapsed.postSav} onToggle={() => toggleSec("postSav")}>Post-Tax Savings</CSH>
-          {!collapsed.postSav && <>{C.c4roW + C.k4roW > 0 && <><Row label="💰 Roth 401(k)" wk={-(C.c4roW + C.k4roW)} mo={-moC(C.c4roW + C.k4roW)} y48={-y4(C.c4roW + C.k4roW)} y52={-y5(C.c4roW + C.k4roW)} color="var(--c-posttax, #9B59B6)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.c4roW} mo={-moC(C.c4roW)} y48={-y4(C.c4roW)} y52={-y5(C.c4roW)} color="var(--c-posttax2, #C39BD3)" /><Row label={`  ↳ ${p2Name}`} wk={-C.k4roW} mo={-moC(C.k4roW)} y48={-y4(C.k4roW)} y52={-y5(C.k4roW)} color="var(--c-posttax2, #C39BD3)" /></>}</>}
-          {(C.cIraRothW || 0) + (C.kIraRothW || 0) > 0 && <Row label="💰 Roth IRA" wk={-((C.cIraRothW || 0) + (C.kIraRothW || 0))} mo={-moC((C.cIraRothW || 0) + (C.kIraRothW || 0))} y48={-y4((C.cIraRothW || 0) + (C.kIraRothW || 0))} y52={-y5((C.cIraRothW || 0) + (C.kIraRothW || 0))} color="var(--c-posttax, #9B59B6)" />}
-          {showPerPerson && (C.cIraRothW || 0) > 0 && <Row label={`  ↳ ${p1Name} Roth IRA`} wk={-C.cIraRothW} mo={-moC(C.cIraRothW)} y48={-y4(C.cIraRothW)} y52={-y5(C.cIraRothW)} color="var(--c-posttax2, #C39BD3)" />}
-          {showPerPerson && (C.kIraRothW || 0) > 0 && <Row label={`  ↳ ${p2Name} Roth IRA`} wk={-C.kIraRothW} mo={-moC(C.kIraRothW)} y48={-y4(C.kIraRothW)} y52={-y5(C.kIraRothW)} color="var(--c-posttax2, #C39BD3)" />}</>}
-          <Row label="Total Post-Tax Savings" wk={-(C.cPostSavW + C.kPostSavW)} mo={-moC(C.cPostSavW + C.kPostSavW)} y48={-y4(C.cPostSavW + C.kPostSavW)} y52={-y5(C.cPostSavW + C.kPostSavW)} bold border color="var(--c-posttax, #9B59B6)" />
+        {/* Post-Tax Savings — Roth 401(k) + Roth IRA. Visually green/teal to match
+            Pre-Tax Savings ("savings amount" = green is the convention), not purple
+            (which belongs to Post-Tax *Deductions* — actual costs like life insurance).
+            Values still display negative so they read "comes out of paycheck", which
+            matches the structural placement next to Post-Tax Deductions. */}
+        {(C.cPostSavW + C.kPostSavW > 0) && <><CSH color="var(--c-presav, #1ABC9C)" collapsed={collapsed.postSav} onToggle={() => toggleSec("postSav")}>Post-Tax Savings</CSH>
+          {!collapsed.postSav && <>{C.c4roW + C.k4roW > 0 && <><Row label="💰 Roth 401(k)" wk={-(C.c4roW + C.k4roW)} mo={-moC(C.c4roW + C.k4roW)} y48={-y4(C.c4roW + C.k4roW)} y52={-y5(C.c4roW + C.k4roW)} color="var(--c-presav, #1ABC9C)" />{showPerPerson && <><Row label={`  ↳ ${p1Name}`} wk={-C.c4roW} mo={-moC(C.c4roW)} y48={-y4(C.c4roW)} y52={-y5(C.c4roW)} color="var(--c-presav, #48C9B0)" /><Row label={`  ↳ ${p2Name}`} wk={-C.k4roW} mo={-moC(C.k4roW)} y48={-y4(C.k4roW)} y52={-y5(C.k4roW)} color="var(--c-presav, #48C9B0)" /></>}</>}
+          {(C.cIraRothW || 0) + (C.kIraRothW || 0) > 0 && <Row label="💰 Roth IRA" wk={-((C.cIraRothW || 0) + (C.kIraRothW || 0))} mo={-moC((C.cIraRothW || 0) + (C.kIraRothW || 0))} y48={-y4((C.cIraRothW || 0) + (C.kIraRothW || 0))} y52={-y5((C.cIraRothW || 0) + (C.kIraRothW || 0))} color="var(--c-presav, #1ABC9C)" />}
+          {showPerPerson && (C.cIraRothW || 0) > 0 && <Row label={`  ↳ ${p1Name} Roth IRA`} wk={-C.cIraRothW} mo={-moC(C.cIraRothW)} y48={-y4(C.cIraRothW)} y52={-y5(C.cIraRothW)} color="var(--c-presav, #48C9B0)" />}
+          {showPerPerson && (C.kIraRothW || 0) > 0 && <Row label={`  ↳ ${p2Name} Roth IRA`} wk={-C.kIraRothW} mo={-moC(C.kIraRothW)} y48={-y4(C.kIraRothW)} y52={-y5(C.kIraRothW)} color="var(--c-presav, #48C9B0)" />}</>}
+          <Row label="Total Post-Tax Savings" wk={-(C.cPostSavW + C.kPostSavW)} mo={-moC(C.cPostSavW + C.kPostSavW)} y48={-y4(C.cPostSavW + C.kPostSavW)} y52={-y5(C.cPostSavW + C.kPostSavW)} bold border color="var(--c-presav, #1ABC9C)" />
         </>}
 
         <div style={{ marginTop: 8, padding: "10px 0", borderTop: "3px solid #1a1a1a", borderBottom: "3px solid #1a1a1a" }}>
@@ -231,7 +237,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         <Row label="Total Savings" wk={-tSavW} mo={-moC(tSavW)} y48={-y4(tSavW)} y52={-y5(tSavW)} bold border color="#2ECC71" />
 
         <div style={{ marginTop: 8, padding: "10px 8px", background: remW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold color={remW >= 0 ? "#2ECC71" : "#E74C3C"} />
+          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold signed />
         </div>
         {/* Total Savings + Remaining — the budget tab's view of "savings I'm
             committing to from my paycheck-after-retirement." When overspent
@@ -239,7 +245,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             row reflects that by going below tSavW and tinting red. Previously
             this was floored at Math.max(0, remW) which hid the overspend. */}
         <div style={{ marginTop: 4, padding: "6px 8px", background: totalSavPlusRemW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold color={totalSavPlusRemW >= 0 ? "#2ECC71" : "#E74C3C"} />
+          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold signed />
         </div>
         {/* Total Annual Savings — adds retirement contributions (401(k) pre+Roth,
             IRA Trad+Roth, both partners) that were already subtracted from C.net
@@ -247,7 +253,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             actually saving per year" answer. Only shown when retirement > 0,
             otherwise it'd duplicate the row above. */}
         {retirementW > 0 && <div style={{ marginTop: 4, padding: "6px 8px", background: totalAllSavingsW >= 0 ? "#e8f6ed" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold color={totalAllSavingsW >= 0 ? "#2ECC71" : "#E74C3C"} />
+          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold signed />
           <div style={{ padding: "2px 0 0", fontSize: 10, color: "var(--tx3,#888)", textAlign: "right" }}>incl. 401(k) + IRA: {fmt(y5(retirementW))}/yr</div>
         </div>}
 

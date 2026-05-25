@@ -120,3 +120,28 @@ state, so this is fine. If a user ever has partners residing in
 different states (rare), the FIRE estimate will slightly understate
 state tax for the higher-rate partner's residence. Surface a warning
 if `p1State.abbr !== p2State.abbr`, or model both states.
+
+## UI state — remaining persistence gaps
+
+Audit from the session that persisted `collapsed`. The following UI
+states still reset to defaults on reload. None are urgent enough to
+ship one-off — bundle into a single "persist all layout prefs" session
+if any of them start to bite. Pattern is well-established now:
+`useState(() => localStorage.getItem(...) ?? default)` +
+`useEffect` writer.
+
+- `showPerPerson` (Budget toolbar) — toggle for per-person breakouts
+- `sortBy` / `sortDir` (Budget toolbar) — current sort is reset each
+  load
+- `hlThresh` / `hlPeriod` (Budget toolbar) — highlight threshold for
+  outsized items
+- `includeEaip` (Charts) — bonus include/exclude on Trends + Forecast
+- `savRateBase` (Charts) — Net/Gross toggle on savings-rate trend
+- `chartWeeks` (Charts) — 48 vs 52 weeks chart period
+- `catChartMode` / `catHistMode` / `itemHistMode` / `necDisMode`
+  (Charts) — chart display modes
+- `msHistView` / `msHistYear` (Milestones) — milestone history filter
+
+Skip on purpose (these are session-state, not preferences): all the
+bulk-add/save-milestone modal draft fields, `viewingMs`, the
+diagnostics expand state, etc.

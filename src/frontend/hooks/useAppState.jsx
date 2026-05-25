@@ -251,7 +251,16 @@ export default function useAppState() {
   const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
   const [dragChart, setDragChart] = useState(null);
-  const [collapsed, setCollapsed] = useState({});
+  /* Section collapsed state — persisted per-device because it's a UI layout
+     preference, not budget data. The keys must mirror what toggleSec() writes
+     (nec, dis, sav, preTax, postTax, postSav, fedTax, stTax, preSav, eaip,
+     eaipTax). New section keys should be added to expandAll/collapseAll below
+     so the "all" buttons stay accurate. Stored as JSON; parse failures fall
+     back to {} (everything expanded). */
+  const [collapsed, setCollapsed] = useState(() => {
+    try { const v = localStorage.getItem("budget-collapsed"); return v ? JSON.parse(v) : {}; } catch { return {}; }
+  });
+  useEffect(() => { try { localStorage.setItem("budget-collapsed", JSON.stringify(collapsed)); } catch {} }, [collapsed]);
   const toggleSec = s => setCollapsed(p => ({ ...p, [s]: !p[s] }));
   const allExpanded = !collapsed.nec && !collapsed.dis && !collapsed.sav && !collapsed.preTax && !collapsed.postTax && !collapsed.postSav && !collapsed.fedTax && !collapsed.stTax && !collapsed.preSav && !collapsed.eaip && !collapsed.eaipTax;
   const allCollapsed = collapsed.nec && collapsed.dis && collapsed.sav && collapsed.preTax && collapsed.postTax && collapsed.postSav && collapsed.fedTax && collapsed.stTax && collapsed.preSav && collapsed.eaip && collapsed.eaipTax;

@@ -1,4 +1,4 @@
-import { useRef, useMemo, Component } from "react";
+import { useRef, useMemo, useEffect, Component } from "react";
 import { VisColsCtx } from "./components/ui.jsx";
 import useAppState from "./hooks/useAppState.jsx";
 import CategoriesTab from "./tabs/CategoriesTab.jsx";
@@ -67,6 +67,27 @@ function App() {
   const iconRef = useRef(null);
   const headerRef = useRef(null);
 
+  /* Track the sticky outer header's height in a CSS custom property so
+     nested sticky elements (the Budget tab's column header row) can stick
+     just BELOW the header instead of being hidden behind it.
+     The header height varies — banner expand/collapse, toolbar expand/collapse,
+     subtab pill row present or not, mobile vs desktop padding — so a static
+     constant won't work. ResizeObserver fires whenever the header re-lays-out,
+     including when its children toggle, which is exactly what we want.
+     Falls back to ~120px before measurement so the first paint isn't broken. */
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const apply = () => {
+      const h = el.getBoundingClientRect().height;
+      document.documentElement.style.setProperty("--header-h", `${Math.ceil(h)}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Tab badge: count of transactions with no category. Mirrors the in-tab
   // counter on the Transactions toolbar (`!t.category`) so both readouts
   // agree. Rows with splits still count here even though splits carry the
@@ -84,7 +105,7 @@ function App() {
         html, body { max-width: 100vw; margin: 0; padding: 0; overflow-x: hidden; }
         * { box-sizing: border-box; }
         input, textarea, select { max-width: 100%; min-width: 0; }
-        :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); }
+        :root { --card-bg:#fff; --card-color:#222; --input-bg:#fafafa; --input-color:#222; --input-border:#e0e0e0; --tx:#333; --tx2:#555; --tx3:#999; --bdr:#e0e0e0; --bdr2:#e0ddd8; --shadow:0 1px 4px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.03); --header-h:120px; }
         input, textarea { background: var(--input-bg) !important; color: var(--input-color) !important; border-color: var(--input-border) !important; }
         select { color: var(--input-color) !important; border-color: var(--input-border) !important; }
         select:not(.cat-dd) { background: var(--input-bg) !important; }

@@ -68,16 +68,33 @@ export function EditTxt({ value, onChange, color }) {
 }
 
 export const VisColsCtx = createContext({ wk: true, mo: true, y48: true, y52: true });
-export const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub }) => {
+/* Row — one budget line.
+   `color` paints the whole row a single color (e.g. all taxes red).
+   `signed` overrides per-cell: each numeric cell colors green if ≥0, red if <0.
+   Use `signed` on totals whose sign can vary across columns — e.g. the
+   "Remaining to Budget" row, where wk/mo/y48 may be negative while y52
+   is positive once the extra 4 paychecks roll in. Mixing both: `signed`
+   wins for the value cells; `color` still applies to the label cell so
+   the row keeps its visual identity. */
+/* Color helpers for value-aware row coloring. Exported for tests; consumed
+   by `Row` when `signed` is true. SIGNED_POS/SIGNED_NEG match the inline
+   green/red used by the live "Remaining to Budget" backgrounds — keep them
+   in sync if those backgrounds ever theme-shift. */
+export const SIGNED_POS = "#2ECC71";
+export const SIGNED_NEG = "#E74C3C";
+export const cellColor = (signed, fallback, v) => signed ? ((v ?? 0) >= 0 ? SIGNED_POS : SIGNED_NEG) : fallback;
+export const Row = ({ label, wk, mo, y48, y52, color, bold, border, sub, signed }) => {
   const vc = useContext(VisColsCtx);
   const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr"].filter(Boolean).join(" ");
+  const fb = color || "var(--tx, #333)";
+  const fbY52 = color || "var(--tx3, #888)";
   return (
   <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: "6px 0", alignItems: "center", borderTop: border ? "2px solid var(--bdr2, #e0ddd8)" : "none", fontWeight: bold ? 700 : 400 }}>
     <div style={{ fontSize: 12, color: color || "var(--tx, #333)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}{sub && <span style={{ fontSize: 10, color: "var(--tx3, #999)", marginLeft: 4 }}>({sub})</span>}</div>
-    {vc.wk && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(wk)}</div>}
-    {vc.mo && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(mo)}</div>}
-    {vc.y48 && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx, #333)" }}>{fmt(y48)}</div>}
-    {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: color || "var(--tx3, #888)" }}>{fmt(y52)}</div>}
+    {vc.wk && <div style={{ fontSize: 12, textAlign: "right", color: cellColor(signed, fb, wk) }}>{fmt(wk)}</div>}
+    {vc.mo && <div style={{ fontSize: 12, textAlign: "right", color: cellColor(signed, fb, mo) }}>{fmt(mo)}</div>}
+    {vc.y48 && <div style={{ fontSize: 12, textAlign: "right", color: cellColor(signed, fb, y48) }}>{fmt(y48)}</div>}
+    {vc.y52 && <div style={{ fontSize: 12, textAlign: "right", color: cellColor(signed, fbY52, y52) }}>{fmt(y52)}</div>}
   </div>
   );
 };
