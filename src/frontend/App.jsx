@@ -156,39 +156,6 @@ function App() {
         </div>
         {/* Banner + Toolbar - inside sticky header, only on budget tab */}
         {S.tab === "budget" && S.budgetSubtab === "live" && <BudgetToolbar mob={S.mob} dk={S.dk} waf={S.waf} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} tSavW={S.tSavW} remY52={S.remY52} bannerOpen={S.bannerOpen} setBannerOpen={S.setBannerOpen} toolbarOpen={S.toolbarOpen} setToolbarOpen={S.setToolbarOpen} visCols={S.visCols} setVisCols={S.setVisCols} sortBy={S.sortBy} setSortBy={S.setSortBy} sortDir={S.sortDir} setSortDir={S.setSortDir} hlThresh={S.hlThresh} setHlThresh={S.setHlThresh} hlPeriod={S.hlPeriod} setHlPeriod={S.setHlPeriod} showPerPerson={S.showPerPerson} setShowPerPerson={S.setShowPerPerson} isMixed={S.isMixed} allExpanded={S.allExpanded} expandAll={S.expandAll} collapseAll={S.collapseAll} toggleAll={S.toggleAll} setShowAddItem={S.setShowAddItem} setShowBulkAdd={S.setShowBulkAdd} cats={S.cats} setBulkTargets={S.setBulkTargets} setBulkName={S.setBulkName} setBulkVal={S.setBulkVal} setBulkCat={S.setBulkCat} milestones={S.milestones} setMilestones={S.setMilestones} msDate={S.msDate} setMsDate={S.setMsDate} msLabel={S.msLabel} setMsLabel={S.setMsLabel} ewk={S.ewk} savSorted={S.savSorted} st={S.st} C_full={S.C} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW_full={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} retirementW={S.retirementW} totalAllSavingsW={S.totalAllSavingsW} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} cIraTrad={S.cIraTrad} cIraRoth={S.cIraRoth} kIraTrad={S.kIraTrad} kIraRoth={S.kIraRoth} exp={S.exp} sav={S.sav} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} tax={S.tax} />}
-        {/* Column header strip — lives in the sticky outer header so it's
-            always pinned just below the title/tabs/toolbar chrome. Was
-            previously inside the budget Card with position:sticky + top:0,
-            which made it disappear behind the outer header (z-index 50 > 2).
-            A CSS-var + ResizeObserver attempt to park it below the chrome
-            went sideways in practice — root cause not fully diagnosed, but
-            symptom was the header rendering mid-table instead of sticking.
-            Putting it INSIDE the sticky chrome sidesteps the whole problem:
-            the chrome itself sticks, this rides along with it. No new
-            position:sticky, no measurement, nothing to go wrong.
-            Padding math: it needs to align with the Card's grid below.
-              desktop: body 20px + Card 24px = 44px from viewport edge
-              mobile:  body 10px + Card 14px = 24px from viewport edge
-            The outer 1100/auto wrapper provides 20px (desktop) / 10px
-            (mobile), the grid padding adds the remaining 24/14. */}
-        {S.tab === "budget" && S.budgetSubtab === "live" && (() => {
-          const vc = S.visCols;
-          const cols = ["1.8fr", vc.wk && "1fr", vc.mo && "1fr", vc.y48 && "1fr", vc.y52 && "1fr"].filter(Boolean).join(" ");
-          const hdrs = [""];
-          if (vc.wk) hdrs.push("Weekly");
-          if (vc.mo) hdrs.push("Monthly");
-          if (vc.y48) hdrs.push("Yr (48)");
-          if (vc.y52) hdrs.push("Yr (52)");
-          return (
-            <div style={{ background: "var(--card-bg, #fff)", borderBottom: "2px solid var(--bdr2, #d0cdc8)" }}>
-              <div style={{ maxWidth: 1100, margin: "0 auto", padding: S.mob ? "6px 10px" : "6px 20px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: cols, gap: 4, padding: S.mob ? "0 14px" : "0 24px" }}>
-                  {hdrs.map(h => <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3, #999)", textTransform: "uppercase", letterSpacing: 1, textAlign: h === "" ? "left" : "right" }}>{h}</div>)}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
       </div>
 
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: S.mob ? "12px 10px 60px" : "24px 20px 60px" }}>

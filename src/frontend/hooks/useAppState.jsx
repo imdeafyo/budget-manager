@@ -206,10 +206,17 @@ export default function useAppState() {
   const [transferCats, setTransferCats] = useState(DEF_TRANSFER_CATS);
   const [incomeCats, setIncomeCats] = useState(DEF_INCOME_CATS);
   const [newCat, setNewCat] = useState("");
-  const [sortBy, setSortBy] = useState("default");
-  const [sortDir, setSortDir] = useState("desc");
-  const [hlThresh, setHlThresh] = useState("200");
-  const [hlPeriod, setHlPeriod] = useState("w");
+  /* The block below converts ephemeral UI toggles into per-device prefs.
+     Pattern (matches bannerOpen/toolbarOpen above): useState(() => read from
+     localStorage with try/catch and a default), paired with a write effect
+     in the persistence section at the bottom of this hook. Keys are all
+     prefixed with `budget-` so they're easy to spot/clear in DevTools.
+     If you add a NEW UI toggle that should persist, follow the same pattern
+     and add a write effect — easy to miss the writer and silently regress. */
+  const [sortBy, setSortBy] = useState(() => { try { return localStorage.getItem("budget-sort-by") || "default"; } catch { return "default"; } });
+  const [sortDir, setSortDir] = useState(() => { try { return localStorage.getItem("budget-sort-dir") || "desc"; } catch { return "desc"; } });
+  const [hlThresh, setHlThresh] = useState(() => { try { return localStorage.getItem("budget-hl-thresh") || "200"; } catch { return "200"; } });
+  const [hlPeriod, setHlPeriod] = useState(() => { try { return localStorage.getItem("budget-hl-period") || "w"; } catch { return "w"; } });
   const [niN, setNiN] = useState(""); const [niC, setNiC] = useState(DEF_CATS[0]);
   const [niT, setNiT] = useState("N"); const [niS, setNiS] = useState("exp"); const [niP, setNiP] = useState("m"); const [niV, setNiV] = useState("");
   const [showAddItem, setShowAddItem] = useState(false);
@@ -217,7 +224,7 @@ export default function useAppState() {
   const [bannerOpen, setBannerOpen] = useState(() => { try { const v = localStorage.getItem("budget-banner"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
   const [toolbarOpen, setToolbarOpen] = useState(() => { try { const v = localStorage.getItem("budget-toolbar"); return v !== null ? v === "true" : (!window.innerWidth || window.innerWidth >= 700); } catch { return true; } });
   const [visCols, setVisCols] = useState(() => { try { const v = localStorage.getItem("budget-cols"); return v ? JSON.parse(v) : { wk: true, mo: !window.innerWidth || window.innerWidth >= 700, y48: true, y52: !window.innerWidth || window.innerWidth >= 700 }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
-  const [showPerPerson, setShowPerPerson] = useState(false);
+  const [showPerPerson, setShowPerPerson] = useState(() => { try { return localStorage.getItem("budget-show-per-person") === "true"; } catch { return false; } });
   const [milestones, setMilestones] = useState([]);
   const [msLabel, setMsLabel] = useState("");
   const [msDate, setMsDate] = useState("");
@@ -232,15 +239,17 @@ export default function useAppState() {
   const [bulkSec, setBulkSec] = useState("exp");
   const [bulkCat, setBulkCat] = useState("");
   const [bulkTargets, setBulkTargets] = useState({});
-  const [catChartMode, setCatChartMode] = useState("stacked");
+  const [catChartMode, setCatChartMode] = useState(() => { try { return localStorage.getItem("budget-cat-chart-mode") || "stacked"; } catch { return "stacked"; } });
   const [catHistoryName, setCatHistoryName] = useState("");
-  const [catHistMode, setCatHistMode] = useState("line");
-  const [itemHistMode, setItemHistMode] = useState("category");
-  const [necDisMode, setNecDisMode] = useState("line");
-  const [msHistView, setMsHistView] = useState("years");
-  const [msHistYear, setMsHistYear] = useState(null);
-  const [savRateBase, setSavRateBase] = useState("net");
-  const [chartWeeks, setChartWeeks] = useState(48);
+  const [catHistMode, setCatHistMode] = useState(() => { try { return localStorage.getItem("budget-cat-hist-mode") || "line"; } catch { return "line"; } });
+  const [itemHistMode, setItemHistMode] = useState(() => { try { return localStorage.getItem("budget-item-hist-mode") || "category"; } catch { return "category"; } });
+  const [necDisMode, setNecDisMode] = useState(() => { try { return localStorage.getItem("budget-nec-dis-mode") || "line"; } catch { return "line"; } });
+  const [msHistView, setMsHistView] = useState(() => { try { return localStorage.getItem("budget-ms-hist-view") || "years"; } catch { return "years"; } });
+  /* msHistYear is nullable (year string or null) — JSON-encode so null survives.
+     The filter resets to "all years" if storage is unparseable. */
+  const [msHistYear, setMsHistYear] = useState(() => { try { const v = localStorage.getItem("budget-ms-hist-year"); return v ? JSON.parse(v) : null; } catch { return null; } });
+  const [savRateBase, setSavRateBase] = useState(() => { try { return localStorage.getItem("budget-sav-rate-base") || "net"; } catch { return "net"; } });
+  const [chartWeeks, setChartWeeks] = useState(() => { try { const v = localStorage.getItem("budget-chart-weeks"); const n = v ? parseInt(v, 10) : 48; return (n === 48 || n === 52) ? n : 48; } catch { return 48; } });
   // Chart time window: "all" | "ytd" | "1y" | "5y" | "10y"
   // Used by chart date-range filtering. Persisted per-device (layout choice).
   const [chartTimeWindow, setChartTimeWindow] = useState(() => {
@@ -268,7 +277,7 @@ export default function useAppState() {
   const expandAll = () => setCollapsed({ nec: false, dis: false, sav: false, preTax: false, postTax: false, postSav: false, fedTax: false, stTax: false, preSav: false, eaip: false, eaipTax: false });
   const collapseAll = () => setCollapsed({ nec: true, dis: true, sav: true, preTax: true, postTax: true, postSav: true, fedTax: true, stTax: true, preSav: true, eaip: true, eaipTax: true });
   const toggleAll = () => { if (allExpanded) collapseAll(); else expandAll(); };
-  const [includeEaip, setIncludeEaip] = useState(false);
+  const [includeEaip, setIncludeEaip] = useState(() => { try { return localStorage.getItem("budget-include-eaip") === "true"; } catch { return false; } });
 
   /* ── Transactions state ──
      transactions: the row array
@@ -1071,6 +1080,24 @@ export default function useAppState() {
   useEffect(() => { try { localStorage.setItem("budget-cols", JSON.stringify(visCols)); } catch {} }, [visCols]);
   useEffect(() => { try { localStorage.setItem("budget-milestone-cols", JSON.stringify(msVisCols)); } catch {} }, [msVisCols]);
   useEffect(() => { try { localStorage.setItem("budget-chart-order", JSON.stringify(chartOrder)); } catch {} }, [chartOrder]);
+  /* UI toggles persisted per-device. Keep paired with the read-initializers
+     near the top of this hook; both halves must move together if a key
+     changes. JSON-encode anything nullable (msHistYear) — string fields use
+     bare setItem since the read side defaults a missing key correctly. */
+  useEffect(() => { try { localStorage.setItem("budget-sort-by", sortBy); } catch {} }, [sortBy]);
+  useEffect(() => { try { localStorage.setItem("budget-sort-dir", sortDir); } catch {} }, [sortDir]);
+  useEffect(() => { try { localStorage.setItem("budget-hl-thresh", hlThresh); } catch {} }, [hlThresh]);
+  useEffect(() => { try { localStorage.setItem("budget-hl-period", hlPeriod); } catch {} }, [hlPeriod]);
+  useEffect(() => { try { localStorage.setItem("budget-show-per-person", showPerPerson); } catch {} }, [showPerPerson]);
+  useEffect(() => { try { localStorage.setItem("budget-include-eaip", includeEaip); } catch {} }, [includeEaip]);
+  useEffect(() => { try { localStorage.setItem("budget-sav-rate-base", savRateBase); } catch {} }, [savRateBase]);
+  useEffect(() => { try { localStorage.setItem("budget-chart-weeks", chartWeeks); } catch {} }, [chartWeeks]);
+  useEffect(() => { try { localStorage.setItem("budget-cat-chart-mode", catChartMode); } catch {} }, [catChartMode]);
+  useEffect(() => { try { localStorage.setItem("budget-cat-hist-mode", catHistMode); } catch {} }, [catHistMode]);
+  useEffect(() => { try { localStorage.setItem("budget-item-hist-mode", itemHistMode); } catch {} }, [itemHistMode]);
+  useEffect(() => { try { localStorage.setItem("budget-nec-dis-mode", necDisMode); } catch {} }, [necDisMode]);
+  useEffect(() => { try { localStorage.setItem("budget-ms-hist-view", msHistView); } catch {} }, [msHistView]);
+  useEffect(() => { try { localStorage.setItem("budget-ms-hist-year", JSON.stringify(msHistYear)); } catch {} }, [msHistYear]);
 
   const chartDragHandlers = useMemo(() => ({
     onDragStart: (id) => setDragChart(id),
