@@ -230,15 +230,16 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.n + "_" + item.idx} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
         <Row label="Total Savings" wk={-tSavW} mo={-moC(tSavW)} y48={-y4(tSavW)} y52={-y5(tSavW)} bold border color="#2ECC71" />
 
-        {/* The three "Remaining/Total Savings/Total Annual Savings" rows below
-            sit on hardcoded pale-pink / pale-green backgrounds that don't
-            theme-shift. In dark mode `var(--tx)` flips to a light color and
-            the labels become invisible against those pale backgrounds. Pass
-            an explicit dark `color` so the label stays readable in every
-            theme; `signed` still drives per-cell value coloring because
-            value cells use cellColor(signed, fallback, v) and `signed` wins. */}
+        {/* The three rows below mix signs across columns (wk/mo/y48 can be
+            negative while y52 rolls into the green at 52 paychecks), so
+            `signed` paints each value cell green/red based on its OWN sign.
+            `color` still drives the LABEL — kept on the same green/red
+            scheme as before so the row reads as "this row is mostly fine"
+            or "this row is mostly underwater" at a glance, and so the label
+            stays readable on the pale fixed backgrounds in every theme
+            (var(--tx) flips light in dark mode and disappears). */}
         <div style={{ marginTop: 8, padding: "10px 8px", background: remW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold signed color="#1a1a1a" />
+          <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold signed color={remW >= 0 ? "#2ECC71" : "#E74C3C"} />
         </div>
         {/* Total Savings + Remaining — the budget tab's view of "savings I'm
             committing to from my paycheck-after-retirement." When overspent
@@ -246,7 +247,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             row reflects that by going below tSavW and tinting red. Previously
             this was floored at Math.max(0, remW) which hid the overspend. */}
         <div style={{ marginTop: 4, padding: "6px 8px", background: totalSavPlusRemW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold signed color="#1a1a1a" />
+          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold signed color={totalSavPlusRemW >= 0 ? "#2ECC71" : "#E74C3C"} />
         </div>
         {/* Total Annual Savings — adds retirement contributions (401(k) pre+Roth,
             IRA Trad+Roth, both partners) that were already subtracted from C.net
@@ -254,7 +255,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             actually saving per year" answer. Only shown when retirement > 0,
             otherwise it'd duplicate the row above. */}
         {retirementW > 0 && <div style={{ marginTop: 4, padding: "6px 8px", background: totalAllSavingsW >= 0 ? "#e8f6ed" : "#fef0ed", borderRadius: 8 }}>
-          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold signed color="#1a1a1a" />
+          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold signed color={totalAllSavingsW >= 0 ? "#2ECC71" : "#E74C3C"} />
           <div style={{ padding: "2px 0 0", fontSize: 10, color: "var(--tx3,#888)", textAlign: "right" }}>incl. 401(k) + IRA: {fmt(y5(retirementW))}/yr</div>
         </div>}
 
