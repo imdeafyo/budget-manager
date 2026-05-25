@@ -898,7 +898,25 @@ export default function useAppState() {
   const remW = C.net - tExpW - tSavW;
   const remY48 = C.net * 48 - tExpW * 48 - tSavW * 48;
   const remY52 = C.net * 52 - tExpW * 48 - tSavW * 52;
-  const totalSavPlusRemW = tSavW + Math.max(0, remW);
+  // Total Savings + Remaining = budget-tab Savings Goals + leftover after expenses.
+  // No floor on remW: if expenses exceed net, some of the budgeted `sav` lines
+  // are aspirational and the combined row should reflect that (it can go below
+  // tSavW, even negative). Hiding overspend with Math.max(0, remW) was wrong —
+  // it made the "+ Remaining" row stay flat while the dedicated Remaining row
+  // showed red, contradicting each other.
+  const totalSavPlusRemW = tSavW + remW;
+  // Sum of all weekly retirement contributions already subtracted from C.net.
+  // 401(k) pre + Roth for both partners (C.c4w / C.k4w include both legs each),
+  // plus IRA Trad + Roth for both partners. Employer match (C.cMP / C.kMP) is
+  // not included — it's compensation, not "what I am contributing." If a future
+  // need wants household-savings-including-match, add it explicitly there.
+  const retirementW = C.c4w + C.k4w + (C.cIraTradW || 0) + (C.cIraRothW || 0) + (C.kIraTradW || 0) + (C.kIraRothW || 0);
+  // Total Annual Savings = budget-tab savings + leftover + all retirement.
+  // This is the "what am I actually saving per year" number. Roth IRA / Roth 401(k)
+  // / Trad IRA / Trad 401(k) all lower C.net (so they're invisible in tSavW + remW)
+  // but they ARE savings; this field adds them back. Bonus net is layered on top
+  // of this at the row level when present.
+  const totalAllSavingsW = totalSavPlusRemW + retirementW;
 
   const budgetTotal = (savRateBase === "gross" ? (C.cw + C.kw) * chartWeeks : C.net * chartWeeks) + (includeEaip ? (savRateBase === "gross" ? C.eaipGross : C.eaipNet) : 0);
   const allocatedTotal = (tExpW + tSavW) * 48;
@@ -1171,7 +1189,7 @@ export default function useAppState() {
     // calculations
     C, moC, y4, y5,
     ewk, necI, disI, savSorted,
-    tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW,
+    tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, retirementW, totalAllSavingsW,
     budgetTotal, allocatedTotal, unallocatedPct,
     catTot, typTot,
     // CRUD

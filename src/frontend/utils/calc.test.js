@@ -328,7 +328,7 @@ describe("recalcMilestonePure — milestone recalculation", () => {
     expect(out.expW).toBeCloseTo(150, 5);
   });
 
-  it("savings rate uses (savings + remaining) / net income", () => {
+  it("savings rate uses (savings + remaining + retirement) / net income — no floor on remaining", () => {
     const m = {
       cSalary: 104000, kSalary: 0,
       items: {
@@ -337,9 +337,85 @@ describe("recalcMilestonePure — milestone recalculation", () => {
     };
     const out = recalcMilestonePure(m, ctx);
     expect(out.savW).toBeCloseTo(100, 5);
-    // savRate = (savW + max(0, remW)) / netW * 100
-    const expected = (out.savW + Math.max(0, out.remW)) / out.netW * 100;
+    // Post-fix: savRate = (savW + remW + retirementW) / netW * 100
+    // With no 401(k) or IRA configured, retirementW is 0, so this collapses to
+    // the simpler "all leftover net is savings" form for a single-earner $104k
+    // milestone with $100/wk earmarked savings.
+    const expected = (out.savW + out.remW + (out.retirementW || 0)) / out.netW * 100;
     expect(out.savRate).toBeCloseTo(expected, 5);
+  });
+
+  it("savRate drops (not floors) when expenses exceed net income", () => {
+    // Overspending milestone: $50k single-earner, $80k of expenses booked.
+    // Pre-fix: savRate floored remW at 0 so the rate was just savW/netW —
+    // identical to an on-budget version of the same milestone. That hid the
+    // overspend on the displayed history. Post-fix the rate should drop
+    // below the savings-only rate because rW is negative and counts against.
+    const onBudget = recalcMilestonePure({
+      cSalary: 50000, kSalary: 0,
+      items: { save: { t: "S", v: 2400 } }, // $50/wk savings
+    }, ctx);
+    const overspent = recalcMilestonePure({
+      cSalary: 50000, kSalary: 0,
+      items: {
+        save: { t: "S", v: 2400 },
+        rent: { t: "N", v: 80000 }, // huge expense, swamps net
+      }
+    }, ctx);
+    expect(overspent.remW).toBeLessThan(0);
+    // The overspent milestone's savings rate must be lower than the on-budget
+    // one, because the negative remW now drags it down instead of being floored.
+    expect(overspent.savRate).toBeLessThan(onBudget.savRate);
+  });
+
+  it("savRate includes 401(k) and IRA contributions in numerator", () => {
+    // Without retirement: a household saving $5k/yr via budget tab on $100k.
+    const noRetire = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0,
+      items: { save: { t: "S", v: 5000 } },
+    }, ctx);
+    // Same household, but also putting 10% into 401(k) pre-tax.
+    // C.net drops because 10% was diverted, but the savings rate should
+    // be HIGHER because that 10% is real savings.
+    const withRetire = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0,
+      items: { save: { t: "S", v: 5000 } },
+      fullState: { c4pre: "10", c4ro: "0", k4pre: "0", k4ro: "0" },
+    }, ctx);
+    expect(withRetire.retirementW).toBeGreaterThan(0);
+    // Sanity: ~10% of 100k / 52 wk ≈ $192/wk
+    expect(withRetire.retirementW).toBeCloseTo(100000 * 0.10 / 52, 1);
+    expect(withRetire.savRate).toBeGreaterThan(noRetire.savRate);
+  });
+
+  it("savRate includes Roth IRA (the specific gap user flagged)", () => {
+    // The flag was that "Total Savings + Remaining + Bonus" was missing
+    // Roth IRA. The milestone-level mirror of that is savRate. This pins
+    // the new behavior: adding a $7k/yr Roth IRA should raise savRate.
+    const baseline = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0,
+      items: { save: { t: "S", v: 0 } },
+    }, ctx);
+    const withRoth = recalcMilestonePure({
+      cSalary: 100000, kSalary: 0,
+      items: { save: { t: "S", v: 0 } },
+      fullState: { cIraRoth: "7000" },
+    }, ctx);
+    // Roth IRA contribution surfaces in retirementW…
+    expect(withRoth.retirementW).toBeCloseTo(7000 / 52, 3);
+    // …and lifts the savings rate (it had been invisible pre-fix).
+    expect(withRoth.savRate).toBeGreaterThan(baseline.savRate);
+  });
+
+  it("savRate counts both Trad and Roth IRA for both partners", () => {
+    const baseline = recalcMilestonePure({ cSalary: 100000, kSalary: 80000, items: {} }, ctx);
+    const all = recalcMilestonePure({
+      cSalary: 100000, kSalary: 80000, items: {},
+      fullState: { cIraTrad: "3500", cIraRoth: "3500", kIraTrad: "3500", kIraRoth: "3500" },
+    }, ctx);
+    // 4 × $3500 / 52 = ~$269/wk
+    expect(all.retirementW).toBeCloseTo(14000 / 52, 3);
+    expect(all.savRate).toBeGreaterThan(baseline.savRate);
   });
 
   it("selects tax year from milestone date", () => {

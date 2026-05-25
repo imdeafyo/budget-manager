@@ -145,13 +145,25 @@ export function recalcMilestonePure(mObj, ctx) {
   const kBonusTax = kBonusGross * mr + Math.max(0, Math.min(kBonusGross, Math.max(0, sTD.ssCap - sKS))) * sR + kBonusGross * mR + (kBonusGross > 0 ? calcStateTax(kTxW * 52 + kBonusGross, sP2.abbr || "", sF) - calcStateTax(kTxW * 52, sP2.abbr || "", sF) : 0) + kBonusGross * (sP2.famli || 0) / 100;
   const cBonusNet = cBonusGross - cBonusTax;
   const kBonusNet = kBonusGross - kBonusTax;
-  const totalSavPlusRem = sW + Math.max(0, rW);
+  // savRate / savRateGross — uses "all savings" (budget-tab Savings Goals +
+  // leftover after expenses + every weekly retirement contribution) divided
+  // by net (or gross). Previously this used (sW + max(0, rW)) which both
+  //   (a) floored remW so overspending milestones reported the same rate as
+  //       on-budget ones, and
+  //   (b) ignored 401(k) + IRA contributions entirely, understating savings
+  //       rate for any household using retirement accounts.
+  // Both fixes match the new Budget tab "Total Annual Savings" row semantics
+  // so milestone display and live display agree.
+  const retirementW = c4preW + c4roW + k4preW + k4roW + cIraTradW + cIraRothW + kIraTradW + kIraRothW;
+  const totalSavingsAllW = sW + rW + retirementW;
   return {
     ...mObj,
     necW: nec / 48, disW: dis / 48, expW: eW, savW: sW, remW: rW,
     netW: nW, grossW: gW, cNetW: n1, kNetW: n2, cGrossW: sw1, kGrossW: sw2,
-    savRate: nW > 0 ? (totalSavPlusRem / nW * 100) : 0,
-    savRateGross: gW > 0 ? (totalSavPlusRem / gW * 100) : 0,
+    retirementW,
+    totalSavingsAllW,
+    savRate: nW > 0 ? (totalSavingsAllW / nW * 100) : 0,
+    savRateGross: gW > 0 ? (totalSavingsAllW / gW * 100) : 0,
     eaipGross: cBonusGross + kBonusGross, eaipNet: cBonusNet + kBonusNet,
     cEaipNet: cBonusNet, kEaipNet: kBonusNet,
     cEaipPct: cBonusPct, kEaipPct: kBonusPct,

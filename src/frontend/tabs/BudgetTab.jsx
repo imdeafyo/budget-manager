@@ -4,7 +4,7 @@ import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
 
-export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cIraTrad, cIraRoth, kIraTrad, kIraRoth, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
+export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, bannerOpen, setBannerOpen, toolbarOpen, setToolbarOpen, visCols, setVisCols, sortBy, setSortBy, sortDir, setSortDir, hlThresh, setHlThresh, hlPeriod, setHlPeriod, showPerPerson, setShowPerPerson, isMixed, allExpanded, expandAll, collapseAll, toggleAll, setShowAddItem, setShowBulkAdd, cats, setBulkTargets, setBulkName, setBulkVal, setBulkCat, showBulkAdd: _sb, milestones, setMilestones, msDate, setMsDate, msLabel, setMsLabel, ewk, savSorted, st, C_full, tNW, tDW, tExpW, tSavW_full, remW, totalSavPlusRemW, retirementW = 0, totalAllSavingsW, cSal, kSal, cEaip, kEaip, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, cIraTrad, cIraRoth, kIraTrad, kIraRoth, exp, sav, savCats, transferCats, incomeCats, tax, NI: _ni }) {
   // Save Milestone modal — moved from ChartsTab. Opens when 📸 button is clicked.
   const [showSaveMs, setShowSaveMs] = useState(false);
   const _Cf = C_full || C;
@@ -18,8 +18,8 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
     setMilestones(prev => [...prev, {
       id: newId, date: dateUsed, label: labelUsed,
       grossW: _Cf.cw + _Cf.kw, netW: _Cf.net, necW: tNW, disW: tDW, expW: tExpW, savW: tSavW_full,
-      remW, savRate: _Cf.net > 0 ? (totalSavPlusRemW / _Cf.net * 100) : 0,
-      savRateGross: (_Cf.cw + _Cf.kw) > 0 ? (totalSavPlusRemW / (_Cf.cw + _Cf.kw) * 100) : 0,
+      remW, savRate: _Cf.net > 0 ? (totalAllSavingsW / _Cf.net * 100) : 0,
+      savRateGross: (_Cf.cw + _Cf.kw) > 0 ? (totalAllSavingsW / (_Cf.cw + _Cf.kw) * 100) : 0,
       cNetW: _Cf.cNet, kNetW: _Cf.kNet, cGrossW: _Cf.cw, kGrossW: _Cf.kw,
       cSalary: evalF(cSal), kSalary: evalF(kSal), fil, p1State: tax.p1State, p2State: tax.p2State,
       eaipNet: _Cf.eaipNet, eaipGross: _Cf.eaipGross, cEaipNet: _Cf.cEaipNet, kEaipNet: _Cf.kEaipNet,
@@ -47,13 +47,13 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "4px 12px 2px", background: dk ? "#1e1e1e" : waf ? "#d0ccc7" : "#ede7e0", borderTop: `1px solid ${dk ? "#333" : waf ? "#c0bbb5" : "#ddd"}` }}>
       <div onClick={() => setBannerOpen(p => !p)} style={{ cursor: "pointer" }}>
         {bannerOpen ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(7, 1fr)", gap: 6, textAlign: "center", padding: "8px 0" }}>
-          {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + Math.max(0, remY52)), "#2ECC71"], ["Savings + Bonus", fmt(y5(tSavW) + Math.max(0, remY52) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
+          {[["Net / Week", fmt(C.net), "#4ECDC4"], ["Net / Month", fmt(moC(C.net)), "#F2A93B"], ["Net / Year (48)", fmt(y4(C.net)), "#4ECDC4"], ["Net / Year (52)", fmt(y5(C.net)), "#888"], ["Bonus (net)", fmt(C.eaipNet), "#9B59B6"], ["Savings / Year", fmt(y5(tSavW) + remY52), "#2ECC71"], ["All Savings + Bonus", fmt(y5(tSavW) + remY52 + y5(retirementW) + C.eaipNet), "#1ABC9C"]].map(([l, v, c]) => (
             <div key={l}><div style={{ fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>{l}</div><div style={{ fontSize: mob ? 12 : 15, fontWeight: 800, color: c, fontFamily: "'Fraunces',serif" }}>{v}</div></div>
           ))}
           {mob && <div style={{ gridColumn: "1/-1", fontSize: 9, color: "var(--tx3,#999)", textAlign: "center" }}>tap to collapse ▴</div>}
         </div> : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
           <span style={{ fontSize: 14, fontWeight: 800, color: "#4ECDC4", fontFamily: "'Fraunces',serif" }}>Net: {fmt(C.net)}/wk</span>
-          <span style={{ fontSize: 14, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Savings: {fmt(y5(tSavW) + Math.max(0, remY52))}/yr</span>
+          <span style={{ fontSize: 14, fontWeight: 800, color: "#2ECC71", fontFamily: "'Fraunces',serif" }}>Savings: {fmt(y5(tSavW) + remY52)}/yr</span>
           <span style={{ fontSize: 10, color: "var(--tx3,#999)" }}>▾</span>
         </div>}
       </div>
@@ -132,7 +132,7 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
   );
 }
 
-export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, milestones, setMilestones, recalcMilestone }) {
+export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, retirementW = 0, totalAllSavingsW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, milestones, setMilestones, recalcMilestone }) {
   return (
     <div>
 
@@ -233,9 +233,23 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         <div style={{ marginTop: 8, padding: "10px 8px", background: remW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
           <Row label="Remaining to Budget" wk={remW} mo={moC(remW)} y48={remY48} y52={remY52} bold color={remW >= 0 ? "#2ECC71" : "#E74C3C"} />
         </div>
-        <div style={{ marginTop: 4, padding: "6px 8px", background: "#f0faf5", borderRadius: 8 }}>
-          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + Math.max(0, remY52)} bold color="#2ECC71" />
+        {/* Total Savings + Remaining — the budget tab's view of "savings I'm
+            committing to from my paycheck-after-retirement." When overspent
+            (remW < 0), some of the `sav` lines can't actually be funded — the
+            row reflects that by going below tSavW and tinting red. Previously
+            this was floored at Math.max(0, remW) which hid the overspend. */}
+        <div style={{ marginTop: 4, padding: "6px 8px", background: totalSavPlusRemW >= 0 ? "#f0faf5" : "#fef0ed", borderRadius: 8 }}>
+          <Row label="Total Savings + Remaining" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW)} y52={y5(tSavW) + remY52} bold color={totalSavPlusRemW >= 0 ? "#2ECC71" : "#E74C3C"} />
         </div>
+        {/* Total Annual Savings — adds retirement contributions (401(k) pre+Roth,
+            IRA Trad+Roth, both partners) that were already subtracted from C.net
+            and therefore don't appear in the rows above. This is the "what am I
+            actually saving per year" answer. Only shown when retirement > 0,
+            otherwise it'd duplicate the row above. */}
+        {retirementW > 0 && <div style={{ marginTop: 4, padding: "6px 8px", background: totalAllSavingsW >= 0 ? "#e8f6ed" : "#fef0ed", borderRadius: 8 }}>
+          <Row label="Total Annual Savings (incl. Retirement)" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW)} y52={y5(tSavW) + remY52 + y5(retirementW)} bold color={totalAllSavingsW >= 0 ? "#2ECC71" : "#E74C3C"} />
+          <div style={{ padding: "2px 0 0", fontSize: 10, color: "var(--tx3,#888)", textAlign: "right" }}>incl. 401(k) + IRA: {fmt(y5(retirementW))}/yr</div>
+        </div>}
 
         {/* Bonus Section */}
         {C.eaipGross > 0 && <>
@@ -273,8 +287,13 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
             <Row label="Bonus Net (take-home)" wk={0} mo={0} y48={C.eaipNet} y52={C.eaipNet} bold color="var(--c-posttax, #9B59B6)" />
             {showPerPerson && <div style={{ padding: "4px 0", fontSize: 12, color: "var(--tx3,#888)" }}>{p1Name}: {fmt(C.cEaipNet)} • {p2Name}: {fmt(C.kEaipNet)}</div>}
           </div>
-          <div style={{ marginTop: 4, padding: "8px", background: "#f0faf5", borderRadius: 8 }}>
-            <Row label="Total Savings + Remaining + Bonus" wk={totalSavPlusRemW} mo={moC(totalSavPlusRemW)} y48={y4(totalSavPlusRemW) + C.eaipNet} y52={y5(tSavW) + Math.max(0, remY52) + C.eaipNet} bold color="#2ECC71" />
+          {/* Grand-total row when bonus exists. Builds on Total Annual Savings
+              and layers Bonus net on top. y52 column is built fresh (not from
+              totalAllSavingsW) because the y52 view treats expenses as fixed-
+              cost 48× while income/savings/retirement scale 52×. */}
+          <div style={{ marginTop: 4, padding: "8px", background: (totalAllSavingsW + C.eaipNet) >= 0 ? "#e8f6ed" : "#fef0ed", borderRadius: 8 }}>
+            <Row label="Total Annual Savings + Bonus" wk={totalAllSavingsW} mo={moC(totalAllSavingsW)} y48={y4(totalAllSavingsW) + C.eaipNet} y52={y5(tSavW) + remY52 + y5(retirementW) + C.eaipNet} bold color={(totalAllSavingsW + C.eaipNet) >= 0 ? "#2ECC71" : "#E74C3C"} />
+            <div style={{ padding: "2px 0 0", fontSize: 10, color: "var(--tx3,#888)", textAlign: "right" }}>budget sav + leftover + 401(k) + IRA + bonus net</div>
           </div>
         </>}
 
