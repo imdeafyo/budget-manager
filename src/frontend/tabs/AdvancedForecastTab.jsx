@@ -95,6 +95,75 @@ function migrateAccountName(account, p1Name, p2Name) {
   return { ...rest, nickname };
 }
 
+/* ── FIRE rate/multiplier input ──
+   Tiny controlled input for the FIRE row in the Advanced toolbar. Lets the
+   user enter EITHER a safe withdrawal rate (e.g. "4" for 4%) OR a spending
+   multiplier (e.g. "25" for 25× annual spending). Internally we always
+   store SWR as the source of truth; multiplier mode converts via
+   swr = 1 / mult and displays mult = 1 / swr.
+
+   Why this exists as its own component (vs inline `NI`):
+   - Toolbar has its own tight visual style (small text, 50–60px wide,
+     compact padding) that doesn't fit `NI`'s 8px-pad / 2px-border / icon
+     prefix look. Keeping toolbar inputs visually consistent matters more
+     than DRY here.
+   - The old inline `<input>` had a fully-controlled `value` driven by
+     `(swr * 100).toFixed(2)` PLUS an onChange that ran `setSwr` on every
+     keystroke. That made it impossible to backspace ("4.00" → backspace
+     gives "4.0", parseFloat=4, setSwr(0.04), re-renders to "4.00" — no
+     visible change), impossible to type sub-1% values ("0.5" never gets
+     past "0"), and impossible to enter decimals at all ("4.5" snaps back
+     to "4.00" after "4."). The local-while-focused pattern from `NI` is
+     the standard fix in this codebase.
+
+   Props:
+   - swr: current SWR as decimal (0.04 = 4%)
+   - setSwr: setter accepting a decimal
+   - mode: "rate" or "multiplier" — controls what the user enters
+*/
+function FireRateInput({ swr, setSwr, mode }) {
+  const isMult = mode === "multiplier";
+  const displayFromSwr = (s) => {
+    if (!isFinite(s) || s <= 0) return isMult ? "25.0" : "4.00";
+    return isMult ? (1 / s).toFixed(1) : (s * 100).toFixed(2);
+  };
+  const [local, setLocal] = useState(() => displayFromSwr(swr));
+  const [focused, setFocused] = useState(false);
+  /* Resync the local string from `swr` whenever the user is NOT typing.
+     This covers: mode toggle (rate ↔ multiplier), preset button clicks
+     elsewhere, milestone restore, JSON import — anything that updates
+     `swr` from outside this component. Without the !focused guard, every
+     keystroke would re-trigger this effect and snap the cursor back. */
+  useEffect(() => { if (!focused) setLocal(displayFromSwr(swr)); }, [swr, focused, isMult]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={local}
+      onFocus={e => { setFocused(true); e.target.select(); }}
+      onChange={e => setLocal(e.target.value)}
+      onBlur={() => {
+        setFocused(false);
+        const v = evalF(local);
+        if (!isFinite(v) || v <= 0) { setSwr(0.04); return; }
+        if (isMult) {
+          /* Multiplier: clamp to sensible range. 5×–200× covers 20% SWR
+             down to 0.5% SWR. Anything outside is almost certainly a
+             typo. */
+          const mult = Math.max(5, Math.min(200, v));
+          setSwr(1 / mult);
+        } else {
+          /* Rate: 0.1%–50%. Same reasoning. */
+          const rate = Math.max(0.1, Math.min(50, v));
+          setSwr(rate / 100);
+        }
+      }}
+      onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+      style={{ width: isMult ? 50 : 54, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }}
+    />
+  );
+}
+
 /* ── Advanced (account-based) Forecast tab ──
    Promoted from a nested mode of ForecastTab to its own Charts subtab.
    Manages horizon / inflation / FIRE locally via the same localStorage keys
@@ -159,6 +228,13 @@ export default function AdvancedForecastTab({
   const setRetirementSpendingOverride = (v) => setFireCfg("retirementSpendingOverride", v);
   const ltcgRate = (typeof fireConfig.ltcgRate === "number" && fireConfig.ltcgRate >= 0) ? fireConfig.ltcgRate : 0.15;
   const setLtcgRate = (v) => setFireCfg("ltcgRate", v);
+  /* Input mode for the FIRE rate control: "rate" (default, e.g. 4%) or
+     "multiplier" (e.g. 25×). Stored on fireConfig so it persists with
+     state and is shared with the Simple tab if it ever adopts the same
+     toggle. SWR remains the source of truth — this just picks how the
+     user enters it. */
+  const fireInputMode = (fireConfig.fireInputMode === "multiplier") ? "multiplier" : "rate";
+  const setFireInputMode = (v) => setFireCfg("fireInputMode", v === "multiplier" ? "multiplier" : "rate");
   const [showFireBreakdown, setShowFireBreakdown] = useState(() => { try { return localStorage.getItem("forecast-adv-fire-breakdown") === "1"; } catch { return false; } });
   useEffect(() => { try { localStorage.setItem("forecast-adv-fire-breakdown", showFireBreakdown ? "1" : "0"); } catch {} }, [showFireBreakdown]);
 
@@ -1065,23 +1141,24 @@ export default function AdvancedForecastTab({
               <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
               {fireEnabled && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-                  title={"Withdrawal rate — how much of the portfolio you withdraw each year in retirement.\n\n• 3% = very conservative, 50+ yr retirement\n• 3.5% = conservative, FIRE-typical\n• 4% = Trinity standard, 30 yr horizon\n• 5% = aggressive\n\nFull config (spending override, tax breakdown) on the Simple Forecast tab."}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>SWR</span>
-                  <input
-                    type="text"
-                    value={(swr * 100).toFixed(2)}
-                    onChange={e => {
-                      const raw = e.target.value;
-                      const n = parseFloat(raw);
-                      if (isFinite(n) && n > 0 && n < 50) setSwr(n / 100);
-                    }}
-                    onBlur={e => {
-                      const v = evalF(e.target.value);
-                      if (!isFinite(v) || v <= 0 || v >= 50) setSwr(0.04);
-                      else setSwr(v / 100);
-                    }}
-                    style={{ width: 54, padding: "3px 6px", fontSize: 12, fontWeight: 700, textAlign: "center", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)", fontFamily: "'DM Sans',sans-serif" }} />
-                  <span style={{ fontSize: 11, color: "var(--tx3,#888)" }}>%</span>
+                  title={fireInputMode === "multiplier"
+                    ? "Spending multiplier — portfolio size as a multiple of annual spending.\n\n• 33× ≈ 3% withdrawal, very conservative, 50+ yr retirement\n• 28× ≈ 3.5%, conservative, FIRE-typical\n• 25× = 4%, Trinity standard, 30 yr horizon\n• 20× = 5%, aggressive\n\nClick the % / × pill to switch to withdrawal rate.\n\nFull config (spending override, tax breakdown) on the Simple Forecast tab."
+                    : "Withdrawal rate — how much of the portfolio you withdraw each year in retirement.\n\n• 3% = very conservative, 50+ yr retirement\n• 3.5% = conservative, FIRE-typical\n• 4% = Trinity standard, 30 yr horizon\n• 5% = aggressive\n\nClick the % / × pill to switch to spending multiplier.\n\nFull config (spending override, tax breakdown) on the Simple Forecast tab."}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>{fireInputMode === "multiplier" ? "Mult" : "SWR"}</span>
+                  <FireRateInput swr={swr} setSwr={setSwr} mode={fireInputMode} />
+                  {/* Mode pill — clickable %/× toggle. Active side is
+                      highlighted; click the inactive side to switch. */}
+                  <button
+                    onClick={() => setFireInputMode(fireInputMode === "multiplier" ? "rate" : "multiplier")}
+                    title={fireInputMode === "multiplier" ? "Switch to withdrawal rate (e.g. 4%)" : "Switch to spending multiplier (e.g. 25×)"}
+                    style={{ padding: "2px 6px", fontSize: 11, fontWeight: 700, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--tx2,#555)", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.2 }}>
+                    {fireInputMode === "multiplier" ? "×" : "%"}
+                  </button>
+                  {/* Equivalent in the other unit — small grey hint. */}
+                  <span style={{ fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}
+                    title={fireInputMode === "multiplier" ? "Equivalent safe withdrawal rate" : "Equivalent spending multiplier"}>
+                    ≈ {fireInputMode === "multiplier" ? `${(swr * 100).toFixed(2)}%` : `${(1 / swr).toFixed(1)}×`}
+                  </span>
                 </span>
               )}
               {fireEnabled && fireTarget > 0 && (() => {
@@ -1111,6 +1188,24 @@ export default function AdvancedForecastTab({
                 {!useSimpleMultiplier && fireResult.tax && fireResult.tax.totalTax > 0 && (
                   <span style={{ marginLeft: 6, fontStyle: "italic" }}>· {fireMultiplierNum.toFixed(1)}× spending (tax-adj.)</span>
                 )}
+              </span>
+            )}
+            {/* Annual withdrawal — the actual $ being withdrawn each year
+                at FI. In classic mode this equals spending (no tax gross-up,
+                so "withdrawal" = "spending need" by definition). In tax-aware
+                mode this is `grossNeed` = spending + estimated retirement
+                tax, i.e. what you actually pull from the portfolio before
+                tax is paid. Useful sanity check: at 4% SWR, this should
+                equal 4% of the today's-$ target. */}
+            {fireEnabled && fireTarget > 0 && (
+              <span style={{ fontSize: 11, color: "var(--tx3,#888)", paddingLeft: 38 }}
+                title={useSimpleMultiplier
+                  ? `Annual withdrawal = spending = ${fmt(fireSpending)}. Classic rule applies no tax gross-up.`
+                  : `Annual gross withdrawal in retirement: ${fmt(fireSpending)} net spending + ${fmt(fireResult.tax?.totalTax || 0)} estimated tax = ${fmt(fireResult.grossNeed)} pulled from the portfolio each year.`}>
+                Annual withdrawal: <strong style={{ color: "var(--tx2,#555)" }}>{fmt(fireResult.grossNeed || fireSpending)}</strong>
+                <span style={{ marginLeft: 6, fontStyle: "italic" }}>
+                  · {(swr * 100).toFixed(2)}% of {fmt(fireTarget)}
+                </span>
               </span>
             )}
           </span>
