@@ -41,6 +41,52 @@ Scope:
 - **Bonus-payment-to-principal scenarios** — one-time lump sums applied
   to principal, which would shift the computed endsOn earlier.
 
+### Phase 14c — Loan ↔ Ending Obligation sync
+
+Motivation: with Phase 14b (Loans section) shipped alongside the
+pre-existing Ending Obligation loan-mode, the same mortgage gets modeled
+twice — once in the Loans section (pure amortization tracker, decorative)
+and once in an Ending Obligation (drives the forecast when the payment
+ends and redirects to a destination account). Both need balance + rate +
+term to compute payoff, and refinances / rate changes force the user to
+edit both. Real friction surfaced in screenshot review on 2026-05-26
+(mortgage entered twice with slightly different rates, 6.3 vs 6.5).
+
+Design (preferred — Option A from the discussion):
+
+- **Per-row link picker on each Loan.** Dropdown showing all
+  loan-mode Ending Obligations: `— Unlinked —` | `Mortgage P&I + Extra
+  (combined)` | … Default `Unlinked` so existing rows aren't auto-linked.
+- **Direction toggle next to the picker**: `→` (Loan writes to EO,
+  most common — scratch-pad amortization first, then commit), `←` (EO
+  writes to Loan), `⇄` (bidirectional, last-write-wins).
+- **Fields that sync**: Principal ↔ EO balance, Rate % ↔ EO rate.
+  Maybe Origination ↔ EO start date. **Extra/mo does NOT sync** by
+  default — keep it as a scratch-pad field for "what if I paid an extra
+  $500." Add a separate "Apply extra to budget" button as a one-shot
+  commit that adds the extra to the linked budget item.
+- **EO label rendering in the picker**: when the EO has multiple
+  linked budget items (e.g. Mortgage P&I + Mortgage P&I Extra Payment),
+  show the combined name so the user isn't confused that one Loan row
+  syncs to two budget lines.
+- **Subtle sync indicator** when a row is linked: small "↻ syncing to
+  Mortgage P&I" hint under the row, so editing doesn't feel like a
+  surprise.
+- **Backfill prompt**: on tab load, if there are Loans + Ending
+  Obligations that look related (same approximate balance ± 10%, same
+  rate ± 0.5%), show a one-time banner: "You have a Loan and an Ending
+  Obligation that look related — want to link them?"
+
+Out of scope for the first cut (could be a follow-up):
+
+- Auto-creating an EO from a Loan ("Promote to forecast" button). Adds
+  complexity; user can do it manually for now via the existing EO UI.
+- Auto-creating a Loan from an EO. Same.
+- Multi-budget-item Loans (split a single Loan across multiple EOs).
+
+Not urgent. Real friction will appear over months of editing, not
+weeks. Probably 1–2 sessions when it's time.
+
 ## Server / Infrastructure
 
 ### PVC for log persistence (Phase 6.5b-B, deferred)
