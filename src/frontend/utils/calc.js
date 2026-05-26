@@ -356,10 +356,35 @@ export function forecastGrowthAccounts(accounts, years, opts) {
 
        Resolved by `resolveOneTimeEvents` in utils/oneTimeEvents.js. */
     appliedOneTimeEvents = [],
+    /* Loans (Phase 14). Each resolved loan
+       { id, label, principal, sourceAccountId, targetAccountId?,
+         overflowAccountId?, originationMonthIndex, payoffMonthIndex,
+         monthlyPaymentAmount, termMonths }
+       drives three kinds of monthly events on the forecast:
+         - Monthly DEBIT of monthlyPaymentAmount from sourceAccountId
+           starting at originationMonthIndex through payoffMonthIndex
+           (final payment shortened to exactly the remaining principal
+           to avoid float drift).
+         - One-time CREDIT of `principal` to targetAccountId at
+           originationMonthIndex (only if targetAccountId is set).
+         - Recurring overflow CREDIT of monthlyPaymentAmount to
+           overflowAccountId starting at payoffMonthIndex+1 (only if
+           overflowAccountId is set AND distinct from sourceAccountId
+           — when equal, the freed cash simply stays in source by
+           virtue of no longer being debited).
+
+       Loans are NEVER subject to pool caps. The principal credit at
+       origination bypasses any contribution limit on targetAccountId
+       (it's debt proceeds, not a contribution). The overflow credit
+       likewise bypasses caps on overflowAccountId (the cash is post-
+       payoff freed money — it has to go somewhere).
+
+       Resolved by `resolveLoans` in utils/loans.js. */
+    appliedLoans = [],
   } = opts || {};
 
   if (!Array.isArray(accounts) || accounts.length === 0) {
-    return { years: [], accountSeries: {}, poolWarnings: [], underwaterWarnings: [] };
+    return { years: [], accountSeries: {}, poolWarnings: [], underwaterWarnings: [], loanSummaries: [] };
   }
   if (typeof getPoolLimit !== "function" || !accountTypeToPool) {
     throw new Error("forecastGrowthAccounts requires getPoolLimit and accountTypeToPool in opts");
@@ -484,6 +509,187 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   const oneTimeCursor = {};
   for (const a of accounts) oneTimeCursor[a.id] = 0;
 
+  /* ── Loans (Phase 14) ──
+     Pre-group loan-derived events by accountId, in three buckets:
+
+       loanDebitsForAcct[id]       — array of { monthIndex, amount,
+                                                loanId, isFinalPayment,
+                                                remainingPrincipal }
+                                     sorted by monthIndex.
+                                     Each entry is a monthly debit from
+                                     sourceAccountId. The final-payment
+                                     entry's amount may be < the regular
+                                     amount (shortened-last-payment).
+       loanOriginations[id]        — array of { monthIndex, amount,
+                                                loanId } sorted by
+                                     monthIndex. Each entry is a
+                                     one-shot credit of `principal` to
+                                     targetAccountId at origination.
+       loanOverflowDeltas[id]      — array of { monthIndex, monthlyDelta,
+                                                loanId } sorted by
+                                     monthIndex. Each entry is a running
+                                     additive delta to overflowAccountId
+                                     starting at payoffMonthIndex+1
+                                     (same accumulator pattern as
+                                     ending events).
+
+     We build a per-loan amortization schedule once and walk it month
+     by month against the monthly cursor, identically to the other
+     event types. This keeps the inner monthly loop O(monthly events)
+     instead of O(loans × months). */
+  const loanDebitsForAcct = {};
+  const loanOriginations = {};
+  const loanOverflowDeltas = {};
+  const loanSummaries = [];
+
+  if (Array.isArray(appliedLoans)) {
+    const horizonMonths = years * 12;
+    for (const ln of appliedLoans) {
+      if (!ln || !ln.sourceAccountId) continue;
+      const pay = Number(ln.monthlyPaymentAmount);
+      if (!isFinite(pay) || pay <= 0) continue;
+      const origin = Number(ln.originationMonthIndex);
+      const payoff = Number(ln.payoffMonthIndex);
+      if (!isFinite(origin) || !isFinite(payoff) || origin < 1) continue;
+
+      const principal = Number(ln.principal) || 0;
+
+      /* 1. Origination credit to target (if set). One event per loan. */
+      if (ln.targetAccountId && origin <= horizonMonths) {
+        if (!loanOriginations[ln.targetAccountId]) loanOriginations[ln.targetAccountId] = [];
+        loanOriginations[ln.targetAccountId].push({
+          monthIndex: origin,
+          amount: principal,
+          loanId: ln.id,
+        });
+      }
+
+      /* 2. Monthly debits. Build the schedule against the constant
+         monthly payment, applying the shortened-last-payment rule on
+         the actual payoff month. We don't need the per-month
+         interest/principal split here because the math layer only
+         adjusts the source account's balance — the split is for UI
+         surfacing in the Loan editor, not the forecast.
+
+         Clamp at horizon — debits past the horizon are simply not
+         applied (the loan continues to amortize in reality, but the
+         projection doesn't reach those months). */
+      const lastDebitMonth = Math.min(payoff, horizonMonths);
+      let totalInterest = 0;
+      let totalPaid = 0;
+      if (origin <= horizonMonths && lastDebitMonth >= origin) {
+        if (!loanDebitsForAcct[ln.sourceAccountId]) loanDebitsForAcct[ln.sourceAccountId] = [];
+
+        /* Track running balance to compute the shortened final payment.
+           Annual rate is recoverable from monthlyPaymentAmount + term +
+           principal, but it's cleaner to re-derive monthly interest
+           from the schedule. We do the small amortization walk here
+           since we need it for `totalInterest` / `totalPaid` anyway
+           — this is per-loan setup, not per-account-per-month. */
+        const n = Number(ln.termMonths) || (payoff - origin + 1);
+        // Find r such that pay = P · r / (1 - (1+r)^-n). For 0% loans pay = P/n.
+        let monthlyR = 0;
+        if (Math.abs(pay * n - principal) > 0.01 && principal > 0 && n > 0) {
+          /* Newton-Raphson on r — converges in ~5 iterations for typical
+             mortgage parameters. Seeded at the rough estimate
+             r ≈ (pay·n - P) / (P · n / 2). */
+          monthlyR = Math.max(1e-9, (pay * n - principal) / (principal * n / 2));
+          for (let iter = 0; iter < 30; iter++) {
+            const f = principal * monthlyR / (1 - Math.pow(1 + monthlyR, -n)) - pay;
+            // Numerical derivative
+            const h = 1e-7;
+            const f2 = principal * (monthlyR + h) / (1 - Math.pow(1 + monthlyR + h, -n)) - pay;
+            const fp = (f2 - f) / h;
+            if (Math.abs(fp) < 1e-12) break;
+            const next = monthlyR - f / fp;
+            if (!isFinite(next) || next < 0) break;
+            if (Math.abs(next - monthlyR) < 1e-10) { monthlyR = next; break; }
+            monthlyR = next;
+          }
+        }
+
+        let bal = principal;
+        for (let m = origin; m <= lastDebitMonth; m++) {
+          const interest = bal * monthlyR;
+          let principalPortion = pay - interest;
+          let amount = pay;
+          if (principalPortion >= bal - 1e-9) {
+            principalPortion = bal;
+            amount = interest + principalPortion;
+          }
+          bal -= principalPortion;
+          if (bal < 1e-9) bal = 0;
+          const isFinal = (m === payoff) || bal === 0;
+          loanDebitsForAcct[ln.sourceAccountId].push({
+            monthIndex: m,
+            amount,
+            loanId: ln.id,
+            isFinalPayment: isFinal,
+          });
+          totalInterest += interest;
+          totalPaid += amount;
+          if (bal === 0) break;
+        }
+      }
+
+      /* 3. Overflow recurring delta from payoff+1 onward. Only fires
+         when overflowAccountId is set AND distinct from source.
+         If equal, money simply stays in source (no debit, no credit).
+         If payoff is at or past the horizon, the overflow never fires
+         within the projection. */
+      if (
+        ln.overflowAccountId &&
+        ln.overflowAccountId !== ln.sourceAccountId &&
+        payoff < horizonMonths
+      ) {
+        if (!loanOverflowDeltas[ln.overflowAccountId]) loanOverflowDeltas[ln.overflowAccountId] = [];
+        loanOverflowDeltas[ln.overflowAccountId].push({
+          monthIndex: payoff + 1,
+          monthlyDelta: pay,
+          loanId: ln.id,
+        });
+      }
+
+      loanSummaries.push({
+        loanId: ln.id,
+        label: ln.label || "",
+        sourceAccountId: ln.sourceAccountId,
+        targetAccountId: ln.targetAccountId || null,
+        overflowAccountId: ln.overflowAccountId || null,
+        originationMonthIndex: origin,
+        payoffMonthIndex: payoff,
+        principal,
+        monthlyPaymentAmount: pay,
+        totalInterest,
+        totalPaid,
+        finishesWithinHorizon: payoff <= horizonMonths,
+      });
+    }
+    /* Sort all per-account event arrays by monthIndex so cursor walks
+       are well-defined. */
+    for (const k of Object.keys(loanDebitsForAcct)) {
+      loanDebitsForAcct[k].sort((a, b) => a.monthIndex - b.monthIndex);
+    }
+    for (const k of Object.keys(loanOriginations)) {
+      loanOriginations[k].sort((a, b) => a.monthIndex - b.monthIndex);
+    }
+    for (const k of Object.keys(loanOverflowDeltas)) {
+      loanOverflowDeltas[k].sort((a, b) => a.monthIndex - b.monthIndex);
+    }
+  }
+
+  /* Per-account cursors for the three loan event streams. */
+  const loanDebitCursor = {};
+  const loanOriginCursor = {};
+  const loanOverflowCursor = {};
+  const loanOverflowDelta = {}; // running additive monthly credit from past overflows
+  for (const a of accounts) {
+    loanDebitCursor[a.id] = 0;
+    loanOriginCursor[a.id] = 0;
+    loanOverflowCursor[a.id] = 0;
+    loanOverflowDelta[a.id] = 0;
+  }
+
   /* Per-account "first year balance went negative" tracker. Null until
      the balance crosses below zero for the first time. Set ONCE on the
      first negative crossing and persists across years. Surfaced in the
@@ -586,8 +792,22 @@ export function forecastGrowthAccounts(accounts, years, opts) {
          — they're balance adjustments. We track them separately so the
          year row can surface "one-time events: +/-$X" if needed for UI. */
       let oneTimeYearAmount = 0;
+      /* Track loan-driven amounts within the year for surfacing in
+         per-row series. `loanDebitYearAmount` is the total payments
+         OUT of this account in year y across all loans whose source
+         is this account (sign: positive number representing the
+         magnitude of outflow). `loanOriginationYearAmount` is the
+         total principal credited IN at origination (positive). The
+         overflow recurring delta is folded into `loanOverflowYearContrib`
+         and persists across years like the ending-event delta. */
+      let loanDebitYearAmount = 0;
+      let loanOriginationYearAmount = 0;
+      let loanOverflowYearContrib = 0;
       const acctEvents = eventsForAcct[a.id];
       const acctOneTime = oneTimeForAcct[a.id];
+      const acctLoanDebits = loanDebitsForAcct[a.id];
+      const acctLoanOrigins = loanOriginations[a.id];
+      const acctLoanOverflow = loanOverflowDeltas[a.id];
       for (let m = 0; m < 12; m++) {
         const absMonth = (y - 1) * 12 + m + 1; // 1-indexed absolute month
         if (acctEvents) {
@@ -617,6 +837,55 @@ export function forecastGrowthAccounts(accounts, years, opts) {
         const negativePortion = Math.min(bal, 0);
         bal = positivePortion * (1 + monthlyR) + negativePortion + effectiveMonthly;
         eventYearContrib += extraMonthlyDelta[a.id];
+
+        /* ── Loan events (Phase 14) ──
+           Applied AFTER monthly growth+contribution and BEFORE one-time
+           events. Order within a single month:
+             (a) Origination credit lands in target account.
+             (b) Monthly debit subtracts payment from source account.
+             (c) Overflow delta accumulates (post-payoff) and the running
+                 delta is added to balance. The accumulator pattern
+                 mirrors ending-events: when the cursor fires, the delta
+                 sticks for every subsequent month.
+
+           Loans bypass pool caps entirely — both the origination credit
+           and overflow credit are post-cap money flows. Negative
+           balances are allowed (underwater warning surfaces them). */
+        if (acctLoanOrigins) {
+          while (
+            loanOriginCursor[a.id] < acctLoanOrigins.length &&
+            acctLoanOrigins[loanOriginCursor[a.id]].monthIndex === absMonth
+          ) {
+            const amt = acctLoanOrigins[loanOriginCursor[a.id]].amount;
+            bal += amt;
+            loanOriginationYearAmount += amt;
+            loanOriginCursor[a.id] += 1;
+          }
+        }
+        if (acctLoanDebits) {
+          while (
+            loanDebitCursor[a.id] < acctLoanDebits.length &&
+            acctLoanDebits[loanDebitCursor[a.id]].monthIndex === absMonth
+          ) {
+            const amt = acctLoanDebits[loanDebitCursor[a.id]].amount;
+            bal -= amt;
+            loanDebitYearAmount += amt;
+            loanDebitCursor[a.id] += 1;
+          }
+        }
+        if (acctLoanOverflow) {
+          while (
+            loanOverflowCursor[a.id] < acctLoanOverflow.length &&
+            acctLoanOverflow[loanOverflowCursor[a.id]].monthIndex <= absMonth
+          ) {
+            loanOverflowDelta[a.id] += acctLoanOverflow[loanOverflowCursor[a.id]].monthlyDelta;
+            loanOverflowCursor[a.id] += 1;
+          }
+        }
+        if (loanOverflowDelta[a.id] !== 0) {
+          bal += loanOverflowDelta[a.id];
+          loanOverflowYearContrib += loanOverflowDelta[a.id];
+        }
         /* Fire all one-time events whose monthIndex matches this absolute
            month. Applied AFTER growth + contribution for the month so the
            lump-sum hits the post-contribution balance — matches the user
@@ -685,6 +954,20 @@ export function forecastGrowthAccounts(accounts, years, opts) {
            recover the balance above zero. The UI uses this for per-row
            highlighting in the year-by-year table. */
         underwater: bal < 0,
+        /* Total magnitude of loan payments debited from this account
+           in year y. Always non-negative — represents outflow. The
+           year-by-year UI table can surface this as "debt service this
+           year" alongside the contribution column. */
+        debtServiceThisYear: loanDebitYearAmount,
+        /* Total principal credited to this account in year y from loans
+           originating with targetAccountId=this account. Always
+           non-negative — represents inflow at origination. */
+        loanProceedsThisYear: loanOriginationYearAmount,
+        /* Running overflow contribution accumulated this year (sum of
+           the monthly overflow delta across all 12 months). When loans
+           pay off and redirect their freed payment here, this captures
+           how much got rerouted in year y. */
+        loanOverflowThisYear: loanOverflowYearContrib,
       });
       byAccount[a.id] = { nominal: bal, real, contribution: yearActualContrib, contribCum: cumContribs[a.id], contribCumReal: cumContribsReal[a.id] };
 
@@ -733,7 +1016,7 @@ export function forecastGrowthAccounts(accounts, years, opts) {
   }
   underwaterWarnings.sort((p, q) => p.firstNegativeYear - q.firstNegativeYear);
 
-  return { years: yearRows, accountSeries, poolWarnings, underwaterWarnings };
+  return { years: yearRows, accountSeries, poolWarnings, underwaterWarnings, loanSummaries };
 }
 
 /* ── How many years until annual contribution hits the pool limit? ──

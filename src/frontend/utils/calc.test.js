@@ -1772,3 +1772,240 @@ describe("poolHeadroom — Capped pool warning gate for ending obligations", () 
     expect(r.pool).toBe(null);
   });
 });
+
+describe("forecastGrowthAccounts — appliedLoans integration (Phase 14)", () => {
+  const baseOpts = {
+    baseYear: 2026,
+    inflationPct: 0,
+    p1BirthYear: 1985,
+    p2BirthYear: 1990,
+    hsaCoverage: "family",
+    getPoolLimit,
+    accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+  };
+
+  it("monthly debits reduce the source account balance", () => {
+    // $12,000 starting cash, $12,000 zero-interest loan over 12 months
+    // starting month 1 → $1000/mo debit. After year 1, cash = 0.
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 12000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "auto", principal: 12000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 1000, termMonths: 12,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    expect(r.years[1].byAccount.cash.nominal).toBeCloseTo(0, 2);
+    expect(r.accountSeries.cash[1].debtServiceThisYear).toBeCloseTo(12000, 2);
+  });
+
+  it("origination credits the target account with principal in the origination month", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 50000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "home", name: "Home", owner: "joint", type: "custom", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "mort", principal: 200000, sourceAccountId: "cash", targetAccountId: "home",
+      originationMonthIndex: 1, payoffMonthIndex: 360,
+      monthlyPaymentAmount: 1073.64, termMonths: 360,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // home account gets $200k at origination, no other activity
+    expect(r.accountSeries.home[1].balance).toBeCloseTo(200000, 0);
+    expect(r.accountSeries.home[1].loanProceedsThisYear).toBeCloseTo(200000, 0);
+    // cash account: 50k start - 12 * 1073.64 ≈ $37,116
+    expect(r.accountSeries.cash[1].balance).toBeCloseTo(50000 - 12 * 1073.64, 0);
+  });
+
+  it("no targetAccountId → no origination credit anywhere", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 12000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "other", name: "Other", owner: "joint", type: "taxable", startBalance: 5000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "auto", principal: 6000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 500, termMonths: 12,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // 'other' account is untouched — no principal credited anywhere
+    expect(r.accountSeries.other[1].balance).toBe(5000);
+    expect(r.accountSeries.other[1].loanProceedsThisYear).toBe(0);
+  });
+
+  it("overflow account receives freed monthly payment after payoff", () => {
+    // 12-month $12k zero-interest loan paid from cash, overflow to taxable.
+    // After month 12 payoff, taxable gets +$1000/mo for the remaining horizon.
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 50000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+      { id: "tax", name: "Taxable", owner: "joint", type: "taxable", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "auto", principal: 12000, sourceAccountId: "cash", overflowAccountId: "tax",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 1000, termMonths: 12,
+    }];
+    const r = forecastGrowthAccounts(accounts, 3, { ...baseOpts, appliedLoans: loans });
+    // Year 1: payoff happens at month 12. Overflow fires at month 13 onwards
+    // — so year 1 has $0 overflow.
+    expect(r.accountSeries.tax[1].balance).toBe(0);
+    // Year 2: 12 months × $1000 = $12,000
+    expect(r.accountSeries.tax[2].balance).toBeCloseTo(12000, 2);
+    expect(r.accountSeries.tax[2].loanOverflowThisYear).toBeCloseTo(12000, 2);
+    // Year 3: another $12,000 → $24,000
+    expect(r.accountSeries.tax[3].balance).toBeCloseTo(24000, 2);
+  });
+
+  it("overflow=source has no effect (money stays in source by virtue of no debit)", () => {
+    // 12-month $12k loan; after payoff, the cash that was going out simply
+    // stays. Compare two scenarios: with overflow=source vs no overflow.
+    // They should be balance-equivalent.
+    const accountsBase = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 50000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loanNoOverflow = [{
+      id: "L1", label: "auto", principal: 12000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 1000, termMonths: 12,
+    }];
+    const loanSelfOverflow = [{
+      ...loanNoOverflow[0], overflowAccountId: "cash",
+    }];
+    const r1 = forecastGrowthAccounts(accountsBase, 3, { ...baseOpts, appliedLoans: loanNoOverflow });
+    const r2 = forecastGrowthAccounts(accountsBase, 3, { ...baseOpts, appliedLoans: loanSelfOverflow });
+    expect(r1.accountSeries.cash[3].balance).toBeCloseTo(r2.accountSeries.cash[3].balance, 2);
+  });
+
+  it("loanSummaries records total interest and total paid for each loan", () => {
+    // $100,000 @ 6% / 360mo. Standard known totals:
+    //   monthly payment ≈ $599.55
+    //   total paid ≈ $215,838 (599.55 × 360)
+    //   total interest ≈ $115,838
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 300000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "mortgage", principal: 100000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 360,
+      monthlyPaymentAmount: 599.5505251, termMonths: 360,
+    }];
+    const r = forecastGrowthAccounts(accounts, 30, { ...baseOpts, appliedLoans: loans });
+    expect(r.loanSummaries.length).toBe(1);
+    expect(r.loanSummaries[0].loanId).toBe("L1");
+    expect(r.loanSummaries[0].totalInterest).toBeCloseTo(115838, -1); // ± $10
+    expect(r.loanSummaries[0].totalPaid).toBeCloseTo(215838, -1);
+    expect(r.loanSummaries[0].finishesWithinHorizon).toBe(true);
+  });
+
+  it("loanSummaries flags loans that don't finish within the horizon", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 1000000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    // 30-year loan, 10-year horizon
+    const loans = [{
+      id: "L1", label: "mortgage", principal: 300000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 360,
+      monthlyPaymentAmount: 1798.65, termMonths: 360,
+    }];
+    const r = forecastGrowthAccounts(accounts, 10, { ...baseOpts, appliedLoans: loans });
+    expect(r.loanSummaries[0].finishesWithinHorizon).toBe(false);
+  });
+
+  it("empty appliedLoans is a no-op equivalent to omitting the opt", () => {
+    const accounts = [
+      { id: "a", name: "A", owner: "p1", type: "taxable", startBalance: 10000, annualReturn: 5, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const r1 = forecastGrowthAccounts(accounts, 5, baseOpts);
+    const r2 = forecastGrowthAccounts(accounts, 5, { ...baseOpts, appliedLoans: [] });
+    expect(r1.accountSeries.a[5].balance).toBeCloseTo(r2.accountSeries.a[5].balance, 6);
+    expect(r2.loanSummaries).toEqual([]);
+  });
+
+  it("loan that pushes source account underwater triggers underwaterWarnings", () => {
+    // $10k cash, $50k loan with $5k/mo payments → bankruptcy in 2 months.
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 10000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "bad", principal: 50000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 4500, termMonths: 12,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    expect(r.underwaterWarnings.length).toBe(1);
+    expect(r.underwaterWarnings[0].firstNegativeYear).toBe(1);
+  });
+
+  it("origination credit precedes the first debit in the same month", () => {
+    // The first month sees both the principal credit (if target=source for
+    // testing — using source itself as target validates the order: $200k
+    // credit, then $1000 debit, ending balance should be +$199k not -$199k).
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 0, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "self-loan", principal: 200000, sourceAccountId: "cash", targetAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 360,
+      monthlyPaymentAmount: 1000, termMonths: 360,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // After year 1: 200k credited - 12k debited = $188k
+    expect(r.accountSeries.cash[1].balance).toBeCloseTo(188000, 0);
+    // Did NOT go underwater at month 1
+    expect(r.underwaterWarnings.length).toBe(0);
+  });
+
+  it("two loans on the same source account accumulate debits correctly", () => {
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 100000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [
+      { id: "L1", label: "auto", principal: 12000, sourceAccountId: "cash", originationMonthIndex: 1, payoffMonthIndex: 12, monthlyPaymentAmount: 1000, termMonths: 12 },
+      { id: "L2", label: "boat", principal: 24000, sourceAccountId: "cash", originationMonthIndex: 1, payoffMonthIndex: 12, monthlyPaymentAmount: 2000, termMonths: 12 },
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // Total debits: ($1000 + $2000) × 12 = $36,000 → ending balance $64k
+    expect(r.accountSeries.cash[1].balance).toBeCloseTo(64000, 2);
+    expect(r.accountSeries.cash[1].debtServiceThisYear).toBeCloseTo(36000, 2);
+    expect(r.loanSummaries.length).toBe(2);
+  });
+
+  it("debits past the horizon are simply not applied (loan continues in reality, projection stops)", () => {
+    // 24-month loan, horizon of 1 year → only first 12 debits apply
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 30000, annualReturn: 0, contribAmount: 0, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "auto", principal: 24000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 24,
+      monthlyPaymentAmount: 1000, termMonths: 24,
+    }];
+    const r = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // Only 12 months of payments applied within horizon = $12k debited
+    expect(r.accountSeries.cash[1].balance).toBeCloseTo(18000, 2);
+    expect(r.accountSeries.cash[1].debtServiceThisYear).toBeCloseTo(12000, 2);
+    expect(r.loanSummaries[0].finishesWithinHorizon).toBe(false);
+  });
+
+  it("loan + contribution + growth interact correctly", () => {
+    // $10k start, $200/mo contribution, $1000/mo loan debit, 5% return,
+    // 1-year projection. Monthly cash flow = +200 - 1000 = -$800.
+    // Ending balance should be lower than no-loan version by ~$12k payments + interest forgone.
+    const accounts = [
+      { id: "cash", name: "Cash", owner: "joint", type: "cash", startBalance: 10000, annualReturn: 5, contribAmount: 2400, annualIncrease: 0, capAtLimit: false },
+    ];
+    const loans = [{
+      id: "L1", label: "auto", principal: 12000, sourceAccountId: "cash",
+      originationMonthIndex: 1, payoffMonthIndex: 12,
+      monthlyPaymentAmount: 1000, termMonths: 12,
+    }];
+    const rNoLoan = forecastGrowthAccounts(accounts, 1, baseOpts);
+    const rWithLoan = forecastGrowthAccounts(accounts, 1, { ...baseOpts, appliedLoans: loans });
+    // With-loan balance should be lower by approximately $12k (minus a bit
+    // for interest on the now-smaller balance during the year)
+    const delta = rNoLoan.accountSeries.cash[1].balance - rWithLoan.accountSeries.cash[1].balance;
+    expect(delta).toBeGreaterThan(11000);
+    expect(delta).toBeLessThan(13000);
+  });
+});
