@@ -6,6 +6,7 @@ import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
+import { newLoanId, resolveLoans } from "../utils/loans.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
 
 /* ── Account type display metadata ──
@@ -576,6 +577,61 @@ export default function AdvancedForecastTab({
     });
   };
 
+  /* === Loans (Phase 14) ===
+     First-class debt modeling. Each loan amortizes over its term:
+     monthly payment debits sourceAccount; principal optionally credits
+     targetAccount at origination; on payoff, freed payment optionally
+     redirects to overflowAccount. Empty by default — UI surfaces a
+     section between One-time Events and the chart. See utils/loans.js
+     for shape + resolveLoans semantics. */
+  const loans = Array.isArray(forecast?.loans) ? forecast.loans : [];
+
+  const updateLoan = (id, patch) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.loans) ? prev.loans : [];
+      return { ...prev, loans: cur.map(ln => ln.id === id ? { ...ln, ...patch } : ln) };
+    });
+  };
+  const removeLoan = (id) => {
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.loans) ? prev.loans : [];
+      return { ...prev, loans: cur.filter(ln => ln.id !== id) };
+    });
+  };
+  const addLoan = () => {
+    /* Default source: first "cash" account if any, else first account. Cash
+       is by far the most likely source — loan payments come out of checking
+       in practice. */
+    const firstCash = accounts.find(a => a.type === "cash");
+    const defaultSourceId = (firstCash?.id) || accounts[0]?.id || "";
+    /* Default origination: 1 month out, first of that month. "Right now"
+       (current month) would land in `inPast` per resolveLoans semantics
+       — we'd rather the user see a working default than have to fix the
+       date before anything happens. */
+    const defaultDate = (() => {
+      const d = new Date();
+      const total = d.getFullYear() * 12 + d.getMonth() + 1;
+      const year = Math.floor(total / 12);
+      const month = (total % 12) + 1;
+      return `${year}-${String(month).padStart(2, "0")}-01`;
+    })();
+    const newLoan = {
+      id: newLoanId(),
+      label: "",
+      principal: 0,
+      originationDate: defaultDate,
+      interestRate: 6.5,         // reasonable post-2022 average for autos / personal
+      termMonths: 60,            // 5y — typical auto loan; user picks 360 for mortgage
+      sourceAccountId: defaultSourceId,
+      targetAccountId: null,     // user opts in if modeling the borrowed asset
+      overflowAccountId: null,   // optional post-payoff redirect
+    };
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.loans) ? prev.loans : [];
+      return { ...prev, loans: [...cur, newLoan] };
+    });
+  };
+
   /* Build the linked-item dropdown options. Single dropdown grouped by
      section (Expenses then Savings) so the user picks "Mortgage P&I"
      without first picking a section. Items with $0 amounts are still
@@ -662,6 +718,17 @@ export default function AdvancedForecastTab({
     const baseYM = { year: Number(yStr), month: Number(mStr) };
     return resolveOneTimeEvents(oneTimeEvents, accounts, baseYM, horizonMonths);
   }, [oneTimeEvents, accounts, baseYearMonth, horizon]);
+
+  /* Resolve loans. Mirrors the one-time-events shape — { loans, orphans,
+     inPast, outOfHorizon }. Recompute on loan/account/horizon change;
+     loan resolution depends only on those, not on budget content.
+     Same baseYearMonth split convention as resolveOneTimeEvents. */
+  const resolvedLoans = useMemo(() => {
+    const horizonMonths = (Number(horizon) || 0) * 12;
+    const [yStr, mStr] = baseYearMonth.split("-");
+    const baseYM = { year: Number(yStr), month: Number(mStr) };
+    return resolveLoans(loans, accounts, baseYM, horizonMonths);
+  }, [loans, accounts, baseYearMonth, horizon]);
 
   /* Detect duplicate itemRef assignments (one-ending-per-item invariant).
      UI prevents creating duplicates via dropdown disabling; this is a
@@ -939,8 +1006,9 @@ export default function AdvancedForecastTab({
       limitGrowthPct,
       appliedEndingEvents: resolvedEnding.events,
       appliedOneTimeEvents: resolvedOneTime.events,
+      appliedLoans: resolvedLoans.loans,
     });
-  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events, resolvedOneTime.events]);
+  }, [projAccounts, horizon, baseYear, inflationPct, tax?.p1BirthYear, tax?.p2BirthYear, hsaCoverage, limitGrowthPct, resolvedEnding.events, resolvedOneTime.events, resolvedLoans.loans]);
 
   /* Phase 15 — derive tax-aware FIRE target from the live projection.
      We extract the account mix at the FINAL projection year (horizon) as
@@ -2148,7 +2216,7 @@ export default function AdvancedForecastTab({
               ⚠ {projection.underwaterWarnings.length} account{projection.underwaterWarnings.length === 1 ? "" : "s"} went underwater
             </div>
             <div style={{ fontSize: 11, marginBottom: 8, color: "#8A4A3F" }}>
-              Negative balances stay flat in the projection (no fake interest at the savings return rate). Contributions reduce the debt dollar-for-dollar. The plan needs adjustment — move the event later, scale it back, or fund it from another account.
+              Negative balances stay flat in the projection (no fake interest at the savings return rate). Contributions reduce the debt dollar-for-dollar. If this is intentional financing — a mortgage, auto loan, or HELOC — model it as a <strong>Loan</strong> below instead, which will amortize the payment correctly. Otherwise the plan needs adjustment: move the event later, scale it back, or fund it from another account.
             </div>
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
               {projection.underwaterWarnings.map(w => {
@@ -2167,6 +2235,285 @@ export default function AdvancedForecastTab({
             </ul>
           </div>
         )}
+      </Card>
+
+      {/* ── Loans (Phase 14) ──
+          First-class debt modeling. An amortized monthly payment debits
+          sourceAccount; principal optionally credits targetAccount at
+          origination (mortgage funding a home asset, auto loan funding a
+          car asset); the freed payment optionally redirects to
+          overflowAccount after payoff. Distinct from One-time Events
+          (lump-sum, no amortization) and Ending Obligations (budget-side
+          item ending; no debt). */}
+      <Card>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>
+              Loans
+              {loans.length > 0 && (
+                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "var(--tx3,#888)" }}>
+                  ({loans.length})
+                </span>
+              )}
+            </h3>
+            <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginTop: 4, maxWidth: 680 }}>
+              First-class debt modeling. Enter the original loan amount, annual rate, and term — the monthly payment is computed via standard amortization. Payment debits the <strong>source</strong> account each month until payoff. Optionally credit the principal at origination to a <strong>target</strong> account (model a mortgage funding a home asset, or an auto loan funding a car). After payoff, optionally redirect the freed monthly payment to an <strong>overflow</strong> account. Loans bypass IRS contribution caps — they're debt servicing, not contributions.
+            </div>
+          </div>
+          <button
+            onClick={addLoan}
+            disabled={accounts.length === 0}
+            title={accounts.length === 0 ? "Add at least one forecast account first" : "Add a loan"}
+            style={{
+              padding: "6px 14px",
+              fontSize: 12,
+              fontWeight: 700,
+              border: "none",
+              borderRadius: 6,
+              background: accounts.length === 0 ? "var(--input-bg,#f5f5f5)" : "#556FB5",
+              color: accounts.length === 0 ? "var(--tx3,#aaa)" : "#fff",
+              cursor: accounts.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >+ Add</button>
+        </div>
+
+        {(resolvedLoans.orphans.length > 0 || resolvedLoans.inPast.length > 0 || resolvedLoans.outOfHorizon.length > 0) && (
+          <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400E", background: "rgba(243,156,18,0.12)", border: "1px solid rgba(243,156,18,0.35)", borderRadius: 6 }}>
+            {resolvedLoans.orphans.length > 0 && <div>⚠ {resolvedLoans.orphans.length} loan{resolvedLoans.orphans.length === 1 ? "" : "s"} can't be applied (missing account, invalid date, or bad amortization inputs).</div>}
+            {resolvedLoans.inPast.length > 0 && <div>ℹ {resolvedLoans.inPast.length} loan{resolvedLoans.inPast.length === 1 ? " originates" : "s originate"} in the past — not applied to the projection. (Mid-payment loans aren't modeled yet — start a fresh loan from a future date for now.)</div>}
+            {resolvedLoans.outOfHorizon.length > 0 && <div>ℹ {resolvedLoans.outOfHorizon.length} loan{resolvedLoans.outOfHorizon.length === 1 ? " originates" : "s originate"} beyond the forecast horizon — extend the horizon to include {resolvedLoans.outOfHorizon.length === 1 ? "it" : "them"}.</div>}
+          </div>
+        )}
+
+        {loans.length === 0 ? (
+          <div style={{ padding: "16px 12px", fontSize: 12, color: "var(--tx3,#888)", fontStyle: "italic", textAlign: "center", background: "var(--input-bg,#fafafa)", borderRadius: 6, border: "1px dashed var(--bdr,#ddd)" }}>
+            No loans configured. Click <strong>+ Add</strong> to model a mortgage, auto loan, HELOC, or other debt.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "var(--input-bg,#f8f8f8)" }}>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Label</th>
+                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Principal</th>
+                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Rate %</th>
+                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Term (mo)</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Origination</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Source (debit)</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Target (origination credit)</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Overflow (post-payoff)</th>
+                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Monthly</th>
+                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Status</th>
+                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {loans.map(ln => {
+                  /* Per-row status — derived from the resolved arrays. Same
+                     pattern as one-time events. We also surface the derived
+                     monthly payment (or "—" when math fails) so the user
+                     sees the amortization result inline. */
+                  const resolved = resolvedLoans.loans.find(r => r.id === ln.id);
+                  const orphan = resolvedLoans.orphans.find(r => r.id === ln.id);
+                  const inPast = resolvedLoans.inPast.some(r => r.id === ln.id);
+                  const outHz = resolvedLoans.outOfHorizon.some(r => r.id === ln.id);
+                  /* Summary entry — has totalInterest + finishesWithinHorizon. */
+                  const summary = (projection.loanSummaries || []).find(s => s.loanId === ln.id);
+                  let status = "Active";
+                  let statusColor = "#27AE60";
+                  let statusDetail = "";
+                  if (orphan) {
+                    /* Map resolver reason to a short user-facing label. The
+                       reason strings are stable per loans.js. */
+                    if (orphan.reason === "no-source-account" || orphan.reason === "source-account-missing") { status = "No source"; }
+                    else if (orphan.reason === "bad-origination-date") { status = "Bad date"; }
+                    else if (orphan.reason && orphan.reason.startsWith("amort-zero-principal")) { status = "$0 principal"; }
+                    else if (orphan.reason && orphan.reason.startsWith("amort-zero-term")) { status = "0mo term"; }
+                    else if (orphan.reason && orphan.reason.startsWith("amort-negative-rate")) { status = "Bad rate"; }
+                    else if (orphan.reason === "target-account-missing") {
+                      /* Partial orphan — loan still applies, just lost its
+                         target. The resolver also includes it in `loans`
+                         with targetAccountId nulled out, so the loan IS
+                         active in this case; just warn-flag it. */
+                      status = "Active*";
+                      statusColor = "#E67E22";
+                      statusDetail = "target missing";
+                    }
+                    else if (orphan.reason === "overflow-account-missing") {
+                      status = "Active*";
+                      statusColor = "#E67E22";
+                      statusDetail = "overflow missing";
+                    }
+                    else { status = "Error"; }
+                    if (status !== "Active*") statusColor = "#C0392B";
+                  } else if (inPast) {
+                    status = "In past"; statusColor = "#888";
+                  } else if (outHz) {
+                    status = "Future"; statusColor = "#888";
+                  } else if (resolved && summary && !summary.finishesWithinHorizon) {
+                    /* Loan is applied, but term outlasts the horizon — show
+                       that distinctly from "Active" so the user knows the
+                       projection doesn't include the full paydown. */
+                    status = "Active*";
+                    statusColor = "#E67E22";
+                    statusDetail = "term > horizon";
+                  } else if (!resolved) {
+                    status = "Inactive"; statusColor = "#888";
+                  }
+                  const monthlyDisplay = resolved ? fmt(Math.round(resolved.monthlyPaymentAmount)) : "—";
+                  return (
+                    <tr key={ln.id} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
+                      <td style={{ padding: 6 }}>
+                        <input
+                          type="text"
+                          value={ln.label || ""}
+                          onChange={(e) => updateLoan(ln.id, { label: e.target.value })}
+                          placeholder="e.g. home mortgage"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 140 }}
+                        />
+                      </td>
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        {/* Native numeric input — same rationale as one-time
+                            events: NI's blur-only commit is unreliable on
+                            mobile (iOS Safari especially). */}
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="any"
+                          value={ln.principal === 0 ? "" : ln.principal}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const n = raw === "" ? 0 : Number(raw);
+                            updateLoan(ln.id, { principal: Number.isFinite(n) ? n : 0 });
+                          }}
+                          placeholder="$"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 110, textAlign: "right" }}
+                        />
+                      </td>
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          value={ln.interestRate ?? ""}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const n = raw === "" ? 0 : Number(raw);
+                            updateLoan(ln.id, { interestRate: Number.isFinite(n) ? n : 0 });
+                          }}
+                          placeholder="%"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 70, textAlign: "right" }}
+                        />
+                      </td>
+                      <td style={{ padding: 6, textAlign: "right" }}>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          step="1"
+                          min="0"
+                          value={ln.termMonths === 0 ? "" : ln.termMonths}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const n = raw === "" ? 0 : Number(raw);
+                            updateLoan(ln.id, { termMonths: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0 });
+                          }}
+                          placeholder="months"
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 80, textAlign: "right" }}
+                        />
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <input
+                          type="date"
+                          value={ln.originationDate || ""}
+                          onChange={(e) => updateLoan(ln.id, { originationDate: e.target.value })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 140 }}
+                        />
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select
+                          value={ln.sourceAccountId || ""}
+                          onChange={(e) => updateLoan(ln.id, { sourceAccountId: e.target.value })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 140 }}
+                        >
+                          <option value="">— pick —</option>
+                          {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select
+                          value={ln.targetAccountId || ""}
+                          onChange={(e) => updateLoan(ln.id, { targetAccountId: e.target.value || null })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 140 }}
+                        >
+                          <option value="">— none —</option>
+                          {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        <select
+                          value={ln.overflowAccountId || ""}
+                          onChange={(e) => updateLoan(ln.id, { overflowAccountId: e.target.value || null })}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 140 }}
+                        >
+                          <option value="">— none —</option>
+                          {accounts.map(a => (
+                            <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td style={{ padding: 6, textAlign: "right", fontWeight: 600, color: "var(--card-color,#222)", whiteSpace: "nowrap" }}>
+                        {monthlyDisplay}
+                      </td>
+                      <td style={{ padding: 6, textAlign: "center", fontSize: 11, color: statusColor, fontWeight: 600 }}>
+                        <div>{status}</div>
+                        {statusDetail && <div style={{ fontSize: 10, fontWeight: 400, color: "var(--tx3,#888)" }}>{statusDetail}</div>}
+                      </td>
+                      <td style={{ padding: 6, textAlign: "center" }}>
+                        <button
+                          onClick={() => removeLoan(ln.id)}
+                          title="Delete loan"
+                          style={{ padding: "2px 8px", fontSize: 12, fontWeight: 700, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "#C0392B", cursor: "pointer" }}
+                        >×</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Loan summary — if any loans are active, surface aggregate totals
+            (total interest over horizon, count finishing within horizon)
+            so the user has the headline numbers without scanning rows. */}
+        {projection.loanSummaries && projection.loanSummaries.length > 0 && (() => {
+          const totalInterest = projection.loanSummaries.reduce((s, sm) => s + (sm.totalInterest || 0), 0);
+          const totalPaid = projection.loanSummaries.reduce((s, sm) => s + (sm.totalPaid || 0), 0);
+          const finishing = projection.loanSummaries.filter(sm => sm.finishesWithinHorizon).length;
+          const ongoing = projection.loanSummaries.length - finishing;
+          return (
+            <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--input-bg,#fafafa)", border: "1px solid var(--bdr,#eee)", borderRadius: 6, fontSize: 12, color: "var(--tx2,#555)" }}>
+              <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Total interest ({horizon}y)</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#C0392B", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(totalInterest))}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Total paid ({horizon}y)</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "var(--card-color,#222)", fontFamily: "'Fraunces',serif" }}>{fmt(Math.round(totalPaid))}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Paid off in horizon</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#27AE60", fontFamily: "'Fraunces',serif" }}>{finishing}{ongoing > 0 ? <span style={{ fontSize: 12, color: "var(--tx3,#888)", fontWeight: 400 }}> / {projection.loanSummaries.length}</span> : ""}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </Card>
 
       {/* Per-pool summary cards — moved above the chart so the headline
@@ -2475,6 +2822,15 @@ export default function AdvancedForecastTab({
                 <tr style={{ background: "var(--input-bg,#f8f8f8)" }}>
                   <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Year</th>
                   <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Total</th>
+                  {/* Debt Service column — only rendered when any loan is
+                      active. Sums debt service across ALL source accounts
+                      for the year. Distinct from the contribution columns:
+                      this is OUTFLOW to amortization, surfaced as a single
+                      aggregate so the user has the headline "how much went
+                      to debt this year" without scanning per-account. */}
+                  {projection.loanSummaries && projection.loanSummaries.length > 0 && (
+                    <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "#C0392B", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Debt Service</th>
+                  )}
                   {accounts.map(a => (
                     <th key={a.id} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: accountColors[a.id], borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>{deriveAccountName(a, p1Name, p2Name)}</th>
                   ))}
@@ -2484,10 +2840,24 @@ export default function AdvancedForecastTab({
                 </tr>
               </thead>
               <tbody>
-                {projection.years.map(row => (
+                {projection.years.map(row => {
+                  /* Sum debt service across every account that took a
+                     payment this year. The math layer per-account series
+                     carries debtServiceThisYear; aggregating here is
+                     cheaper than threading another field through
+                     row.totals. Always non-negative — represents outflow. */
+                  const totalDebtService = (projection.loanSummaries && projection.loanSummaries.length > 0)
+                    ? accounts.reduce((s, a) => s + (projection.accountSeries[a.id]?.[row.year]?.debtServiceThisYear || 0), 0)
+                    : 0;
+                  return (
                   <tr key={row.year} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
                     <td style={{ padding: 6, fontWeight: 700, color: "var(--card-color,#222)" }}>{row.year} <span style={{ color: "var(--tx3,#aaa)", fontWeight: 400 }}>({row.calendarYear})</span></td>
                     <td style={{ padding: 6, textAlign: "right", fontWeight: 700, color: "var(--card-color,#222)" }}>{fmt(Math.round(row.totals.nominal))}</td>
+                    {projection.loanSummaries && projection.loanSummaries.length > 0 && (
+                      <td style={{ padding: 6, textAlign: "right", color: totalDebtService > 0 ? "#C0392B" : "var(--tx3,#bbb)", fontWeight: totalDebtService > 0 ? 600 : 400, fontSize: 11 }}>
+                        {row.year === 0 || totalDebtService === 0 ? "—" : fmt(Math.round(totalDebtService))}
+                      </td>
+                    )}
                     {accounts.map(a => {
                       const series = projection.accountSeries[a.id]?.[row.year];
                       const isUnderwater = series?.underwater;
@@ -2508,7 +2878,8 @@ export default function AdvancedForecastTab({
                       );
                     })}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

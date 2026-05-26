@@ -377,6 +377,18 @@ export default function useAppState() {
        label }. Empty by default. See utils/oneTimeEvents.js for shape
        + resolveOneTimeEvents semantics. */
     oneTimeEvents: [],
+    /* Loans (Phase 14): first-class debt modeling on the per-account
+       forecast. Each loan debits a sourceAccount by its amortized
+       monthly payment until payoff, optionally credits a targetAccount
+       at origination (mortgage funding a home asset, auto loan funding
+       a car asset), and optionally redirects the freed payment to an
+       overflowAccount after payoff. Array of { id, label, principal,
+       originationDate "YYYY-MM" or "YYYY-MM-DD", interestRate (annual %),
+       termMonths, sourceAccountId, targetAccountId?, overflowAccountId? }.
+       Empty by default. See utils/loans.js for shape + resolveLoans
+       semantics; calc.js forecastGrowthAccounts consumes via
+       appliedLoans opt. */
+    loans: [],
     /* === Scenario inputs (moved from localStorage so they sync across devices) ===
        Both Simple and Advanced forecast tabs read/write these through
        setForecast. Display-only prefs (sortMode, colorBy, showChartLegend,
@@ -489,6 +501,12 @@ export default function useAppState() {
                (non-array) saved value falls back to []. */
             if (!Array.isArray(d.forecast.oneTimeEvents)) {
               merged.oneTimeEvents = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
+            }
+            /* loans (Phase 14): same guard. Saves predating Loans won't
+               have this field; the shallow spread keeps prev's [] there.
+               A malformed (non-array) saved value falls back to []. */
+            if (!Array.isArray(d.forecast.loans)) {
+              merged.loans = Array.isArray(prev?.loans) ? prev.loans : [];
             }
             /* fireConfig (Phase 15): tax-aware FIRE config object. Saves
                predating Phase 15 won't have this key — reads in
