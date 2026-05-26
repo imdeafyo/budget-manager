@@ -377,17 +377,18 @@ export default function useAppState() {
        label }. Empty by default. See utils/oneTimeEvents.js for shape
        + resolveOneTimeEvents semantics. */
     oneTimeEvents: [],
-    /* Loans (Phase 14): first-class debt modeling on the per-account
-       forecast. Each loan debits a sourceAccount by its amortized
-       monthly payment until payoff, optionally credits a targetAccount
-       at origination (mortgage funding a home asset, auto loan funding
-       a car asset), and optionally redirects the freed payment to an
-       overflowAccount after payoff. Array of { id, label, principal,
-       originationDate "YYYY-MM" or "YYYY-MM-DD", interestRate (annual %),
-       termMonths, sourceAccountId, targetAccountId?, overflowAccountId? }.
+    /* Loans (Phase 14b): amortization tracking on the per-account
+       forecast. Each loan is a pure debt record — does NOT debit any
+       account directly. The monthly payment is assumed to already be
+       in the user's budget (which is what funds Advanced contributions
+       via the savings rate). Loans surface remaining balance, payoff
+       date, total interest, and amortization curves so the user can
+       see when debt clears and how much interest is committed.
+       Array of { id, label, principal, originationDate (YYYY-MM-DD
+       or YYYY-MM), interestRate (annual %), termMonths,
+       extraMonthlyPrincipal (optional, default 0) }.
        Empty by default. See utils/loans.js for shape + resolveLoans
-       semantics; calc.js forecastGrowthAccounts consumes via
-       appliedLoans opt. */
+       semantics. */
     loans: [],
     /* === Scenario inputs (moved from localStorage so they sync across devices) ===
        Both Simple and Advanced forecast tabs read/write these through
