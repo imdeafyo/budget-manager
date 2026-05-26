@@ -1,77 +1,71 @@
-/* Loans — Advanced Forecast Phase 14.
+/* Loans — Advanced Forecast Phase 14b.
    ---------------------------------------------------------------
-   First-class debt modeling on the per-account forecast. Each loan
-   debits a sourceAccount monthly by its amortized payment until
-   payoff. Optionally credits a targetAccount with the principal at
-   origination (e.g. HELOC funding a renovation account, mortgage
-   funding a separate "home equity" placeholder, auto loan funding
-   the car-as-asset).
+   Pure amortization tracking for the per-account forecast tab.
+   Surfaces remaining balance, payoff date, total remaining interest,
+   and per-loan amortization curves over the forecast horizon.
 
-   Distinct from utils/endingItems.js — that module models the
-   FREEING of budgeted cash flow when a recurring expense stops.
-   Loans here are an alternative paradigm: they represent the
-   borrowing-and-repayment side of the same coin. A user who wants
-   to model a real mortgage in detail uses a Loan (this module);
-   a user who just wants "the day this expense disappears, divert
-   the cash to investments" uses an EndingItem.
+   This module is intentionally DECOUPLED from forecast account
+   balances. The monthly payment for a debt is assumed to live in
+   the user's budget (and is therefore already reducing the savings
+   rate that funds Advanced contributions). Having the loan module
+   ALSO debit some "source account" would double-count the payment.
+   This is the rewrite of the parked Phase 14 design — see the
+   project instructions "Phase 14 partial (parked)" entry for the
+   full history of why source/target/overflow account coupling was
+   removed.
 
-   Math layer (forecastGrowthAccounts in calc.js) consumes a
-   resolved loan list via the `appliedLoans` opt. Each resolved
-   loan carries enough to drive the monthly loop without touching
-   the underlying account math:
+   Use cases this module supports:
+     - Mortgage / auto / student-loan balance over horizon
+     - Payoff date given current rate + term + optional extra principal
+     - Total interest remaining from base date onward
+     - Per-loan + total aggregate debt curve for the chart
 
-     {
-       id, label,
-       sourceAccountId,            // debited each month
-       targetAccountId?,           // credited at origination only
-       overflowAccountId?,         // where the FREED monthly cash goes
-                                   // after payoff (default: source account
-                                   // — money simply stays in source).
-                                   // Distinct from "principal credited at
-                                   // origination" — overflow is the
-                                   // post-payoff redirect.
-       originationMonthIndex,      // 1-indexed absolute month from baseYear
-       payoffMonthIndex,           // last payment month (inclusive)
-       monthlyPaymentAmount,       // standard amortization $ per month
-       principal,                  // original loan amount (for target credit)
-     }
-
-   Sign convention follows the rest of the forecast math:
-     - Payment debits source: amount is subtracted from balance.
-     - Principal credits target: amount is added to balance at origination.
-
-   Loans NEVER subject to pool caps — they're debt servicing, not
-   contributions. A loan that pays into a 401(k)-typed targetAccount
-   would be a strange model anyway (and the UI should warn). The math
-   layer applies the principal credit unconditionally.
+   Use cases this module deliberately does NOT support:
+     - Modeling the underlying asset purchased with the loan (e.g.
+       crediting a "home equity" account at origination). That's a
+       one-time event (utils/oneTimeEvents.js) if it's needed.
+     - Tracking the monthly payment as account cash flow. That's
+       the budget's job; this module never touches account balances.
 
    ---------------------------------------------------------------
-
    Shape (persisted):
 
      {
        id: "loan_<random>",
        label: string,
-       principal: number,          // original loan amount (positive)
-       originationDate: "YYYY-MM", // when borrowing begins
-       interestRate: number,        // annual % (e.g. 6.5 for 6.5%)
-       termMonths: integer,         // amortization term
-       sourceAccountId: string,     // account debited monthly
-       targetAccountId?: string,    // optional — credited at origination
-       overflowAccountId?: string,  // optional — receives freed cash on payoff
+       principal: number,             // original loan amount (positive)
+       originationDate: "YYYY-MM-DD", // or "YYYY-MM"; when borrowing began
+       interestRate: number,           // annual % (e.g. 6.5 for 6.5%)
+       termMonths: integer,            // total amortization term
+       extraMonthlyPrincipal: number,  // optional; default 0
      }
 
-   The amortized monthly payment is DERIVED, not stored. It's
-   computed from principal/rate/term using the standard formula
-   (or straight-line for 0% rate loans). Storing it would create
-   a stale-value risk if the user edits the underlying inputs.
+   Resolved shape (returned by resolveLoans, consumed by aggregateDebt):
+
+     {
+       id, label,
+       principal,                  // original loan amount
+       interestRate,               // annual %
+       termMonths,                 // original term
+       extraMonthlyPrincipal,      // extra each month
+       originationDate,
+       startMonthIndex,            // absolute monthIndex of FIRST scheduled
+                                   //   payment from baseYear+baseMonth; can be
+                                   //   negative for pre-base loans.
+       elapsedAtBase,              // payments already made before baseYearMonth
+                                   //   (0 for future-origination loans)
+       remainingAtBase,            // principal balance at baseYearMonth
+                                   //   (= original principal for future loans)
+       basePayment,                // standard amortized monthly payment
+                                   //   (excludes extraMonthlyPrincipal)
+     }
 */
 
 const NEW_ID_PREFIX = "loan_";
 const MAX_LOAN_MONTHS = 50 * 12; // 50 years — beyond, treat as non-amortizing
 
 /* Generate a new loan id. Random-suffixed so two added in the same
-   tick don't collide. */
+   tick don't collide. Mirrors newOneTimeEventId. */
 export function newLoanId() {
   return NEW_ID_PREFIX + Math.random().toString(36).slice(2, 10);
 }
@@ -92,13 +86,15 @@ export function newLoanId() {
      "zero-term"            termMonths <= 0
      "negative-rate"        annualRatePct < 0
      "horizon-exceeded"     termMonths > MAX_LOAN_MONTHS
+     "compute-failed"       numerical fallback
 
    Notes:
      - Annual rate is in PERCENT (so 6.5 means 6.5%, not 0.065).
+     - This is the BASE amortized payment — does not include
+       extraMonthlyPrincipal. The schedule walker adds the extra
+       on top of the principal portion each month.
      - Result is NOT rounded — caller is responsible for any
-       presentation rounding. The forecast math uses the raw value
-       so the total principal paid over the term sums to the exact
-       original principal (modulo float epsilon). */
+       presentation rounding. */
 export function monthlyPayment(principal, annualRatePct, termMonths) {
   const P = Number(principal);
   const n = Number(termMonths);
@@ -126,55 +122,93 @@ export function monthlyPayment(principal, annualRatePct, termMonths) {
 
 /* Full amortization schedule — month-by-month breakdown.
    ---------------------------------------------------------------
-   Returns array of { monthIndex, payment, principal, interest,
-                      remainingBalance } for each month from 1 to
-   termMonths (inclusive). monthIndex is RELATIVE to the loan's
-   origination, NOT the forecast's baseYear — caller adds the
-   origination offset to align with the forecast timeline.
+   Walks the loan from origination forward, factoring in any
+   extraMonthlyPrincipal. Stops when balance hits 0 (which may be
+   well before termMonths if extraMonthlyPrincipal > 0).
 
-   The final month's payment is reduced to exactly the remaining
-   balance (avoiding float drift that leaves a fractional cent
-   outstanding). This is the standard "shortened-last-payment"
-   convention and keeps sum(principal portions) === original P.
+   Returns: Array<{
+     monthIndex,            // 1-indexed relative to loan origination
+     payment,               // basePayment + extraMonthlyPrincipal portion paid
+                            //   (excluding interest; this is what hits the budget
+                            //   in cash terms)
+     principal,             // principal portion this month
+     interest,              // interest portion this month
+     remainingBalance,      // balance AFTER this payment
+     cumulativeInterest,    // running sum of interest paid
+   }>
 
-   Returns [] on invalid input — checks `monthlyPayment` ok flag. */
+   monthIndex is RELATIVE to the loan's own origination, not the
+   forecast timeline. resolveLoans converts to absolute monthIndex
+   via originationMonthIndex + scheduleIdx - 1.
+
+   The final month's principal portion is capped at the remaining
+   balance (standard "shortened-last-payment" convention), so
+   sum(principal) === original principal modulo float epsilon.
+
+   Returns [] on invalid input (e.g. zero principal). Negative
+   extraMonthlyPrincipal is coerced to 0 — we don't model
+   payment skipping. */
 export function amortizationSchedule(loan) {
   const P = Number(loan?.principal);
   const rPct = Number(loan?.interestRate);
   const n = Number(loan?.termMonths);
+  let extra = Number(loan?.extraMonthlyPrincipal);
+  if (!isFinite(extra) || extra < 0) extra = 0;
+
   const mp = monthlyPayment(P, rPct, n);
   if (!mp.ok) return [];
 
   const nWhole = Math.ceil(n);
   const r = rPct > 0 ? (rPct / 100) / 12 : 0;
-  const payment = mp.payment;
+  const basePayment = mp.payment;
   const schedule = [];
   let balance = P;
+  let cumulativeInterest = 0;
 
-  for (let m = 1; m <= nWhole; m++) {
+  // Safety cap: with extra principal, payoff happens before nWhole;
+  // without it, payoff is exactly nWhole. We bound the loop at
+  // MAX_LOAN_MONTHS so a pathological input can't run away.
+  const maxIter = Math.min(MAX_LOAN_MONTHS, nWhole);
+
+  for (let m = 1; m <= maxIter; m++) {
     const interestPortion = balance * r;
-    let principalPortion = payment - interestPortion;
-    let actualPayment = payment;
+    // Standard principal portion from amortized payment.
+    let principalPortion = basePayment - interestPortion;
+    // Add extra principal on top.
+    let extraThisMonth = extra;
+    let actualPayment = basePayment + extraThisMonth;
 
-    // Last-payment adjustment: if the planned principal portion would
-    // overshoot the remaining balance (always happens by a fractional
-    // cent on the final month, sometimes by more if float drift
-    // accumulates), cap it at the remaining balance.
-    if (principalPortion > balance) {
-      principalPortion = balance;
-      actualPayment = interestPortion + principalPortion;
+    // Cap principal+extra at remaining balance to prevent overshoot.
+    // This handles both the standard last-month shortened payment
+    // AND the extra-principal case (payoff lands mid-term).
+    const totalPrincipalThisMonth = principalPortion + extraThisMonth;
+    if (totalPrincipalThisMonth >= balance) {
+      // Final month — pay off exactly.
+      const cap = balance;
+      // Distribute cap into base principal vs extra, prioritizing base.
+      if (principalPortion >= cap) {
+        principalPortion = cap;
+        extraThisMonth = 0;
+      } else {
+        extraThisMonth = cap - principalPortion;
+      }
+      actualPayment = interestPortion + cap;
     }
 
-    balance -= principalPortion;
+    cumulativeInterest += interestPortion;
+    const principalThisMonth = principalPortion + extraThisMonth;
+    balance -= principalThisMonth;
+
     // Clamp tiny negative residuals from float arithmetic.
     if (balance < 0 && balance > -1e-6) balance = 0;
 
     schedule.push({
       monthIndex: m,
       payment: actualPayment,
-      principal: principalPortion,
+      principal: principalThisMonth,
       interest: interestPortion,
       remainingBalance: balance,
+      cumulativeInterest,
     });
 
     if (balance <= 0) break;
@@ -196,21 +230,20 @@ export function parseLoanDate(dateStr) {
   return { year, month };
 }
 
-/* Compute the absolute monthIndex (1-indexed) for a date string
-   given a base year+month, matching the convention used elsewhere
-   in the forecast math.
+/* Compute the signed monthIndex offset of a date from baseYear+baseMonth.
 
-   monthIndex 0 = baseYear+baseMonth (year-0 row, starting snapshot)
-   monthIndex 1 = first simulated month
+   monthIndex 0  = the baseYear+baseMonth itself (starting snapshot)
+   monthIndex 1  = first simulated month (one month after base)
    monthIndex 12 = end of year 1
-   etc.
+   monthIndex -1 = one month BEFORE base (loan originated in the past)
 
-   A loan originating in baseYear+baseMonth itself = monthIndex 0
-   and should be treated as "already in progress" — for v1 we drop
-   these into `inPast` rather than try to model mid-payment loans.
-   That's a real follow-up but adds complexity (which payment number
-   are we at? what's the remaining balance?) that the simple "start
-   from origination" model doesn't carry. */
+   Loans differ from one-time events: a loan originating in the past
+   is NOT necessarily in-past as a financial event — it's just been
+   paying down already. resolveLoans walks the schedule to compute
+   the remaining balance at base. Only loans that have fully paid
+   off before base land in inPast.
+
+   Returns null if the date string is unparseable. */
 export function loanMonthIndex(dateStr, baseYear, baseMonth = 1) {
   const parsed = parseLoanDate(dateStr);
   if (!parsed) return null;
@@ -219,234 +252,325 @@ export function loanMonthIndex(dateStr, baseYear, baseMonth = 1) {
   return monthsForward;
 }
 
-/* Resolve a raw loan list against accounts + horizon. Returns:
+/* Resolve a raw loan list against the forecast horizon.
 
+   NO ACCOUNTS PARAM — loans do not couple to forecast accounts
+   in this design. They are pure amortization records.
+
+   Returns:
      {
        loans: [<resolved-loan>],
        orphans: [{ id, label, reason }],
        outOfHorizon: [{ id, label, originationMonthIndex }],
-       inPast: [{ id, label, originationMonthIndex }],
+       inPast: [{ id, label, originationMonthIndex, paidOffMonthsBeforeBase }],
      }
 
-   `loans` is what the math layer consumes — only well-formed,
-   in-horizon, in-future entries. Each resolved loan carries:
+   `loans` is what aggregateDebt / chart code consume — only
+   well-formed, in-horizon, currently-active entries. A loan that
+   originated in the past but still has remaining balance at base
+   shows up here with elapsedAtBase populated.
 
-     {
-       id, label, principal,
-       sourceAccountId, targetAccountId, overflowAccountId,
-       originationMonthIndex,   // 1-indexed; 0 = year-0 (dropped)
-       monthlyPaymentAmount,    // derived from amortization
-       termMonths,              // honored as-given
-       payoffMonthIndex,        // = originationMonthIndex + termMonths - 1
-                                //   (the month the final payment lands)
-     }
+   Orphan reasons (stable strings):
+     - "bad-principal" : principal not a positive finite number
+     - "bad-rate"      : rate not a non-negative finite number
+     - "bad-term"      : termMonths not a positive integer
+     - "bad-date"      : originationDate unparseable or missing
 
-   `payoffMonthIndex` may exceed `horizonMonths` — that's fine. A
-   loan that doesn't pay off within the projection horizon still
-   gets every month of debits inside the horizon applied; the
-   math layer doesn't try to "finish" the loan, it just stops at
-   the horizon. The unpaid remainder is implicit in the source
-   account's ending balance.
-
-   `outOfHorizon` here means the ORIGINATION is past the horizon
-   — the loan never starts within the projection, so it's
-   effectively inert. We surface it for UI clarity rather than
-   silently dropping.
-
-   Orphans cover all "loan exists but can't be applied" cases:
-     - no sourceAccountId, or sourceAccountId points to a missing
-       account
-     - targetAccountId / overflowAccountId points to a missing
-       account (we don't drop the loan for this — we null out the
-       bad reference and proceed, but record it for UI surfacing)
-     - originationDate is unparseable
-     - amortization math fails (zero principal, zero term, etc.)
-
-   For partial-reference orphaning (target or overflow missing but
-   source ok), we DO include the loan in `loans` with the bad
-   reference nulled out, AND push an entry into `orphans` so the
-   UI can warn. This mirrors how the rest of the forecast handles
-   "fix what we can, warn about what we can't." */
-export function resolveLoans(rawLoans, accounts, baseYearMonth, horizonMonths) {
+   Notes:
+     - originationMonthIndex > horizonMonths → outOfHorizon
+       (the loan never starts within the projection)
+     - paid-off-before-base → inPast (loan is finished)
+     - originating in baseYear+baseMonth itself is treated as
+       starting at startMonthIndex=0; elapsedAtBase=0; first
+       payment lands in month 1 of the projection (the next month).
+       Same convention used elsewhere. */
+export function resolveLoans(rawLoans, baseYearMonth, horizonMonths) {
   const out = { loans: [], orphans: [], outOfHorizon: [], inPast: [] };
   if (!Array.isArray(rawLoans) || rawLoans.length === 0) return out;
   const baseYear = baseYearMonth?.year ?? new Date().getFullYear();
   const baseMonth = baseYearMonth?.month ?? (new Date().getMonth() + 1);
-  const validIds = new Set((accounts || []).map(a => a.id));
   const horizon = Math.max(0, Number(horizonMonths) || 0);
 
   for (const ln of rawLoans) {
     if (!ln || typeof ln !== "object") continue;
     const id = ln.id;
     const label = ln.label || "";
-    const principal = Number(ln.principal) || 0;
-    const sourceAccountId = ln.sourceAccountId;
 
-    // Source account is mandatory.
-    if (!sourceAccountId || !validIds.has(sourceAccountId)) {
-      out.orphans.push({
-        id, label,
-        reason: !sourceAccountId ? "no-source-account" : "source-account-missing",
-      });
+    // Validate principal first.
+    const principal = Number(ln.principal);
+    if (!isFinite(principal) || principal <= 0) {
+      out.orphans.push({ id, label, reason: "bad-principal" });
+      continue;
+    }
+
+    // Validate term.
+    const termMonths = Number(ln.termMonths);
+    if (!isFinite(termMonths) || termMonths <= 0 || termMonths > MAX_LOAN_MONTHS) {
+      out.orphans.push({ id, label, reason: "bad-term" });
+      continue;
+    }
+
+    // Validate rate.
+    const interestRate = Number(ln.interestRate);
+    if (!isFinite(interestRate) || interestRate < 0) {
+      out.orphans.push({ id, label, reason: "bad-rate" });
       continue;
     }
 
     // Origination date must parse.
-    const originationMonthIndex = loanMonthIndex(ln.originationDate, baseYear, baseMonth);
-    if (originationMonthIndex === null) {
-      out.orphans.push({ id, label, reason: "bad-origination-date" });
+    const startMonthIndex = loanMonthIndex(ln.originationDate, baseYear, baseMonth);
+    if (startMonthIndex === null) {
+      out.orphans.push({ id, label, reason: "bad-date" });
       continue;
     }
 
-    // Amortization must be valid.
-    const mp = monthlyPayment(principal, ln.interestRate, ln.termMonths);
+    // Amortization math must be valid (defensive — should pass given
+    // the input checks above, but covers any edge cases monthlyPayment
+    // catches that our top-level guards don't).
+    const mp = monthlyPayment(principal, interestRate, termMonths);
     if (!mp.ok) {
-      out.orphans.push({ id, label, reason: `amort-${mp.reason}` });
+      out.orphans.push({ id, label, reason: "bad-rate" });
       continue;
     }
 
-    // In-past / out-of-horizon checks operate on the origination month.
-    if (originationMonthIndex <= 0) {
-      out.inPast.push({ id, label, originationMonthIndex });
-      continue;
-    }
-    if (originationMonthIndex > horizon) {
-      out.outOfHorizon.push({ id, label, originationMonthIndex });
+    const extra = Math.max(0, Number(ln.extraMonthlyPrincipal) || 0);
+
+    // Out-of-horizon: origination is AFTER the projection ends.
+    if (startMonthIndex > horizon) {
+      out.outOfHorizon.push({ id, label, originationMonthIndex: startMonthIndex });
       continue;
     }
 
-    // Partial-ref handling: target/overflow can be null'd out without
-    // dropping the loan.
-    let targetAccountId = ln.targetAccountId || null;
-    if (targetAccountId && !validIds.has(targetAccountId)) {
-      out.orphans.push({ id, label, reason: "target-account-missing" });
-      targetAccountId = null;
-    }
-    let overflowAccountId = ln.overflowAccountId || null;
-    if (overflowAccountId && !validIds.has(overflowAccountId)) {
-      out.orphans.push({ id, label, reason: "overflow-account-missing" });
-      overflowAccountId = null;
-    }
+    // Pre-base loan: walk schedule to baseYearMonth to find
+    // elapsedAtBase + remainingAtBase.
+    let elapsedAtBase = 0;
+    let remainingAtBase = principal;
 
-    const termMonths = Math.ceil(Number(ln.termMonths));
-    const payoffMonthIndex = originationMonthIndex + termMonths - 1;
+    if (startMonthIndex < 0) {
+      const monthsElapsed = -startMonthIndex;
+      // Walk the schedule until either we've consumed `monthsElapsed`
+      // months OR the loan has paid off. amortizationSchedule already
+      // honors extraMonthlyPrincipal so early payoff is reflected.
+      const sched = amortizationSchedule({
+        principal, interestRate, termMonths, extraMonthlyPrincipal: extra,
+      });
+      if (sched.length === 0) {
+        // Defensive — math validated above so this shouldn't fire.
+        out.orphans.push({ id, label, reason: "bad-rate" });
+        continue;
+      }
+
+      // If the loan paid off entirely before base, it's inPast.
+      if (sched.length <= monthsElapsed) {
+        // Find when the last payment landed (relative to base, negative).
+        const finalMonth = sched.length; // 1-indexed
+        const paidOffAt = startMonthIndex + finalMonth - 1; // signed offset from base
+        out.inPast.push({
+          id,
+          label,
+          originationMonthIndex: startMonthIndex,
+          paidOffMonthsBeforeBase: -paidOffAt,
+        });
+        continue;
+      }
+
+      elapsedAtBase = monthsElapsed;
+      // Balance after the monthsElapsed'th payment is sched[monthsElapsed-1].remainingBalance
+      remainingAtBase = sched[monthsElapsed - 1].remainingBalance;
+    }
 
     out.loans.push({
       id,
       label,
       principal,
-      sourceAccountId,
-      targetAccountId,
-      overflowAccountId,
-      originationMonthIndex,
-      monthlyPaymentAmount: mp.payment,
+      interestRate,
       termMonths,
-      payoffMonthIndex,
+      extraMonthlyPrincipal: extra,
+      originationDate: ln.originationDate,
+      startMonthIndex,
+      elapsedAtBase,
+      remainingAtBase,
+      basePayment: mp.payment,
     });
   }
   return out;
 }
 
-/* Helper: group resolved loans into per-month debit/credit events
-   so the inner monthly loop in forecastGrowthAccounts can walk a
-   single cursor per loan without re-checking origination/payoff
-   bounds every month.
+/* Build a per-month aggregate of remaining debt across all resolved loans.
 
    Returns:
-     {
-       debitsByAccount: { [acctId]: [{ monthIndex, amount, loanId, isFinalPayment }] },
-       creditsByAccount: { [acctId]: [{ monthIndex, amount, loanId, kind }] },
-                          // kind = "origination" | "overflow"
-     }
+     Array<{
+       monthIndex,                // 1..horizonMonths
+       totalRemaining,            // sum of all per-loan balances this month
+       perLoanRemaining: { [loanId]: balance },  // key absent for paid-off
+                                                   //   or not-yet-originated loans
+       totalInterestThisMonth,    // sum of interest paid across loans this month
+       totalPrincipalThisMonth,   // sum of principal portions
+       totalPaymentThisMonth,     // sum of full payments (interest + principal + extra)
+     }>
 
-   Debits are the monthly payment events (always against
-   sourceAccountId). The final payment is flagged so the math
-   layer can apply the shortened-last-payment adjustment and
-   trigger the overflow event in the SAME month.
+   Conventions:
+     - monthIndex is the projection-absolute month (1 = first
+       simulated month).
+     - For each loan, we use its remaining schedule from baseYearMonth
+       onward — pre-base elapsed payments are NOT re-walked.
+     - A loan with startMonthIndex > 1 (originating mid-horizon) is
+       absent from perLoanRemaining for months 1..startMonthIndex-1
+       (key not present, contributes 0 to totals).
+     - The MONTH a loan pays off shows the final payment in the
+       totals AND a final remainingBalance of 0 in perLoanRemaining,
+       then subsequent months DROP that key entirely.
+     - If a loan's term extends past horizonMonths, perLoanRemaining
+       still contains a positive balance at the final row.
 
-   Credits cover two distinct cases:
-     - origination: principal lands in targetAccountId in the
-       loan's origination month (single event per loan, only
-       emitted if targetAccountId is set)
-     - overflow: the freed payment in the months AFTER payoff
-       (recurring, only emitted if overflowAccountId is set AND
-       distinct from sourceAccountId — otherwise the money just
-       "stays" in source by virtue of not being debited).
-       Emitted as a SINGLE event at payoffMonthIndex+1 with a
-       running-flag so the math layer can keep adding it every
-       month for the rest of the projection. This matches the
-       endingEvents pattern (a one-time delta-flip that the math
-       layer accumulates).
-
-   Note: arrays are NOT sorted here — math layer sorts per-account
-   per-direction as needed (matches the eventsForAcct pattern). */
-export function loanEvents(resolvedLoans, horizonMonths) {
-  const debitsByAccount = {};
-  const creditsByAccount = {};
+   `resolvedLoans` is the `loans` array from resolveLoans. */
+export function aggregateDebt(resolvedLoans, horizonMonths) {
   const horizon = Math.max(0, Number(horizonMonths) || 0);
+  const result = [];
+  if (horizon === 0) return result;
+  if (!Array.isArray(resolvedLoans) || resolvedLoans.length === 0) return result;
 
+  // Pre-compute each loan's REMAINING schedule (post-base) and the
+  // absolute monthIndex of each entry.
+  // perLoanSchedule[i] = { id, startAbs, entries: [{ absMonth, payment, principal, interest, remainingBalance }] }
+  const perLoanSchedule = [];
   for (const ln of resolvedLoans || []) {
     if (!ln) continue;
-    const { id, monthlyPaymentAmount: pay, originationMonthIndex: origin, payoffMonthIndex: payoff } = ln;
-    if (!isFinite(pay) || pay <= 0) continue;
+    const fullSched = amortizationSchedule({
+      principal: ln.principal,
+      interestRate: ln.interestRate,
+      termMonths: ln.termMonths,
+      extraMonthlyPrincipal: ln.extraMonthlyPrincipal,
+    });
+    if (fullSched.length === 0) continue;
 
-    // 1. Origination credit to target (if set).
-    if (ln.targetAccountId && origin >= 1 && origin <= horizon) {
-      if (!creditsByAccount[ln.targetAccountId]) creditsByAccount[ln.targetAccountId] = [];
-      creditsByAccount[ln.targetAccountId].push({
-        monthIndex: origin,
-        amount: ln.principal,
-        loanId: id,
-        kind: "origination",
+    // The portion of the schedule that lands at-or-after base:
+    // schedule entries 1..elapsedAtBase are pre-base; the remaining
+    // entries start at absMonth = startMonthIndex + elapsedAtBase.
+    // For a future loan (startMonthIndex >= 0), elapsedAtBase == 0
+    // and absMonth of entry 1 = startMonthIndex + 1 if startMonthIndex >= 0.
+    //
+    // Convention: startMonthIndex is the offset where the loan BEGINS
+    // (first payment month). If startMonthIndex = 0 (loan starts in
+    // base month), the first payment is monthIndex 1 in the projection.
+    // If startMonthIndex = 5, first payment is projection month 6.
+    // If startMonthIndex = -3, first payment was 3 months before base;
+    // 3 payments are already done, and the 4th payment (entry index 4
+    // 1-indexed) lands at absMonth 1.
+    const firstAbsMonth = ln.startMonthIndex + ln.elapsedAtBase + 1;
+    // entries to include: those whose absMonth is in [1, horizon]
+    const entries = [];
+    for (let i = ln.elapsedAtBase; i < fullSched.length; i++) {
+      const offsetFromBase = i - ln.elapsedAtBase; // 0, 1, 2, ...
+      const absMonth = firstAbsMonth + offsetFromBase;
+      if (absMonth < 1) continue; // shouldn't happen given firstAbsMonth >= 1
+      if (absMonth > horizon) break;
+      entries.push({
+        absMonth,
+        payment: fullSched[i].payment,
+        principal: fullSched[i].principal,
+        interest: fullSched[i].interest,
+        remainingBalance: fullSched[i].remainingBalance,
       });
     }
+    perLoanSchedule.push({ id: ln.id, entries });
+  }
 
-    // 2. Monthly debits from source for each month in [origin, payoff].
-    const lastDebitMonth = Math.min(payoff, horizon);
-    if (origin <= horizon && lastDebitMonth >= origin) {
-      if (!debitsByAccount[ln.sourceAccountId]) debitsByAccount[ln.sourceAccountId] = [];
-      // Pre-resolved amortization schedule, in case caller wants
-      // exact per-month principal/interest splits. Final payment in
-      // the schedule gets isFinalPayment=true.
-      const sched = amortizationSchedule({
-        principal: ln.principal,
-        interestRate: undefined, // signaled via monthlyPaymentAmount; we rebuild rate below
-        termMonths: ln.termMonths,
-      });
-      // Rebuild via the loan's actual derived payment — we don't have
-      // the rate here, but the math layer doesn't need per-month
-      // interest/principal split for balance evolution. The simple
-      // per-month constant payment with a shortened final payment is
-      // enough.
-      for (let m = origin; m <= lastDebitMonth; m++) {
-        const isFinal = m === payoff;
-        debitsByAccount[ln.sourceAccountId].push({
-          monthIndex: m,
-          amount: pay,
-          loanId: id,
-          isFinalPayment: isFinal,
-        });
-      }
-    }
+  // Build month-by-month aggregate.
+  // For perLoanRemaining we need the balance AT the end of each month,
+  // for every loan that hasn't yet originated past it AND hasn't yet
+  // paid off in an earlier month within the horizon window.
+  //
+  // Strategy: per loan, walk entries; for each absMonth in [1, horizon],
+  // we record the balance. For months between the previous entry and
+  // this one (gap, shouldn't happen given dense scheduling), we'd
+  // forward-fill — but amortization is monthly contiguous so there are
+  // no gaps. For months AFTER the loan's final entry (paid off mid-
+  // horizon), the key is absent.
 
-    // 3. Overflow credit AFTER payoff (only if overflow account is
-    //    set AND distinct from source — otherwise money just stays
-    //    in source by not being debited, no event needed).
-    if (
-      ln.overflowAccountId &&
-      ln.overflowAccountId !== ln.sourceAccountId &&
-      payoff < horizon
-    ) {
-      // Emit a SINGLE delta-flip at payoff+1; math layer accumulates.
-      // amount = full monthly payment now redirected.
-      if (!creditsByAccount[ln.overflowAccountId]) creditsByAccount[ln.overflowAccountId] = [];
-      creditsByAccount[ln.overflowAccountId].push({
-        monthIndex: payoff + 1,
-        amount: pay,
-        loanId: id,
-        kind: "overflow",
-      });
+  // Initialize aggregated rows.
+  for (let m = 1; m <= horizon; m++) {
+    result.push({
+      monthIndex: m,
+      totalRemaining: 0,
+      perLoanRemaining: {},
+      totalInterestThisMonth: 0,
+      totalPrincipalThisMonth: 0,
+      totalPaymentThisMonth: 0,
+    });
+  }
+
+  for (const { id, entries } of perLoanSchedule) {
+    for (const e of entries) {
+      const row = result[e.absMonth - 1];
+      if (!row) continue;
+      row.totalRemaining += e.remainingBalance;
+      row.perLoanRemaining[id] = e.remainingBalance;
+      row.totalInterestThisMonth += e.interest;
+      row.totalPrincipalThisMonth += e.principal;
+      row.totalPaymentThisMonth += e.payment;
     }
   }
-  return { debitsByAccount, creditsByAccount };
+
+  return result;
+}
+
+/* Sum of all interest that will be paid from baseYearMonth onward,
+   summed across all resolved loans.
+
+   Walks each loan's remaining schedule (post-base). Walks past
+   horizonMonths into the loan's full remaining term — the goal is to
+   answer "how much interest am I committed to over the life of these
+   loans" rather than "how much interest within the projection
+   window". The latter is available as sum of totalInterestThisMonth
+   from aggregateDebt.
+
+   Returns 0 for empty input. */
+export function totalRemainingInterest(resolvedLoans /*, horizonMonths */) {
+  let total = 0;
+  for (const ln of resolvedLoans || []) {
+    if (!ln) continue;
+    const fullSched = amortizationSchedule({
+      principal: ln.principal,
+      interestRate: ln.interestRate,
+      termMonths: ln.termMonths,
+      extraMonthlyPrincipal: ln.extraMonthlyPrincipal,
+    });
+    if (fullSched.length === 0) continue;
+    // Sum interest from elapsedAtBase onward (those are the still-to-come months).
+    for (let i = ln.elapsedAtBase; i < fullSched.length; i++) {
+      total += fullSched[i].interest;
+    }
+  }
+  return total;
+}
+
+/* Find the absolute monthIndex when a specific resolved loan pays off.
+
+   Returns null when the payoff lands beyond horizonMonths (the loan
+   doesn't finish within the projection AND no extraMonthlyPrincipal
+   accelerates it into range).
+
+   Note: for a loan with extraMonthlyPrincipal > 0, the schedule is
+   already shortened by amortizationSchedule, so we just inspect the
+   schedule length.
+
+   `resolvedLoan` is a single entry from resolveLoans .loans. */
+export function payoffMonthIndex(resolvedLoan, horizonMonths) {
+  if (!resolvedLoan) return null;
+  const horizon = Math.max(0, Number(horizonMonths) || 0);
+  const fullSched = amortizationSchedule({
+    principal: resolvedLoan.principal,
+    interestRate: resolvedLoan.interestRate,
+    termMonths: resolvedLoan.termMonths,
+    extraMonthlyPrincipal: resolvedLoan.extraMonthlyPrincipal,
+  });
+  if (fullSched.length === 0) return null;
+  // Absolute monthIndex of the final payment.
+  const firstAbsMonth = resolvedLoan.startMonthIndex + resolvedLoan.elapsedAtBase + 1;
+  const lastEntryOffset = fullSched.length - 1 - resolvedLoan.elapsedAtBase;
+  const finalAbsMonth = firstAbsMonth + lastEntryOffset;
+  if (finalAbsMonth > horizon) return null;
+  if (finalAbsMonth < 1) return null;
+  return finalAbsMonth;
 }
