@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { newLoanId, resolveLoans } from "../utils/loans.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
@@ -517,7 +517,7 @@ export default function AdvancedForecastTab({
     })();
     const newItem = {
       id: newEndingItemId(),
-      itemRef: null, // user picks via dropdown
+      itemRefs: [], // user picks via dropdown (Phase 14a: multi-item)
       destAccountId: defaultDest,
       effect: "ends",
       mode: "date",
@@ -656,15 +656,20 @@ export default function AdvancedForecastTab({
   }, [exp, sav]);
 
   /* Set of itemRef keys (section::idx) already claimed by an ending item.
-     Each item maps to the ids that claim it, so we can keep the *current*
-     row's own selection enabled even when it's "taken." */
+     Each key maps to the set of ending-item ids that claim it, so we can
+     keep the *current* row's own selections enabled even when they're
+     "taken." Multi-ref aware (Phase 14a): walks every ref in every
+     obligation, so an obligation linking to [A, B] claims both keys. */
   const claimedRefKeys = useMemo(() => {
     const m = new Map(); // key -> Set of ending-item ids
     for (const ei of endingItems) {
-      if (!ei?.itemRef) continue;
-      const k = `${ei.itemRef.section}::${ei.itemRef.idx}`;
-      if (!m.has(k)) m.set(k, new Set());
-      m.get(k).add(ei.id);
+      const refs = getItemRefs(ei);
+      for (const ref of refs) {
+        if (!ref || typeof ref.section !== "string" || typeof ref.idx !== "number") continue;
+        const k = `${ref.section}::${ref.idx}`;
+        if (!m.has(k)) m.set(k, new Set());
+        m.get(k).add(ei.id);
+      }
     }
     return m;
   }, [endingItems]);
@@ -1783,13 +1788,46 @@ export default function AdvancedForecastTab({
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {endingItems.map((ei) => {
               /* Per-row derived state — lots of small bits so we compute
-                 them once at the top of the row for readability below. */
-              const refKey = ei.itemRef ? `${ei.itemRef.section}::${ei.itemRef.idx}` : null;
-              const linkedItem = ei.itemRef
-                ? (ei.itemRef.section === "sav" ? sav[ei.itemRef.idx] : exp[ei.itemRef.idx])
-                : null;
-              const isOrphan = ei.itemRef && !linkedItem;
-              const liveMonthly = monthlyAmountFor(ei.itemRef);
+                 them once at the top of the row for readability below.
+
+                 Phase 14a: every obligation owns N refs (0..many). Each
+                 ref renders its own dropdown; missing/orphaned refs are
+                 flagged individually; the combined monthly is the sum
+                 of resolved refs (or null if any ref is unresolved). */
+              const refs = getItemRefs(ei);
+              /* Per-ref resolution. Each entry parallel to `refs`:
+                   { ref, key, linkedItem, monthly, isOrphan }
+                 isOrphan ↔ the section/idx no longer points at a real
+                 budget item (renamed/deleted/reordered out). */
+              const refResolutions = refs.map((ref) => {
+                if (!ref || typeof ref.idx !== "number") {
+                  return { ref, key: null, linkedItem: null, monthly: null, isOrphan: false };
+                }
+                const arr = ref.section === "sav" ? sav : exp;
+                const linkedItem = Array.isArray(arr) ? arr[ref.idx] : null;
+                const key = `${ref.section}::${ref.idx}`;
+                const monthly = monthlyAmountFor(ref);
+                return { ref, key, linkedItem, monthly, isOrphan: !linkedItem };
+              });
+              /* Whole-obligation aggregates. */
+              const anyOrphan = refResolutions.some(r => r.isOrphan);
+              const noRefs = refs.length === 0;
+              /* Combined monthly: only meaningful when EVERY ref resolves
+                 to a positive number — otherwise we show "—" since
+                 resolveEndingEvents will orphan the obligation. */
+              let liveMonthly = null;
+              if (refs.length > 0 && !anyOrphan) {
+                let sum = 0;
+                let allOk = true;
+                for (const r of refResolutions) {
+                  if (r.monthly == null || !isFinite(r.monthly) || r.monthly <= 0) {
+                    allOk = false;
+                    break;
+                  }
+                  sum += r.monthly;
+                }
+                liveMonthly = allOk ? sum : null;
+              }
               const destAcct = accounts.find(a => a.id === ei.destAccountId);
               /* Pool-headroom-aware capping warning. The prior implementation
                  fired whenever the destination was in any capped pool with
@@ -1826,7 +1864,9 @@ export default function AdvancedForecastTab({
               /* Compute loan endsOn on the fly for display + persist via
                  useEffect-equivalent on input blur. We compute every render
                  for live preview; the persisted value is what the math
-                 layer trusts (resolveEndingEvents reads ei.endsOn). */
+                 layer trusts (resolveEndingEvents reads ei.endsOn).
+                 Loan-mode uses the SUMMED monthly across all linked items
+                 (e.g. mortgage P&I + extra principal payment combined). */
               let loanResult = null;
               if (isLoanMode && liveMonthly != null) {
                 loanResult = computeLoanEndsOn(ei.balance, ei.annualRate, liveMonthly, baseYearMonth);
@@ -1834,10 +1874,47 @@ export default function AdvancedForecastTab({
 
               const conflictsHere = endingItemConflicts.some(c => c.ids.includes(ei.id));
 
+              /* Ref-list mutation helpers (Phase 14a). Each operates on
+                 ei.itemRefs; they patch into updateEndingItem so the
+                 whole flow goes through the standard update path. */
+              const setRefAt = (slotIdx, newRef) => {
+                const next = refs.slice();
+                next[slotIdx] = newRef;
+                updateEndingItem(ei.id, { itemRefs: next });
+              };
+              const removeRefAt = (slotIdx) => {
+                const next = refs.slice();
+                next.splice(slotIdx, 1);
+                updateEndingItem(ei.id, { itemRefs: next });
+              };
+              const appendRef = () => {
+                /* Find the first option not already claimed by anyone
+                   (including this obligation) as the default for the
+                   new slot. If everything's claimed, leave it null and
+                   let the user pick. */
+                const claimedKeys = new Set(
+                  refResolutions.filter(r => r.key).map(r => r.key)
+                );
+                const firstAvailable = linkedItemOptions.find(o => {
+                  if (claimedKeys.has(o.key)) return false;
+                  const taken = claimedRefKeys.get(o.key);
+                  return !(taken && !taken.has(ei.id)); // not taken by another obligation
+                });
+                const newRef = firstAvailable
+                  ? { section: firstAvailable.section, idx: firstAvailable.idx, name: firstAvailable.name }
+                  : null;
+                updateEndingItem(ei.id, { itemRefs: [...refs, newRef] });
+              };
+
+              /* Row-level "has any issue" flag for the border. Includes
+                 conflicts, orphaned refs, AND empty-refs case (which
+                 silently orphans without a per-ref marker). */
+              const rowProblem = conflictsHere || anyOrphan || noRefs;
+
               return (
                 <div key={ei.id} style={{
                   padding: 10,
-                  border: `1px solid ${conflictsHere ? "rgba(232,87,58,0.5)" : isOrphan ? "rgba(232,87,58,0.5)" : "var(--bdr,#ddd)"}`,
+                  border: `1px solid ${rowProblem ? "rgba(232,87,58,0.5)" : "var(--bdr,#ddd)"}`,
                   borderRadius: 8,
                   background: "var(--card-bg,#fff)",
                   display: "grid",
@@ -1845,59 +1922,211 @@ export default function AdvancedForecastTab({
                   gap: 10,
                   alignItems: "start",
                 }}>
-                  {/* Linked budget item */}
+                  {/* Linked budget items (multi-select via stacked dropdowns) */}
                   <div>
-                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Linked Budget Item</label>
-                    <select
-                      value={refKey || ""}
-                      onChange={e => {
-                        const v = e.target.value;
-                        if (!v) {
-                          updateEndingItem(ei.id, { itemRef: null });
-                          return;
-                        }
-                        const opt = linkedItemOptions.find(o => o.key === v);
-                        if (!opt) return;
-                        updateEndingItem(ei.id, { itemRef: { section: opt.section, idx: opt.idx, name: opt.name } });
-                      }}
-                      style={{ width: "100%", padding: 6, fontSize: 12, border: `1px solid ${isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
-                    >
-                      <option value="">— pick a budget line —</option>
-                      <optgroup label="Expenses">
-                        {linkedItemOptions.filter(o => o.section === "exp").map(o => {
-                          const taken = claimedRefKeys.get(o.key);
-                          const takenByOther = taken && !taken.has(ei.id);
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      Linked Budget {refs.length === 1 ? "Item" : "Items"}
+                      {refs.length > 1 && (
+                        <span style={{ marginLeft: 6, color: "var(--tx3,#aaa)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
+                          ({refs.length})
+                        </span>
+                      )}
+                    </label>
+                    {refs.length === 0 ? (
+                      /* No refs yet — single "pick" placeholder dropdown
+                         that immediately appends on selection. This keeps
+                         the empty-state path looking like one dropdown
+                         (familiar) without forcing the user to click
+                         "+ Add" before picking the first item. */
+                      <select
+                        value=""
+                        onChange={e => {
+                          const v = e.target.value;
+                          if (!v) return;
+                          const opt = linkedItemOptions.find(o => o.key === v);
+                          if (!opt) return;
+                          updateEndingItem(ei.id, {
+                            itemRefs: [{ section: opt.section, idx: opt.idx, name: opt.name }],
+                          });
+                        }}
+                        style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid #E8573A", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                      >
+                        <option value="">— pick a budget line —</option>
+                        <optgroup label="Expenses">
+                          {linkedItemOptions.filter(o => o.section === "exp").map(o => {
+                            const taken = claimedRefKeys.get(o.key);
+                            const takenByOther = taken && !taken.has(ei.id);
+                            return (
+                              <option key={o.key} value={o.key} disabled={takenByOther}>
+                                {o.name}{takenByOther ? " — already used" : ""}
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                        <optgroup label="Savings">
+                          {linkedItemOptions.filter(o => o.section === "sav").map(o => {
+                            const taken = claimedRefKeys.get(o.key);
+                            const takenByOther = taken && !taken.has(ei.id);
+                            return (
+                              <option key={o.key} value={o.key} disabled={takenByOther}>
+                                {o.name}{takenByOther ? " — already used" : ""}
+                              </option>
+                            );
+                          })}
+                        </optgroup>
+                      </select>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {refResolutions.map((rr, slotIdx) => {
+                          /* Per-slot disable rules: an option is disabled
+                             if claimed by another obligation, or claimed
+                             by a DIFFERENT slot in THIS obligation. The
+                             slot's own current value is always enabled. */
+                          const ownKey = rr.key;
+                          const otherSlotKeys = new Set(
+                            refResolutions
+                              .map((r, i) => (i === slotIdx ? null : r.key))
+                              .filter(Boolean)
+                          );
+                          const onlyOneRef = refs.length === 1;
                           return (
-                            <option key={o.key} value={o.key} disabled={takenByOther}>
-                              {o.name}{takenByOther ? " — already used" : ""}
-                            </option>
+                            <div key={slotIdx} style={{ display: "flex", gap: 4, alignItems: "stretch" }}>
+                              <select
+                                value={ownKey || ""}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  if (!v) {
+                                    /* Clear-this-slot — only meaningful if
+                                       there are sibling refs. With only
+                                       one ref left, force at least one
+                                       (delete the whole obligation if
+                                       you want none). UI also disables
+                                       the empty option in that case. */
+                                    if (onlyOneRef) return;
+                                    removeRefAt(slotIdx);
+                                    return;
+                                  }
+                                  const opt = linkedItemOptions.find(o => o.key === v);
+                                  if (!opt) return;
+                                  setRefAt(slotIdx, { section: opt.section, idx: opt.idx, name: opt.name });
+                                }}
+                                style={{ flex: 1, padding: 6, fontSize: 12, border: `1px solid ${rr.isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                              >
+                                <option value="" disabled={onlyOneRef}>
+                                  {onlyOneRef ? "— must have at least one —" : "— remove this item —"}
+                                </option>
+                                <optgroup label="Expenses">
+                                  {linkedItemOptions.filter(o => o.section === "exp").map(o => {
+                                    const taken = claimedRefKeys.get(o.key);
+                                    const takenByOtherObligation = taken && !taken.has(ei.id);
+                                    const takenByOtherSlot = otherSlotKeys.has(o.key);
+                                    const disabled = (takenByOtherObligation || takenByOtherSlot) && o.key !== ownKey;
+                                    return (
+                                      <option key={o.key} value={o.key} disabled={disabled}>
+                                        {o.name}
+                                        {takenByOtherObligation && o.key !== ownKey ? " — already used" : ""}
+                                        {takenByOtherSlot && o.key !== ownKey ? " — used above" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </optgroup>
+                                <optgroup label="Savings">
+                                  {linkedItemOptions.filter(o => o.section === "sav").map(o => {
+                                    const taken = claimedRefKeys.get(o.key);
+                                    const takenByOtherObligation = taken && !taken.has(ei.id);
+                                    const takenByOtherSlot = otherSlotKeys.has(o.key);
+                                    const disabled = (takenByOtherObligation || takenByOtherSlot) && o.key !== ownKey;
+                                    return (
+                                      <option key={o.key} value={o.key} disabled={disabled}>
+                                        {o.name}
+                                        {takenByOtherObligation && o.key !== ownKey ? " — already used" : ""}
+                                        {takenByOtherSlot && o.key !== ownKey ? " — used above" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </optgroup>
+                              </select>
+                              {/* Per-slot remove button (only when >1 ref) */}
+                              {!onlyOneRef && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeRefAt(slotIdx)}
+                                  title="Remove this linked item from the obligation"
+                                  style={{ border: "1px solid var(--bdr,#ddd)", background: "var(--input-bg,#fafafa)", color: "var(--tx3,#888)", cursor: "pointer", fontSize: 14, padding: "0 8px", borderRadius: 6, lineHeight: 1 }}
+                                >×</button>
+                              )}
+                            </div>
                           );
                         })}
-                      </optgroup>
-                      <optgroup label="Savings">
-                        {linkedItemOptions.filter(o => o.section === "sav").map(o => {
-                          const taken = claimedRefKeys.get(o.key);
-                          const takenByOther = taken && !taken.has(ei.id);
-                          return (
-                            <option key={o.key} value={o.key} disabled={takenByOther}>
-                              {o.name}{takenByOther ? " — already used" : ""}
-                            </option>
+                        {/* + Add another item — disabled when nothing left
+                           to pick (all options claimed elsewhere or here). */}
+                        {(() => {
+                          const claimedHere = new Set(
+                            refResolutions.filter(r => r.key).map(r => r.key)
                           );
-                        })}
-                      </optgroup>
-                    </select>
-                    {/* Live monthly + status hints */}
+                          const hasAvailable = linkedItemOptions.some(o => {
+                            if (claimedHere.has(o.key)) return false;
+                            const taken = claimedRefKeys.get(o.key);
+                            if (taken && !taken.has(ei.id)) return false;
+                            return true;
+                          });
+                          return (
+                            <button
+                              type="button"
+                              onClick={appendRef}
+                              disabled={!hasAvailable}
+                              title={hasAvailable
+                                ? "Link another budget item to this obligation (sums monthly amounts)"
+                                : "No remaining budget items to link"}
+                              style={{
+                                marginTop: 2,
+                                padding: "4px 8px",
+                                fontSize: 11,
+                                fontWeight: 600,
+                                border: `1px dashed ${hasAvailable ? "var(--bdr,#ccc)" : "var(--bdr,#eee)"}`,
+                                borderRadius: 6,
+                                background: "transparent",
+                                color: hasAvailable ? "var(--tx2,#555)" : "var(--tx3,#bbb)",
+                                cursor: hasAvailable ? "pointer" : "not-allowed",
+                                alignSelf: "flex-start",
+                              }}
+                            >+ Add item</button>
+                          );
+                        })()}
+                      </div>
+                    )}
+                    {/* Combined live monthly + per-obligation status hints.
+                       Per-ref orphans are flagged inline on the dropdown
+                       border; this line shows the aggregate. */}
                     <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
-                      {isOrphan ? (
+                      {noRefs ? (
+                        <span style={{ fontStyle: "italic" }}>Pick a budget line above</span>
+                      ) : anyOrphan ? (
                         <span style={{ color: "#E8573A", fontWeight: 600 }}>
-                          ⚠ Linked item missing (was "{ei.itemRef?.name || "?"}")
+                          ⚠ {refResolutions.filter(r => r.isOrphan).length === 1
+                            ? "1 linked item is missing"
+                            : `${refResolutions.filter(r => r.isOrphan).length} linked items are missing`}
+                          {(() => {
+                            const orphans = refResolutions.filter(r => r.isOrphan);
+                            if (orphans.length === 0) return null;
+                            const names = orphans.map(r => `"${r.ref?.name || "?"}"`).join(", ");
+                            return <span style={{ fontWeight: 400 }}> (was {names})</span>;
+                          })()}
                         </span>
                       ) : liveMonthly == null ? (
-                        <span style={{ fontStyle: "italic" }}>Pick a budget line above</span>
+                        <span style={{ fontStyle: "italic" }}>Awaiting valid amounts</span>
                       ) : liveMonthly === 0 ? (
-                        <span style={{ color: "#E8573A" }}>Item amount is $0 — set a value on the Budget tab</span>
+                        <span style={{ color: "#E8573A" }}>Combined amount is $0 — set values on the Budget tab</span>
                       ) : (
-                        <span>Currently: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(liveMonthly)}/mo</strong></span>
+                        <span>
+                          {refs.length > 1 ? "Combined: " : "Currently: "}
+                          <strong style={{ color: "var(--card-color,#222)" }}>{fmt(liveMonthly)}/mo</strong>
+                          {refs.length > 1 && (
+                            <span style={{ color: "var(--tx3,#aaa)" }}>
+                              {" "}({refResolutions.map(r => fmt(r.monthly)).join(" + ")})
+                            </span>
+                          )}
+                        </span>
                       )}
                     </div>
                   </div>

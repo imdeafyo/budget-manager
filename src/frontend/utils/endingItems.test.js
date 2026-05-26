@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   newEndingItemId,
+  getItemRefs,
   monthsToPayoff,
   addMonths,
   computeLoanEndsOn,
@@ -138,7 +139,7 @@ describe("resolveEndingEvents", () => {
 
   const mkItem = (overrides = {}) => ({
     id: "ei_1",
-    itemRef: { section: "exp", idx: 0, name: "Car loan" },
+    itemRefs: [{ section: "exp", idx: 0, name: "Car loan" }],
     destAccountId: "acc_cash_joint",
     effect: "ends",
     mode: "date",
@@ -287,5 +288,246 @@ describe("findItemRefConflicts", () => {
   it("empty input returns empty conflicts", () => {
     expect(findItemRefConflicts([])).toEqual([]);
     expect(findItemRefConflicts(null)).toEqual([]);
+  });
+  it("multi-ref: flags two obligations sharing one of multiple refs", () => {
+    /* A links to [X, Y]; B links to [Y]. Conflict is on Y. */
+    const items = [
+      { id: "ei_A", itemRefs: [
+          { section: "exp", idx: 1, name: "X" },
+          { section: "exp", idx: 2, name: "Y" },
+      ] },
+      { id: "ei_B", itemRefs: [{ section: "exp", idx: 2, name: "Y" }] },
+    ];
+    const c = findItemRefConflicts(items);
+    expect(c).toHaveLength(1);
+    expect(c[0].key).toBe("exp::2");
+    expect(c[0].ids).toEqual(["ei_A", "ei_B"]);
+  });
+  it("multi-ref: no conflict when refs are disjoint across obligations", () => {
+    const items = [
+      { id: "ei_A", itemRefs: [
+          { section: "exp", idx: 1, name: "A1" },
+          { section: "exp", idx: 2, name: "A2" },
+      ] },
+      { id: "ei_B", itemRefs: [
+          { section: "sav", idx: 1, name: "B1" },
+          { section: "exp", idx: 3, name: "B2" },
+      ] },
+    ];
+    expect(findItemRefConflicts(items)).toEqual([]);
+  });
+  it("multi-ref: flags two refs in the SAME obligation pointing at the same line", () => {
+    /* Self-duplication — user accidentally added the same item twice
+       to a single obligation. The conflict surfaces with both ids
+       being the same obligation id; UI should treat this as a
+       conflict so the row gets the warning border. */
+    const items = [
+      { id: "ei_A", itemRefs: [
+          { section: "exp", idx: 1, name: "X" },
+          { section: "exp", idx: 1, name: "X" },
+      ] },
+    ];
+    const c = findItemRefConflicts(items);
+    expect(c).toHaveLength(1);
+    expect(c[0].ids).toEqual(["ei_A", "ei_A"]);
+  });
+  it("multi-ref: skips refs with non-numeric idx or non-string section", () => {
+    const items = [
+      { id: "ei_A", itemRefs: [
+          { section: "exp", idx: "bogus", name: "X" }, // invalid
+          { section: 123, idx: 1, name: "Y" },          // invalid
+          { section: "exp", idx: 5, name: "Z" },        // valid
+      ] },
+      { id: "ei_B", itemRefs: [{ section: "exp", idx: 5, name: "Z" }] },
+    ];
+    const c = findItemRefConflicts(items);
+    expect(c).toHaveLength(1);
+    expect(c[0].key).toBe("exp::5");
+  });
+});
+
+describe("getItemRefs — read shim", () => {
+  it("returns itemRefs when present", () => {
+    const ei = { itemRefs: [
+      { section: "exp", idx: 0, name: "A" },
+      { section: "sav", idx: 2, name: "B" },
+    ]};
+    expect(getItemRefs(ei)).toEqual([
+      { section: "exp", idx: 0, name: "A" },
+      { section: "sav", idx: 2, name: "B" },
+    ]);
+  });
+  it("falls back to wrapping legacy itemRef in a one-element array", () => {
+    const ei = { itemRef: { section: "exp", idx: 3, name: "Legacy" } };
+    expect(getItemRefs(ei)).toEqual([{ section: "exp", idx: 3, name: "Legacy" }]);
+  });
+  it("itemRefs takes precedence over itemRef when both are present", () => {
+    const ei = {
+      itemRefs: [{ section: "exp", idx: 1, name: "New" }],
+      itemRef: { section: "exp", idx: 99, name: "Stale" },
+    };
+    expect(getItemRefs(ei)).toEqual([{ section: "exp", idx: 1, name: "New" }]);
+  });
+  it("empty itemRefs returns empty array (distinct from missing)", () => {
+    const ei = { itemRefs: [] };
+    expect(getItemRefs(ei)).toEqual([]);
+  });
+  it("missing both fields returns empty array", () => {
+    expect(getItemRefs({})).toEqual([]);
+  });
+  it("null/undefined/non-object input returns empty array", () => {
+    expect(getItemRefs(null)).toEqual([]);
+    expect(getItemRefs(undefined)).toEqual([]);
+    expect(getItemRefs("nope")).toEqual([]);
+    expect(getItemRefs(42)).toEqual([]);
+  });
+});
+
+describe("resolveEndingEvents — multi-ref (Phase 14a)", () => {
+  const horizonMonths = 240;
+  const baseYM = "2026-01";
+
+  it("sums monthly amounts across multiple refs into a single event", () => {
+    /* Two refs: mortgage P&I + extra principal payment. Both end on
+       the same date; combined freed cash redirects to one account. */
+    const item = {
+      id: "ei_mort",
+      itemRefs: [
+        { section: "exp", idx: 0, name: "Mortgage P&I" },
+        { section: "exp", idx: 1, name: "Mortgage Extra" },
+      ],
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    /* monthlyAmountFor returns 1500 for idx=0, 500 for idx=1.
+       Expected combined monthly: 2000. */
+    const monthlyFor = (ref) => (ref.idx === 0 ? 1500 : ref.idx === 1 ? 500 : null);
+    const r = resolveEndingEvents([item], monthlyFor, baseYM, horizonMonths);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].monthlyDelta).toBe(2000);
+    expect(r.events[0].monthIndex).toBe(36); // 2028-12 → fire at 2029-01
+    expect(r.events[0].accountId).toBe("acc_taxable");
+    expect(r.orphaned).toEqual([]);
+  });
+
+  it("orphans the whole obligation when ANY ref is unresolvable", () => {
+    /* One good ref, one orphan ref. Don't silently sum partial — surface
+       the broken link by orphaning the entire obligation. */
+    const item = {
+      id: "ei_x",
+      itemRefs: [
+        { section: "exp", idx: 0, name: "P&I" },
+        { section: "exp", idx: 99, name: "Renamed/deleted" },
+      ],
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const monthlyFor = (ref) => (ref.idx === 0 ? 1500 : null);
+    const r = resolveEndingEvents([item], monthlyFor, baseYM, horizonMonths);
+    expect(r.events).toEqual([]);
+    expect(r.orphaned).toHaveLength(1);
+    expect(r.orphaned[0].id).toBe("ei_x");
+  });
+
+  it("orphans the obligation if any ref's monthly amount is zero", () => {
+    /* Sum-with-a-zero would silently understate, so orphan it. */
+    const item = {
+      id: "ei_x",
+      itemRefs: [
+        { section: "exp", idx: 0, name: "Active" },
+        { section: "exp", idx: 1, name: "Zeroed-out item" },
+      ],
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const monthlyFor = (ref) => (ref.idx === 0 ? 100 : 0);
+    const r = resolveEndingEvents([item], monthlyFor, baseYM, horizonMonths);
+    expect(r.events).toEqual([]);
+    expect(r.orphaned).toHaveLength(1);
+  });
+
+  it("orphans an obligation with an empty itemRefs array", () => {
+    /* User removed all linked items. Empty array is a real persisted
+       state distinct from "legacy itemRef" — must orphan rather than
+       silently no-op. */
+    const item = {
+      id: "ei_empty",
+      itemRefs: [],
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const r = resolveEndingEvents([item], () => 100, baseYM, horizonMonths);
+    expect(r.events).toEqual([]);
+    expect(r.orphaned).toHaveLength(1);
+    expect(r.orphaned[0].id).toBe("ei_empty");
+  });
+
+  it("legacy itemRef shape still works (back-compat)", () => {
+    /* An old persisted obligation with `itemRef` (singular) and no
+       `itemRefs` should resolve identically to the original behavior.
+       Critical: pre-14a saves must keep working. */
+    const item = {
+      id: "ei_legacy",
+      itemRef: { section: "exp", idx: 0, name: "Old loan" },
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const r = resolveEndingEvents([item], () => 450, baseYM, horizonMonths);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].monthlyDelta).toBe(450);
+    expect(r.events[0].monthIndex).toBe(36);
+  });
+
+  it("monthlyAmountFor is invoked once per ref in itemRefs", () => {
+    const item = {
+      id: "ei_multi",
+      itemRefs: [
+        { section: "exp", idx: 0, name: "A" },
+        { section: "exp", idx: 1, name: "B" },
+        { section: "sav", idx: 2, name: "C" },
+      ],
+      destAccountId: "acc_taxable",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const calls = [];
+    resolveEndingEvents(
+      [item],
+      (ref) => { calls.push(ref); return 100; },
+      baseYM,
+      horizonMonths
+    );
+    expect(calls).toHaveLength(3);
+    expect(calls.map(c => `${c.section}::${c.idx}`)).toEqual(["exp::0", "exp::1", "sav::2"]);
+  });
+
+  it("multi-ref obligation with 'starts' effect scaffolds neg+pos using summed amount", () => {
+    /* The "starts" branch must also sum across refs — same pattern as
+       "ends" — so the scaffolded contribution kicks in for the full
+       combined amount. */
+    const item = {
+      id: "ei_starts",
+      itemRefs: [
+        { section: "exp", idx: 0, name: "A" },
+        { section: "exp", idx: 1, name: "B" },
+      ],
+      destAccountId: "acc_taxable",
+      effect: "starts",
+      mode: "date",
+      endsOn: "2028-12",
+    };
+    const monthlyFor = (ref) => (ref.idx === 0 ? 200 : 300);
+    const r = resolveEndingEvents([item], monthlyFor, baseYM, horizonMonths);
+    expect(r.events).toHaveLength(2);
+    const summary = r.events.map(e => ({ idx: e.monthIndex, d: e.monthlyDelta }));
+    expect(summary).toEqual([
+      { idx: 1, d: -500 },
+      { idx: 36, d: 500 },
+    ]);
   });
 });

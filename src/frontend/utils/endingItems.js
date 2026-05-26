@@ -13,13 +13,13 @@
    See Phase X-A in the project instructions for full design rationale.
    ---------------------------------------------------------------
 
-   Shape:
+   Shape (Phase 14a — multi-item):
 
      {
        id: "ei_<random>",
-       itemRef: { section: "exp" | "sav", idx: number, name: string },
+       itemRefs: [{ section: "exp" | "sav", idx: number, name: string }, ...],
        destAccountId: "<account id>",       // where freed cash flows
-       effect: "ends" | "starts",            // scaffolding; UI only exposes "ends" in X-A
+       effect: "ends" | "starts",            // scaffolding; UI only exposes "ends"
        mode: "date" | "loan",
        endsOn: "YYYY-MM",                    // user-entered if mode=date,
                                              //   computed-and-stored if mode=loan
@@ -31,10 +31,16 @@
    the stored value is a cache. Recomputation happens in the UI on save
    (and on any input change for live preview). Math layer just trusts it.
 
-   The linked budget item's amount is read live from the budget at
-   projection time — that's why itemRef carries an idx+section pointer
-   rather than an embedded amount. `name` is a snapshot used to display
-   "Linked item missing" if the underlying item was renamed/deleted. */
+   The linked budget items' amounts are read live from the budget at
+   projection time — that's why each itemRef carries an idx+section
+   pointer rather than an embedded amount. `name` is a snapshot used to
+   display "Linked item missing" if the underlying item was renamed
+   or deleted.
+
+   Back-compat: Phase X-A persisted a single `itemRef` per obligation.
+   Loads with `itemRef` and no `itemRefs` are still accepted — the
+   `getItemRefs(ei)` helper wraps the legacy field in a one-element
+   array. New writes from the UI always use `itemRefs`. */
 
 const NEW_ID_PREFIX = "ei_";
 const MAX_LOAN_MONTHS = 50 * 12; // 50 years — beyond that we consider it non-amortizing
@@ -43,6 +49,26 @@ const MAX_LOAN_MONTHS = 50 * 12; // 50 years — beyond that we consider it non-
    the same tick don't collide. */
 export function newEndingItemId() {
   return NEW_ID_PREFIX + Math.random().toString(36).slice(2, 10);
+}
+
+/* Normalize the linked-budget-item list for an ending obligation.
+   ---------------------------------------------------------------
+   Phase 14a extended the data model from a single `itemRef` to an
+   array `itemRefs`. This helper hides the read shim: callers always
+   get back an array (possibly empty) without caring which version
+   the data was persisted as.
+
+   Precedence: if `itemRefs` is a real array, use it (even if empty —
+   an empty array means "all refs were removed" and should orphan,
+   distinct from "legacy single-ref" which lives on `itemRef`).
+   Otherwise fall back to wrapping `itemRef` in a one-element array.
+
+   The fall-through (no itemRefs, no itemRef) returns []. */
+export function getItemRefs(ei) {
+  if (!ei || typeof ei !== "object") return [];
+  if (Array.isArray(ei.itemRefs)) return ei.itemRefs;
+  if (ei.itemRef && typeof ei.itemRef === "object") return [ei.itemRef];
+  return [];
 }
 
 /* Loan amortization — months to pay off.
@@ -154,20 +180,27 @@ export function yearMonthToIndex(yearMonth, baseYearMonth) {
    Each event represents "starting at this month index, add `monthlyDelta`
    to `accountId`'s monthly contribution stream."
 
-   For mode=ends + effect=ends: delta is +monthlyAmount of the linked item
-                                (the freed cash now flows to destAccountId)
-   For mode=ends + effect=starts (scaffolding, not user-exposed in X-A):
-                                delta is -monthlyAmount until that month,
-                                then 0 after — i.e. the contribution
-                                only kicks in at endsOn.
-                                Implementation: emit a negative-base + positive-event.
-                                For X-A we just handle effect=ends; "starts"
-                                support is scaffolded but unused.
+   Each ending obligation may link to one or more budget items
+   (see getItemRefs). The `monthlyDelta` is the SUM of monthly amounts
+   across all linked items. If ANY linked item fails to resolve to a
+   positive monthly amount, the whole obligation orphans — partial
+   summing would silently understate the obligation, which is worse
+   than surfacing the broken link.
+
+   For mode=ends + effect=ends: delta is +sum(monthlyAmount) of linked
+                                items (the freed cash now flows to
+                                destAccountId)
+   For mode=ends + effect=starts (scaffolding, not user-exposed):
+                                delta is -sum(monthlyAmount) until that
+                                month, then 0 after — i.e. the
+                                contribution only kicks in at endsOn.
+                                Implementation: emit a negative-base
+                                + positive-event.
 
    Inputs:
      endingItems       — array from st.forecast.endingItems
      monthlyAmountFor  — fn(itemRef) -> monthly $ amount, or null if linked
-                         item is missing/orphaned
+                         item is missing/orphaned. Called once per ref.
      baseYearMonth     — "YYYY-MM" of projection year 0 (e.g. "2026-01")
      horizonMonths     — total projection length in months
 
@@ -176,7 +209,8 @@ export function yearMonthToIndex(yearMonth, baseYearMonth) {
        events: [{ accountId, monthIndex, monthlyDelta }, ...]
                 — sorted ascending by monthIndex; events past horizon are dropped
        orphaned: [endingItem, ...]
-                — items whose linked budget row could not be resolved
+                — items where any linked budget row could not be resolved
+                  (or the refs list was empty)
        outOfHorizon: [endingItem, ...]
                 — items whose endsOn falls past the horizon (skipped, but
                   surface in UI to clarify why nothing happened)
@@ -205,8 +239,26 @@ export function resolveEndingEvents(endingItems, monthlyAmountFor, baseYearMonth
     if (!ei || typeof ei !== "object") continue;
     if (!ei.destAccountId) continue;
 
-    const monthly = monthlyAmountFor(ei.itemRef);
-    if (monthly == null || !isFinite(monthly) || monthly <= 0) {
+    /* Resolve all linked refs. Sum their monthly amounts. If ANY ref
+       fails (null/non-finite/<=0) we orphan the entire obligation —
+       partial summing would silently misstate the obligation. An
+       empty refs list also orphans (nothing to consume). */
+    const refs = getItemRefs(ei);
+    if (refs.length === 0) {
+      orphaned.push(ei);
+      continue;
+    }
+    let monthly = 0;
+    let anyBad = false;
+    for (const ref of refs) {
+      const m = monthlyAmountFor(ref);
+      if (m == null || !isFinite(m) || m <= 0) {
+        anyBad = true;
+        break;
+      }
+      monthly += m;
+    }
+    if (anyBad) {
       orphaned.push(ei);
       continue;
     }
@@ -282,17 +334,25 @@ export function eventsByAccount(events) {
    The UI enforces this on save; this helper exists so the math layer
    (and any tests) can also assert the invariant.
 
+   Multi-ref aware (Phase 14a): walks every ref in every obligation.
+   If obligation A links to refs [X, Y] and B links to [Y], the
+   conflict is on Y between A and B.
+
    Returns array of conflict descriptions, empty if clean. */
 export function findItemRefConflicts(endingItems) {
-  const seen = new Map(); // key -> id
+  const seen = new Map(); // key -> first ending-item id that claimed it
   const conflicts = [];
   for (const ei of endingItems || []) {
-    if (!ei?.itemRef) continue;
-    const k = `${ei.itemRef.section}::${ei.itemRef.idx}`;
-    if (seen.has(k)) {
-      conflicts.push({ key: k, ids: [seen.get(k), ei.id] });
-    } else {
-      seen.set(k, ei.id);
+    if (!ei) continue;
+    const refs = getItemRefs(ei);
+    for (const ref of refs) {
+      if (!ref || typeof ref.section !== "string" || typeof ref.idx !== "number") continue;
+      const k = `${ref.section}::${ref.idx}`;
+      if (seen.has(k)) {
+        conflicts.push({ key: k, ids: [seen.get(k), ei.id] });
+      } else {
+        seen.set(k, ei.id);
+      }
     }
   }
   return conflicts;
