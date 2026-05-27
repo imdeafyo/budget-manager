@@ -166,3 +166,92 @@ state, so this is fine. If a user ever has partners residing in
 different states (rare), the FIRE estimate will slightly understate
 state tax for the higher-rate partner's residence. Surface a warning
 if `p1State.abbr !== p2State.abbr`, or model both states.
+
+## Core architecture
+
+### Stable IDs for budget line items (exp / sav rows)
+
+Right now `exp[]` and `sav[]` are positional arrays. The only "id"
+attached is `idx`, which is derived from array position at render time
+in `useAppState.jsx` (`ewk.map((e, i) => ({ ...e, idx: i, ... }))`).
+This means *any* index-based reference to a row breaks as soon as a
+row above it gets deleted or reordered:
+
+- **Advanced forecast Ending Obligations** carry `linkedItemRefs`
+  that reference budget items. Deleting an item above them shifts
+  everyone below — the link silently re-points at the wrong row.
+- **Milestone Compare** (Phase 8A) had to fall back to matching by
+  `(section, normalized-name)` because there's no stable id to match
+  on. Renames look like add+remove as a result.
+- **Splits / rules / transaction categories** that reference items by
+  position would have the same problem if any of them ever did
+  (none currently do as of this writing, but it's a landmine).
+
+The fix is straightforward but invasive:
+
+1. On `exp[]` / `sav[]` item creation (add UI, bulk add, CSV import,
+   migrations, loaded-state hydration), assign a `id` field — short
+   string, e.g. `"e_" + crypto.randomUUID().slice(0, 8)`. Persist it.
+2. Loader migration: any item loaded without an `id` gets one
+   assigned at hydration time and persisted on next save. Same shim
+   pattern as the milestones rename — one-time backfill, then forget.
+3. Consumers that use `idx` for layout / React keys keep doing so;
+   consumers that need to *reference* a specific item across edits
+   switch to `id`.
+4. Update `linkedItemRefs` in Ending Obligations to use `id` instead
+   of name/idx. Backfill existing refs by name match on load.
+5. `milestoneCompare` then prefers `id` match over name match.
+6. `recalcMilestonePure` writes ids into `fullState.exp/sav` so saved
+   milestones carry the same ids and Compare can match across them.
+
+Tests: assignment idempotency, loader backfill, ref-stability across
+delete-above scenarios for both EO links and Compare matching.
+
+Probably 2 sessions: one for assignment + loader + migrations + tests,
+one for consumer cutover + the Compare match-by-id wiring + Ending
+Obligation ref migration. Should land before Phase 8A gets used much
+in anger, since Compare's name-matching is the most visible symptom
+right now.
+
+## Advanced Forecast — Ending Obligations (more)
+
+### Origination-date start toggle
+
+Currently a loan-mode Ending Obligation infers the loan start from the
+obligation's start date (effectively "today"). For an existing loan
+that's been amortizing for years, the user has to do mental math —
+"the loan started 3 years ago at $X, so today's balance is …" — to get
+the right principal in.
+
+Add a toggle on loan-mode obligations: **"Start date"** vs
+**"Origination date"**. When set to Origination, the user enters the
+original principal + the original date; the math walks the
+amortization forward to today and uses *that* remaining balance as the
+forecast input. Matches how the (parked) Phase 14 Loans design handles
+mid-schedule loans via `remainingAtBase`.
+
+Small change, mostly UI + a tiny math hop. 1 session when it surfaces
+again.
+
+## Phase 14 (Loans) — follow-ups
+
+### Graduated repayment loans
+
+The Phase 14 rewrite assumes standard fixed-payment amortization
+(monthly principal + interest = constant). Federal student loans with
+graduated repayment plans don't work that way: payment starts low and
+steps up every 2 years over a 10-25 year term. Same for some private
+loans.
+
+Two ways to model:
+
+- **Schedule import.** User pastes the lender's published payment
+  schedule (CSV or table). We store it and amortize off the schedule
+  directly. Most accurate; works for any payment pattern.
+- **Parameterized graduation.** A "graduation" toggle on the loan
+  with `startingPayment`, `stepEveryNYears`, `stepMultiplier`. Less
+  accurate, more convenient for the common federal case.
+
+Probably the schedule-import route is right — it generalizes to
+income-driven repayment too without redesign. Park until Phase 14
+ships and a real graduated loan needs modeling.

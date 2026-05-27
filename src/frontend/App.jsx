@@ -8,6 +8,7 @@ import BudgetTab, { BudgetToolbar } from "./tabs/BudgetTab.jsx";
 import ChartsTab from "./tabs/ChartsTab.jsx";
 import MilestoneViewTab from "./tabs/MilestoneViewTab.jsx";
 import MilestonesSubtab from "./tabs/MilestonesSubtab.jsx";
+import MilestoneCompareTab from "./tabs/MilestoneCompareTab.jsx";
 import ForecastTab from "./tabs/ForecastTab.jsx";
 import AdvancedForecastTab from "./tabs/AdvancedForecastTab.jsx";
 import TransactionsTab from "./tabs/TransactionsTab.jsx";
@@ -139,7 +140,7 @@ function App() {
           {/* Subtab pill row — only shown for tabs that have subtabs (Budget, Charts). */}
           {(S.tab === "budget" || S.tab === "charts") && (
             <div style={{ display: "flex", gap: 6, padding: "6px 0 4px", overflowX: "auto" }}>
-              {S.tab === "budget" && [["live", "Live"], ["milestones", "Milestones"]].map(([k, l]) => {
+              {S.tab === "budget" && [["live", "Live"], ["milestones", "Milestones"], ["compare", "Compare"]].map(([k, l]) => {
                 const active = S.budgetSubtab === k;
                 return (
                   <button key={k} onClick={() => S.setBudgetSubtab(k)} style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: active ? `2px solid ${S.tabAccent}` : "2px solid rgba(255,255,255,0.15)", borderRadius: 999, background: active ? "rgba(255,255,255,0.15)" : "transparent", color: active ? "#fff" : "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>{l}</button>
@@ -180,6 +181,21 @@ function App() {
         )}
         {S.tab === "budget" && S.budgetSubtab === "milestones" && S.viewingMs !== null && S.milestones[S.viewingMs] && (
           <MilestoneViewTab mob={S.mob} viewingMs={S.viewingMs} setViewingMs={S.setViewingMs} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} msVisCols={S.msVisCols} setMsVisCols={S.setMsVisCols} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} allTaxDB={S.allTaxDB} fil={S.fil} cats={S.cats} savCats={S.savCats} setRestoreConfirm={S.setRestoreConfirm} />
+        )}
+
+        {/* ═══ BUDGET — Compare subtab. Diffs two milestones (or one milestone vs
+             the live "Current" budget) and renders the result as aggregate
+             summary cards + an income table + a line-item diff table. ═══ */}
+        {S.tab === "budget" && S.budgetSubtab === "compare" && (
+          <MilestoneCompareTab
+            mob={S.mob}
+            visCols={S.visCols}
+            milestones={S.milestones}
+            exp={S.exp} sav={S.sav}
+            cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip}
+            p1Name={S.p1Name} p2Name={S.p2Name}
+            C={S.C} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW}
+          />
         )}
 
         {/* Restore confirm modal — lives at the budget tab level so it can be triggered
