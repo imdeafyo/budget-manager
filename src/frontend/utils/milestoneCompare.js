@@ -30,14 +30,21 @@
    constructs it from current state.
 
    ── Matching ──
-   Items match by (section, normalized-name). Section is the expense type
-   ("N" / "D" for necessities/discretionary) or "S" for savings; name is
-   trimmed + lowercased. Renames look like add + remove (acceptable for now —
-   we don't carry stable ids in the schema).
+   Items match by stable `id` first, then fall back to (section,
+   normalized-name) when one or both sides lack ids (legacy milestones).
+   Section is the expense type ("N" / "D" for necessities/discretionary)
+   or "S" for savings; name is trimmed + lowercased. Renames look like
+   "changed" once both sides have ids — until then they look like
+   add + remove.
 
-   When two items in the same section share a normalized name, they match by
-   array order (1st A with 1st B, 2nd A with 2nd B). This is uncommon in
-   practice but the tiebreak is deterministic.
+   When two items in the same section share a normalized name AND
+   neither has a matching id, they match by array order (1st A with 1st
+   B, 2nd A with 2nd B). This is uncommon in practice but the tiebreak
+   is deterministic.
+
+   Each diff row carries a `matchedBy: "id" | "name" | null` field so
+   the UI can surface match-method information if desired (currently
+   informational only).
 
    ── Output shape ──
    See `compareMilestones()` JSDoc below.
@@ -79,7 +86,8 @@ export function periodValue(item, period) {
   return wk;
 }
 
-/* Compare two arrays of items by (section, name). Returns:
+/* Compare two arrays of items by stable id (preferred) then by
+   (section, normalized name) as fallback. Returns:
      {
        rows: [{
          section: "N" | "D" | "S",
@@ -91,8 +99,25 @@ export function periodValue(item, period) {
          bAnnual: number,               // annual48 dollars (B side)
          delta: number,                 // bAnnual - aAnnual
          status: "added" | "removed" | "changed" | "unchanged",
+         matchedBy: "id" | "name" | null,
        }, ...]
      }
+
+   Matching strategy:
+     Pass 1 — id match: items on both sides carrying the same stable
+       `id` are paired regardless of name or position. Renames look
+       like "changed" (because the value can still differ), and they
+       no longer look like add+remove.
+     Pass 2 — name fallback: any A-side item not yet matched is paired
+       with a B-side item of the same normalized name in the same
+       section. Ordered: first A with first remaining B of that name.
+       This handles legacy milestones that predate stable ids on one
+       or both sides.
+
+   Cross-pass consumption: an item paired in pass 1 is removed from
+   the candidate pool for pass 2, so name collisions across renames
+   don't cause double-matching.
+
    Order: matches A's order first (so visible diff respects the user's
    original ordering), then any B-only rows appended at the end. */
 function diffItems(aExp, aSav, bExp, bSav) {
@@ -110,39 +135,83 @@ function diffItems(aExp, aSav, bExp, bSav) {
   }
   for (const it of bSav || []) sectionsB.S.push(it);
 
-  // Track B-side consumed indices so we can collect the orphans at the end.
-  const consumedB = { N: new Set(), D: new Set(), S: new Set() };
+  // For each A item we record either { bItem, matchedBy } or null
+  // (no match yet). We do pass 1 (id) over all sections first to
+  // claim id-pairs before name fallback runs.
   const rows = [];
+  const consumedB = { N: new Set(), D: new Set(), S: new Set() };
+  // matches[section][aIndex] = { bIdx, matchedBy } | null
+  const matches = { N: [], D: [], S: [] };
 
+  // Pass 1: id matching.
   for (const section of ["N", "D", "S"]) {
     const aList = sectionsA[section];
     const bList = sectionsB[section];
-    // Index B by normalized name → ordered list of array indices, so we can
-    // pop in order for duplicates.
-    const bIndex = new Map();
+    // Index B by id.
+    const bById = new Map();
     bList.forEach((it, i) => {
-      const k = normName(it?.n);
-      if (!bIndex.has(k)) bIndex.set(k, []);
-      bIndex.get(k).push(i);
+      const id = typeof it?.id === "string" && it.id.length > 0 ? it.id : null;
+      if (id && !bById.has(id)) bById.set(id, i);
     });
+    aList.forEach((aIt, ai) => {
+      const aId = typeof aIt?.id === "string" && aIt.id.length > 0 ? aIt.id : null;
+      if (aId && bById.has(aId)) {
+        const bIdx = bById.get(aId);
+        if (!consumedB[section].has(bIdx)) {
+          matches[section][ai] = { bIdx, matchedBy: "id" };
+          consumedB[section].add(bIdx);
+        } else {
+          matches[section][ai] = null;
+        }
+      } else {
+        matches[section][ai] = null;
+      }
+    });
+  }
 
-    for (const aIt of aList) {
+  // Pass 2: name fallback for unmatched A items.
+  for (const section of ["N", "D", "S"]) {
+    const aList = sectionsA[section];
+    const bList = sectionsB[section];
+    // Index B by name → list of indices still available, in order.
+    const bByName = new Map();
+    bList.forEach((it, i) => {
+      if (consumedB[section].has(i)) return;
+      const k = normName(it?.n);
+      if (!bByName.has(k)) bByName.set(k, []);
+      bByName.get(k).push(i);
+    });
+    aList.forEach((aIt, ai) => {
+      if (matches[section][ai]) return; // already matched by id
       const k = normName(aIt?.n);
-      const candidates = bIndex.get(k) || [];
-      const bIdx = candidates.length > 0 ? candidates.shift() : -1;
-      const bIt = bIdx >= 0 ? bList[bIdx] : null;
-      if (bIdx >= 0) consumedB[section].add(bIdx);
+      const candidates = bByName.get(k) || [];
+      if (candidates.length === 0) return;
+      const bIdx = candidates.shift();
+      matches[section][ai] = { bIdx, matchedBy: "name" };
+      consumedB[section].add(bIdx);
+    });
+  }
 
+  // Build rows. A-side first (preserves user's ordering), then B-only orphans.
+  for (const section of ["N", "D", "S"]) {
+    const aList = sectionsA[section];
+    const bList = sectionsB[section];
+    aList.forEach((aIt, ai) => {
+      const m = matches[section][ai];
+      const bIt = m ? bList[m.bIdx] : null;
+      const matchedBy = m ? m.matchedBy : null;
       const aAnnual = annualDollars(aIt);
       const bAnnual = annualDollars(bIt);
       let status;
       if (!bIt) status = "removed";
       else if (Math.abs(aAnnual - bAnnual) < 0.005) status = "unchanged";
       else status = "changed";
-
       rows.push({
         section,
-        name: aIt?.n || bIt?.n || "",
+        // Display name prefers B side when matched (so the post-rename
+        // name is shown for id-matched renames), falls back to A's name
+        // when removed.
+        name: (bIt?.n) || aIt?.n || "",
         category: aIt?.c || bIt?.c || null,
         aItem: aIt,
         bItem: bIt,
@@ -150,8 +219,9 @@ function diffItems(aExp, aSav, bExp, bSav) {
         bAnnual,
         delta: bAnnual - aAnnual,
         status,
+        matchedBy,
       });
-    }
+    });
 
     // B-only orphans = items not consumed by an A match.
     bList.forEach((bIt, i) => {
@@ -167,6 +237,7 @@ function diffItems(aExp, aSav, bExp, bSav) {
         bAnnual,
         delta: bAnnual,
         status: "added",
+        matchedBy: null,
       });
     });
   }

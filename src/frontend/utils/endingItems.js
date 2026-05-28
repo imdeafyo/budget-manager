@@ -17,7 +17,7 @@
 
      {
        id: "ei_<random>",
-       itemRefs: [{ section: "exp" | "sav", idx: number, name: string }, ...],
+       itemRefs: [{ section: "exp" | "sav", id?: string, idx: number, name: string }, ...],
        destAccountId: "<account id>",       // where freed cash flows
        effect: "ends" | "starts",            // scaffolding; UI only exposes "ends"
        mode: "date" | "loan",
@@ -32,10 +32,14 @@
    (and on any input change for live preview). Math layer just trusts it.
 
    The linked budget items' amounts are read live from the budget at
-   projection time — that's why each itemRef carries an idx+section
-   pointer rather than an embedded amount. `name` is a snapshot used to
-   display "Linked item missing" if the underlying item was renamed
-   or deleted.
+   projection time. `id` is the stable budget-item identifier (added
+   in the stable-IDs phase) and is the preferred match key — it survives
+   reorders, renames, and delete-above. `idx` and `name` are kept as
+   fallback for resolving legacy refs that predate stable ids (the
+   resolver auto-upgrades any successful name/idx fallback by writing
+   the matched item's `id` back into the ref on next save). `name` is
+   also used as a snapshot to display "Linked item missing" if the
+   underlying item was renamed or deleted.
 
    Back-compat: Phase X-A persisted a single `itemRef` per obligation.
    Loads with `itemRef` and no `itemRefs` are still accepted — the
@@ -69,6 +73,95 @@ export function getItemRefs(ei) {
   if (Array.isArray(ei.itemRefs)) return ei.itemRefs;
   if (ei.itemRef && typeof ei.itemRef === "object") return [ei.itemRef];
   return [];
+}
+
+/* Normalize a name for fallback matching: trim + lowercase. */
+function _normName(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+/* Resolve an itemRef to an actual budget-item, with fallback layers.
+   ---------------------------------------------------------------
+   Stable-IDs phase: prefer the ref's `id` (rock-solid across reorders,
+   deletes, and renames). Fall back to (section, normalized-name) for
+   refs persisted before ids existed. Fall back further to (section,
+   idx) for very old data where the name was also stale.
+
+   Args:
+     ref — { section, id?, idx?, name? } — the persisted reference
+     exp — the live exp[] array (each item ideally has an `id`)
+     sav — the live sav[] array (each item ideally has an `id`)
+
+   Returns:
+     {
+       item: <budget item>|null,
+       matchedBy: "id"|"name"|"idx"|null,
+       upgradeTo: { id, idx, name }|null   // suggested ref upgrade
+                                           //   if matched by fallback
+     }
+
+   `upgradeTo` is set when the resolver matched by name or idx and
+   the matched item has an `id` we can pin the ref to going forward.
+   Callers (typically AdvancedForecastTab) can write this back into
+   the ref so the next persistence layer captures the upgrade.
+
+   Resolution rules:
+     1. If ref.id is present and matches an item's id → match by id.
+     2. Else if (section, normalized name) matches exactly ONE item
+        → match by name. (Multiple matches: ambiguous, skip to step 3.)
+     3. Else if ref.idx is in-range AND the item at that idx has the
+        same normalized name as ref.name → match by idx.
+        (Both checks required so a deleted-above + same-name-coincidence
+        doesn't silently point at the wrong row.)
+     4. Else: orphan. */
+export function resolveItemRef(ref, exp, sav) {
+  if (!ref || typeof ref !== "object" || typeof ref.section !== "string") {
+    return { item: null, matchedBy: null, upgradeTo: null };
+  }
+  const arr = ref.section === "sav" ? (sav || []) : (exp || []);
+  if (!Array.isArray(arr)) {
+    return { item: null, matchedBy: null, upgradeTo: null };
+  }
+
+  // 1. ID match — preferred.
+  if (typeof ref.id === "string" && ref.id.length > 0) {
+    const byId = arr.find(it => it && it.id === ref.id);
+    if (byId) {
+      return { item: byId, matchedBy: "id", upgradeTo: null };
+    }
+    // ref carries an id but it doesn't exist in the live arr —
+    // fall through to name match (item may have been renamed-then-
+    // re-added without an id sync, unlikely but harmless).
+  }
+
+  // 2. Name match — fallback for pre-id refs.
+  const norm = _normName(ref.name);
+  if (norm.length > 0) {
+    const candidates = arr.filter(it => it && _normName(it.n) === norm);
+    if (candidates.length === 1) {
+      const m = candidates[0];
+      const upgrade = (typeof m.id === "string" && m.id.length > 0)
+        ? { id: m.id, idx: arr.indexOf(m), name: m.n }
+        : null;
+      return { item: m, matchedBy: "name", upgradeTo: upgrade };
+    }
+    // Multiple name matches: ambiguous. Don't guess — fall to idx.
+  }
+
+  // 3. Idx match — last-resort fallback. Both idx-in-range AND
+  // matching normalized name required to avoid silent mis-pointing.
+  if (typeof ref.idx === "number" && ref.idx >= 0 && ref.idx < arr.length) {
+    const m = arr[ref.idx];
+    if (m && _normName(m.n) === norm) {
+      const upgrade = (typeof m.id === "string" && m.id.length > 0)
+        ? { id: m.id, idx: ref.idx, name: m.n }
+        : null;
+      return { item: m, matchedBy: "idx", upgradeTo: upgrade };
+    }
+  }
+
+  // 4. Orphan.
+  return { item: null, matchedBy: null, upgradeTo: null };
 }
 
 /* Loan amortization — months to pay off.
@@ -338,6 +431,13 @@ export function eventsByAccount(events) {
    If obligation A links to refs [X, Y] and B links to [Y], the
    conflict is on Y between A and B.
 
+   Stable-IDs phase: keys by `ref.id` when present (preferred), falls
+   back to `section::idx` for legacy refs. Mixing both within one
+   data set is supported — a ref-with-id and a ref-without-id pointing
+   at the same row by name/idx will NOT detect as conflicting (would
+   require a resolution pass to compare). Migration eventually
+   converges all refs to ids, after which conflict detection is exact.
+
    Returns array of conflict descriptions, empty if clean. */
 export function findItemRefConflicts(endingItems) {
   const seen = new Map(); // key -> first ending-item id that claimed it
@@ -346,8 +446,18 @@ export function findItemRefConflicts(endingItems) {
     if (!ei) continue;
     const refs = getItemRefs(ei);
     for (const ref of refs) {
-      if (!ref || typeof ref.section !== "string" || typeof ref.idx !== "number") continue;
-      const k = `${ref.section}::${ref.idx}`;
+      if (!ref || typeof ref.section !== "string") continue;
+      // Prefer id-based key when ref has an id. Falls back to section::idx
+      // for legacy refs without ids (key format preserved for back-compat
+      // with callers that have inspected the conflict key string).
+      let k;
+      if (typeof ref.id === "string" && ref.id.length > 0) {
+        k = `${ref.section}::id::${ref.id}`;
+      } else if (typeof ref.idx === "number") {
+        k = `${ref.section}::${ref.idx}`;
+      } else {
+        continue;
+      }
       if (seen.has(k)) {
         conflicts.push({ key: k, ids: [seen.get(k), ei.id] });
       } else {

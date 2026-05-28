@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef } from "../utils/endingItems.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { newLoanId, resolveLoans, aggregateDebt, totalRemainingInterest, payoffMonthIndex } from "../utils/loans.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
@@ -499,6 +499,57 @@ export default function AdvancedForecastTab({
       return { ...prev, endingItems: cur.filter(ei => ei.id !== id) };
     });
   };
+
+  /* Stable-IDs phase: auto-heal legacy itemRefs. Any ref that lacks an
+     `id` but resolves to a budget item (by name or idx fallback) gets
+     the matched item's id written into it, so the next save persists a
+     stable reference. Idempotent: once every ref carries an id (or is a
+     true orphan with no id to assign), this no-ops and stops firing.
+
+     Runs whenever endingItems or the budget arrays change. The setForecast
+     short-circuits to `prev` when nothing was upgraded, so steady-state
+     renders don't churn. We only upgrade refs whose RESOLVED item has an
+     id — orphans and items-without-ids are left untouched. */
+  useEffect(() => {
+    if (!Array.isArray(endingItems) || endingItems.length === 0) return;
+    let anyUpgrade = false;
+    const healed = endingItems.map(ei => {
+      const refs = getItemRefs(ei);
+      if (refs.length === 0) return ei;
+      let refChanged = false;
+      const nextRefs = refs.map(ref => {
+        if (!ref || typeof ref.section !== "string") return ref;
+        // Already has an id that resolves? Leave it.
+        const { item, matchedBy, upgradeTo } = resolveItemRef(ref, exp, sav);
+        if (!item) return ref; // orphan — nothing to heal
+        if (matchedBy === "id") return ref; // already pinned
+        if (!upgradeTo) return ref; // matched but target has no id yet
+        refChanged = true;
+        return { ...ref, id: upgradeTo.id, idx: upgradeTo.idx, name: upgradeTo.name };
+      });
+      if (!refChanged) return ei;
+      anyUpgrade = true;
+      // Preserve whichever field the obligation actually used.
+      if (Array.isArray(ei.itemRefs)) return { ...ei, itemRefs: nextRefs };
+      // Legacy single-itemRef obligations: write back as itemRefs (the
+      // canonical shape) so future reads go through the array path.
+      return { ...ei, itemRefs: nextRefs, itemRef: undefined };
+    });
+    if (!anyUpgrade) return;
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      // Re-map against the freshly-healed list by id to avoid clobbering
+      // any concurrent edit that landed between render and effect.
+      const healedById = new Map(healed.map(ei => [ei.id, ei]));
+      let changed = false;
+      const next = cur.map(ei => {
+        const h = healedById.get(ei.id);
+        if (h && h !== ei) { changed = true; return h; }
+        return ei;
+      });
+      return changed ? { ...prev, endingItems: next } : prev;
+    });
+  }, [endingItems, exp, sav]);
   const addEndingItem = () => {
     /* Default destination: the first taxable/cash account in the list,
        or any non-capped account, or the first account overall. The user
@@ -635,34 +686,65 @@ export default function AdvancedForecastTab({
      they're about to start funding. We mark itemRefs that are already
      consumed by another ending item so the dropdown can disable them
      (one-ending-per-item invariant — also enforced on save via
-     findItemRefConflicts as a backstop). */
+     findItemRefConflicts as a backstop).
+
+     Stable-IDs phase: each option carries the item's `id` (when present)
+     so refs created from this list pin to a stable identifier. The
+     `key` used for claimed-ref deduplication also prefers id, falling
+     back to section::idx for items without an id yet (first-render
+     edge before backfill writes back). */
   const linkedItemOptions = useMemo(() => {
     const out = [];
     for (let idx = 0; idx < (Array.isArray(exp) ? exp.length : 0); idx++) {
       const e = exp[idx];
       if (!e) continue;
-      out.push({ section: "exp", idx, name: e.n || `Expense ${idx + 1}`, key: `exp::${idx}` });
+      const id = typeof e.id === "string" && e.id.length > 0 ? e.id : null;
+      out.push({
+        section: "exp",
+        idx,
+        id,
+        name: e.n || `Expense ${idx + 1}`,
+        key: id ? `exp::id::${id}` : `exp::${idx}`,
+      });
     }
     for (let idx = 0; idx < (Array.isArray(sav) ? sav.length : 0); idx++) {
       const s = sav[idx];
       if (!s) continue;
-      out.push({ section: "sav", idx, name: s.n || `Savings ${idx + 1}`, key: `sav::${idx}` });
+      const id = typeof s.id === "string" && s.id.length > 0 ? s.id : null;
+      out.push({
+        section: "sav",
+        idx,
+        id,
+        name: s.n || `Savings ${idx + 1}`,
+        key: id ? `sav::id::${id}` : `sav::${idx}`,
+      });
     }
     return out;
   }, [exp, sav]);
 
-  /* Set of itemRef keys (section::idx) already claimed by an ending item.
-     Each key maps to the set of ending-item ids that claim it, so we can
-     keep the *current* row's own selections enabled even when they're
-     "taken." Multi-ref aware (Phase 14a): walks every ref in every
-     obligation, so an obligation linking to [A, B] claims both keys. */
+  /* Set of itemRef keys already claimed by an ending item. Each key maps
+     to the set of ending-item ids that claim it, so we can keep the
+     *current* row's own selections enabled even when they're "taken."
+     Multi-ref aware (Phase 14a): walks every ref in every obligation,
+     so an obligation linking to [A, B] claims both keys.
+
+     Stable-IDs phase: keys by `ref.id` when present, falls back to
+     `section::idx` for legacy refs. This matches the keying scheme in
+     `linkedItemOptions` above so dropdown disable logic lines up. */
   const claimedRefKeys = useMemo(() => {
     const m = new Map(); // key -> Set of ending-item ids
     for (const ei of endingItems) {
       const refs = getItemRefs(ei);
       for (const ref of refs) {
-        if (!ref || typeof ref.section !== "string" || typeof ref.idx !== "number") continue;
-        const k = `${ref.section}::${ref.idx}`;
+        if (!ref || typeof ref.section !== "string") continue;
+        let k;
+        if (typeof ref.id === "string" && ref.id.length > 0) {
+          k = `${ref.section}::id::${ref.id}`;
+        } else if (typeof ref.idx === "number") {
+          k = `${ref.section}::${ref.idx}`;
+        } else {
+          continue;
+        }
         if (!m.has(k)) m.set(k, new Set());
         m.get(k).add(ei.id);
       }
@@ -676,19 +758,15 @@ export default function AdvancedForecastTab({
      paycheck wrinkle doesn't apply here — the math layer is running a
      monthly forecast based on budget intent, not reconciling against
      transactions. Returns null when the linked item is missing (e.g.
-     renamed/deleted/reordered away). */
+     renamed/deleted/reordered away).
+
+     Stable-IDs phase: uses `resolveItemRef` which prefers id matching
+     (rock-solid across reorders/renames) and falls back to name/idx
+     for legacy refs that predate ids. The orphan case still surfaces
+     as null from this function. */
   const monthlyAmountFor = (ref) => {
-    if (!ref || typeof ref.idx !== "number") return null;
-    const arr = ref.section === "sav" ? sav : exp;
-    if (!Array.isArray(arr)) return null;
-    const item = arr[ref.idx];
+    const { item } = resolveItemRef(ref, exp, sav);
     if (!item) return null;
-    // Sanity check: if the user reordered items, the idx may point at a
-    // different item now. We compare snapshot name as a soft check —
-    // when the name doesn't match, we trust the idx still (most reorders
-    // shift everything in lockstep) and surface the rename via the
-    // dropdown display rather than failing. The orphan path catches the
-    // hard case where idx is out of range entirely.
     const wk = toWk(item.v, item.p);
     if (!isFinite(wk)) return null;
     return wk * 48 / 12; // weekly → monthly
@@ -1873,18 +1951,45 @@ export default function AdvancedForecastTab({
                  of resolved refs (or null if any ref is unresolved). */
               const refs = getItemRefs(ei);
               /* Per-ref resolution. Each entry parallel to `refs`:
-                   { ref, key, linkedItem, monthly, isOrphan }
-                 isOrphan ↔ the section/idx no longer points at a real
-                 budget item (renamed/deleted/reordered out). */
+                   { ref, key, linkedItem, monthly, isOrphan, matchedBy }
+                 isOrphan ↔ the ref no longer resolves to any budget item
+                 (renamed/deleted/reordered out, and id+name+idx all
+                 failed to match).
+
+                 Stable-IDs phase: uses `resolveItemRef` which prefers id
+                 matching. The `key` used for claim-checking matches the
+                 keying scheme in `claimedRefKeys` / `linkedItemOptions`
+                 above — id-based when available, falls back to
+                 section::idx. */
               const refResolutions = refs.map((ref) => {
-                if (!ref || typeof ref.idx !== "number") {
-                  return { ref, key: null, linkedItem: null, monthly: null, isOrphan: false };
+                if (!ref || typeof ref.section !== "string") {
+                  return { ref, key: null, linkedItem: null, monthly: null, isOrphan: false, matchedBy: null };
                 }
-                const arr = ref.section === "sav" ? sav : exp;
-                const linkedItem = Array.isArray(arr) ? arr[ref.idx] : null;
-                const key = `${ref.section}::${ref.idx}`;
-                const monthly = monthlyAmountFor(ref);
-                return { ref, key, linkedItem, monthly, isOrphan: !linkedItem };
+                const { item: linkedItem, matchedBy } = resolveItemRef(ref, exp, sav);
+                /* Key must align with `linkedItemOptions` keying so the
+                   <select value> shows the current selection. We derive
+                   it from the RESOLVED item (id-based when the item has
+                   an id), not from the raw ref — otherwise a legacy
+                   idx-keyed ref pointing at an item that now has an id
+                   wouldn't line up with the dropdown option. Falls back
+                   to section::idx when the resolved item lacks an id, or
+                   to the raw ref when nothing resolved (orphan). */
+                let key;
+                if (linkedItem && typeof linkedItem.id === "string" && linkedItem.id.length > 0) {
+                  key = `${ref.section}::id::${linkedItem.id}`;
+                } else if (linkedItem) {
+                  const arr = ref.section === "sav" ? sav : exp;
+                  const resolvedIdx = Array.isArray(arr) ? arr.indexOf(linkedItem) : -1;
+                  key = resolvedIdx >= 0 ? `${ref.section}::${resolvedIdx}` : null;
+                } else if (typeof ref.id === "string" && ref.id.length > 0) {
+                  key = `${ref.section}::id::${ref.id}`;
+                } else if (typeof ref.idx === "number") {
+                  key = `${ref.section}::${ref.idx}`;
+                } else {
+                  key = null;
+                }
+                const monthly = linkedItem ? monthlyAmountFor(ref) : null;
+                return { ref, key, linkedItem, monthly, isOrphan: !linkedItem, matchedBy };
               });
               /* Whole-obligation aggregates. */
               const anyOrphan = refResolutions.some(r => r.isOrphan);
@@ -1978,7 +2083,7 @@ export default function AdvancedForecastTab({
                   return !(taken && !taken.has(ei.id)); // not taken by another obligation
                 });
                 const newRef = firstAvailable
-                  ? { section: firstAvailable.section, idx: firstAvailable.idx, name: firstAvailable.name }
+                  ? { section: firstAvailable.section, id: firstAvailable.id || undefined, idx: firstAvailable.idx, name: firstAvailable.name }
                   : null;
                 updateEndingItem(ei.id, { itemRefs: [...refs, newRef] });
               };
@@ -2023,7 +2128,7 @@ export default function AdvancedForecastTab({
                           const opt = linkedItemOptions.find(o => o.key === v);
                           if (!opt) return;
                           updateEndingItem(ei.id, {
-                            itemRefs: [{ section: opt.section, idx: opt.idx, name: opt.name }],
+                            itemRefs: [{ section: opt.section, id: opt.id || undefined, idx: opt.idx, name: opt.name }],
                           });
                         }}
                         style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid #E8573A", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
@@ -2085,7 +2190,7 @@ export default function AdvancedForecastTab({
                                   }
                                   const opt = linkedItemOptions.find(o => o.key === v);
                                   if (!opt) return;
-                                  setRefAt(slotIdx, { section: opt.section, idx: opt.idx, name: opt.name });
+                                  setRefAt(slotIdx, { section: opt.section, id: opt.id || undefined, idx: opt.idx, name: opt.name });
                                 }}
                                 style={{ flex: 1, padding: 6, fontSize: 12, border: `1px solid ${rr.isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
                               >

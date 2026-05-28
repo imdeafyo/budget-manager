@@ -3,6 +3,7 @@ import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PR
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
+import { ensureIds, newItemId } from "../utils/itemIds.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useM } from "../components/ui.jsx";
@@ -458,6 +459,23 @@ export default function useAppState() {
         const d = r.state;
         /* snapshots→milestones rename shim: pre-rename saves wrote `snapshots`. Read either; next save writes only `milestones`. */
         if (d.milestones === undefined && d.snapshots !== undefined) { d.milestones = d.snapshots; }
+        /* Stable-IDs backfill: ensure every exp/sav item carries a stable
+           `id` so Ending Obligation refs and Milestone Compare can match
+           by identity rather than name/position. Idempotent — items that
+           already have an id pass through untouched. Backfilled ids
+           persist on next auto-save. */
+        if (Array.isArray(d.exp)) d.exp = ensureIds(d.exp);
+        if (Array.isArray(d.sav)) d.sav = ensureIds(d.sav);
+        if (Array.isArray(d.milestones)) {
+          d.milestones = d.milestones.map(ms => {
+            if (!ms || typeof ms !== "object" || !ms.fullState) return ms;
+            const fs = ms.fullState;
+            const nextExp = Array.isArray(fs.exp) ? ensureIds(fs.exp) : fs.exp;
+            const nextSav = Array.isArray(fs.sav) ? ensureIds(fs.sav) : fs.sav;
+            if (nextExp === fs.exp && nextSav === fs.sav) return ms; // no-op fast path
+            return { ...ms, fullState: { ...fs, exp: nextExp, sav: nextSav } };
+          });
+        }
         log.info("state.load", {
           source: "api",
           size: JSON.stringify(d).length,
@@ -1014,12 +1032,40 @@ export default function useAppState() {
         if (!s?.items || typeof s.items !== "object") return s;
         const { exp, sav } = reconstructFromItems(s.items);
         if (exp.length === 0 && sav.length === 0) return s;
+        // Stable-IDs phase: assign ids to the freshly reconstructed
+        // items so milestone Compare can match them by id later.
+        const expWithIds = ensureIds(exp);
+        const savWithIds = ensureIds(sav);
         changed = true;
-        return { ...s, fullState: { ...(s.fullState || {}), exp, sav } };
+        return { ...s, fullState: { ...(s.fullState || {}), exp: expWithIds, sav: savWithIds } };
       });
       return changed ? next : prev;
     });
   }, [loaded, msBackfilled, milestones.length]);
+
+  /* Stable-IDs phase: backfill ids on milestone fullState.exp/sav arrays
+     whenever new milestones arrive without ids (e.g. JSON import path,
+     which bypasses the load-time backfill). Runs on every milestones
+     change but no-ops cheaply when everything already has ids — the
+     `ensureIds` calls return the input array by reference when nothing
+     needs assignment, and `setMilestones` short-circuits to `prev` when
+     nothing changed, so React doesn't re-render in the steady state. */
+  useEffect(() => {
+    if (!loaded || milestones.length === 0) return;
+    setMilestones(prev => {
+      let changed = false;
+      const next = prev.map(s => {
+        if (!s || typeof s !== "object" || !s.fullState) return s;
+        const fs = s.fullState;
+        const nextExp = Array.isArray(fs.exp) ? ensureIds(fs.exp) : fs.exp;
+        const nextSav = Array.isArray(fs.sav) ? ensureIds(fs.sav) : fs.sav;
+        if (nextExp === fs.exp && nextSav === fs.sav) return s;
+        changed = true;
+        return { ...s, fullState: { ...fs, exp: nextExp, sav: nextSav } };
+      });
+      return changed ? next : prev;
+    });
+  }, [loaded, milestones]);
 
   const restoreFullState = useCallback((idx) => {
     const m = milestones[idx];
@@ -1039,7 +1085,7 @@ export default function useAppState() {
       if (fs.cIraRoth !== undefined) setCIraRoth(fs.cIraRoth);
       if (fs.kIraTrad !== undefined) setKIraTrad(fs.kIraTrad);
       if (fs.kIraRoth !== undefined) setKIraRoth(fs.kIraRoth);
-      if (fs.exp) setExp(fs.exp); if (fs.sav) setSav(fs.sav);
+      if (fs.exp) setExp(ensureIds(fs.exp)); if (fs.sav) setSav(ensureIds(fs.sav));
       if (fs.cats) setCats(fs.cats);
       if (fs.savCats) setSavCats(fs.savCats);
       if (fs.transferCats) setTransferCats(fs.transferCats);
@@ -1053,7 +1099,10 @@ export default function useAppState() {
         if (data.t === "S") { newSav.push({ n: name, v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m", c: data.c || "Other" }); }
         else { newExp.push({ n: name, c: data.c || "General", t: data.t || "N", v: String(Math.round((data.v || 0) / 12 * 100) / 100), p: "m" }); }
       });
-      setExp(newExp); setSav(newSav); setCats([...newCats]);
+      // Stable-IDs phase: items reconstructed from the legacy `items`
+      // shape have no ids; assign them now so downstream consumers
+      // (EO refs, Compare) get stable identity from the restore.
+      setExp(ensureIds(newExp)); setSav(ensureIds(newSav)); setCats([...newCats]);
       if (m.cSalary) setCS(String(m.cSalary));
       if (m.kSalary) setKS(String(m.kSalary));
     }
@@ -1070,7 +1119,7 @@ export default function useAppState() {
     if (ls.cIraRoth !== undefined) setCIraRoth(ls.cIraRoth);
     if (ls.kIraTrad !== undefined) setKIraTrad(ls.kIraTrad);
     if (ls.kIraRoth !== undefined) setKIraRoth(ls.kIraRoth);
-    if (ls.exp) setExp(ls.exp); if (ls.sav) setSav(ls.sav);
+    if (ls.exp) setExp(ensureIds(ls.exp)); if (ls.sav) setSav(ensureIds(ls.sav));
     if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats); if (ls.transferCats) setTransferCats(ls.transferCats); if (ls.incomeCats) setIncomeCats(ls.incomeCats);
     if (ls.tax) setTax(ls.tax);
     if (ls.p1Name) setP1Name(ls.p1Name); if (ls.p2Name) setP2Name(ls.p2Name);

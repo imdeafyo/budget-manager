@@ -9,6 +9,7 @@ import {
   resolveEndingEvents,
   eventsByAccount,
   findItemRefConflicts,
+  resolveItemRef,
 } from "./endingItems.js";
 
 describe("newEndingItemId", () => {
@@ -529,5 +530,152 @@ describe("resolveEndingEvents — multi-ref (Phase 14a)", () => {
       { idx: 1, d: -500 },
       { idx: 36, d: 500 },
     ]);
+  });
+});
+
+describe("resolveItemRef — stable-IDs resolution", () => {
+  // Two-row exp + one-row sav fixture, each item carrying a stable id.
+  const exp = [
+    { id: "i_aaa", n: "Groceries", c: "Food", t: "N", v: "100", p: "w" },
+    { id: "i_bbb", n: "Netflix",   c: "Entertainment", t: "D", v: "15", p: "m" },
+  ];
+  const sav = [
+    { id: "i_sss", n: "Emergency Fund", c: "Savings", v: "200", p: "m" },
+  ];
+
+  it("matches by id when ref.id matches an item", () => {
+    const ref = { section: "exp", id: "i_bbb", idx: 1, name: "Netflix" };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.matchedBy).toBe("id");
+    expect(r.item).toBe(exp[1]);
+    expect(r.upgradeTo).toBeNull();
+  });
+
+  it("matches by id even if idx and name are stale", () => {
+    // Simulates: ref was correct, then user inserted a row above (idx
+    // shifted) and renamed the item. ID still wins.
+    const ref = { section: "exp", id: "i_bbb", idx: 99, name: "old name" };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.matchedBy).toBe("id");
+    expect(r.item).toBe(exp[1]);
+  });
+
+  it("falls back to name match when ref has no id but item has one", () => {
+    const ref = { section: "exp", idx: 99, name: "Netflix" };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.matchedBy).toBe("name");
+    expect(r.item).toBe(exp[1]);
+    // Suggests upgrading the ref to carry the matched item's id
+    expect(r.upgradeTo).toEqual({ id: "i_bbb", idx: 1, name: "Netflix" });
+  });
+
+  it("name match is case- and whitespace-insensitive", () => {
+    const ref = { section: "exp", idx: 0, name: "  NETFLIX  " };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.matchedBy).toBe("name");
+    expect(r.item).toBe(exp[1]);
+  });
+
+  it("falls back to idx when name is ambiguous but idx points at the right item", () => {
+    // Two items share a normalized name → name match is ambiguous and skipped.
+    const dupExp = [
+      { id: "i_aaa", n: "Subscription", c: "Tech", t: "D", v: "10", p: "m" },
+      { id: "i_bbb", n: "Subscription", c: "Tech", t: "D", v: "20", p: "m" },
+    ];
+    const ref = { section: "exp", idx: 1, name: "Subscription" };
+    const r = resolveItemRef(ref, dupExp, sav);
+    expect(r.matchedBy).toBe("idx");
+    expect(r.item).toBe(dupExp[1]);
+    expect(r.upgradeTo).toEqual({ id: "i_bbb", idx: 1, name: "Subscription" });
+  });
+
+  it("orphans when nothing matches", () => {
+    const ref = { section: "exp", id: "i_missing", idx: 99, name: "Gone" };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.item).toBeNull();
+    expect(r.matchedBy).toBeNull();
+    expect(r.upgradeTo).toBeNull();
+  });
+
+  it("idx fallback requires matching name (defense against delete-above coincidence)", () => {
+    // ref points at idx=0 with name "Groceries", but if exp[0] was deleted
+    // and a different item shifted into idx=0, the names won't match —
+    // don't silently rebind.
+    const shiftedExp = [
+      { id: "i_zzz", n: "Rent", c: "Housing", t: "N", v: "1500", p: "m" },
+    ];
+    const ref = { section: "exp", idx: 0, name: "Groceries" };
+    const r = resolveItemRef(ref, shiftedExp, sav);
+    expect(r.item).toBeNull();
+    expect(r.matchedBy).toBeNull();
+  });
+
+  it("respects the section field (exp vs sav)", () => {
+    // ref.id i_sss exists only in sav. With section=exp it shouldn't find it.
+    const ref = { section: "exp", id: "i_sss", idx: 0, name: "Emergency Fund" };
+    const r = resolveItemRef(ref, exp, sav);
+    expect(r.item).toBeNull();
+  });
+
+  it("returns orphan for malformed ref", () => {
+    expect(resolveItemRef(null, exp, sav)).toEqual({ item: null, matchedBy: null, upgradeTo: null });
+    expect(resolveItemRef({}, exp, sav)).toEqual({ item: null, matchedBy: null, upgradeTo: null });
+    expect(resolveItemRef({ section: 123 }, exp, sav)).toEqual({ item: null, matchedBy: null, upgradeTo: null });
+  });
+
+  it("handles missing exp/sav arrays gracefully", () => {
+    const ref = { section: "exp", id: "i_bbb", idx: 0, name: "Netflix" };
+    expect(resolveItemRef(ref, null, null).item).toBeNull();
+    expect(resolveItemRef(ref, undefined, undefined).item).toBeNull();
+    expect(resolveItemRef(ref, [], []).item).toBeNull();
+  });
+
+  it("name fallback returns no upgrade hint when matched item lacks an id", () => {
+    // Edge case: name match succeeds against an item that itself doesn't
+    // have an id yet. No upgrade can be persisted.
+    const noIdExp = [
+      { n: "Netflix", c: "Entertainment", t: "D", v: "15", p: "m" }, // no id
+    ];
+    const ref = { section: "exp", idx: 0, name: "Netflix" };
+    const r = resolveItemRef(ref, noIdExp, sav);
+    expect(r.matchedBy).toBe("name");
+    expect(r.item).toBe(noIdExp[0]);
+    expect(r.upgradeTo).toBeNull();
+  });
+});
+
+describe("findItemRefConflicts — id-aware", () => {
+  it("detects same-id refs across two obligations as a conflict", () => {
+    const items = [
+      { id: "ei_a", itemRefs: [{ section: "exp", id: "i_x", idx: 0, name: "X" }] },
+      { id: "ei_b", itemRefs: [{ section: "exp", id: "i_x", idx: 5, name: "X" }] },
+    ];
+    const conflicts = findItemRefConflicts(items);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].ids).toEqual(["ei_a", "ei_b"]);
+    expect(conflicts[0].key).toBe("exp::id::i_x");
+  });
+
+  it("does NOT conflict when one ref has an id and the other only has idx (different keying)", () => {
+    // Documented behavior: pre-migration data and post-migration data
+    // coexist briefly. Once the resolver upgrades the legacy ref on
+    // next save, they'll then conflict on id. Until then they don't —
+    // a known limitation, not a bug.
+    const items = [
+      { id: "ei_a", itemRefs: [{ section: "exp", id: "i_x", idx: 0, name: "X" }] },
+      { id: "ei_b", itemRefs: [{ section: "exp", idx: 0, name: "X" }] },
+    ];
+    const conflicts = findItemRefConflicts(items);
+    expect(conflicts).toHaveLength(0);
+  });
+
+  it("detects idx conflict between two legacy refs", () => {
+    const items = [
+      { id: "ei_a", itemRefs: [{ section: "exp", idx: 2, name: "X" }] },
+      { id: "ei_b", itemRefs: [{ section: "exp", idx: 2, name: "X" }] },
+    ];
+    const conflicts = findItemRefConflicts(items);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].key).toBe("exp::2");
   });
 });

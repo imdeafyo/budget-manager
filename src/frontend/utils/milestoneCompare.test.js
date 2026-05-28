@@ -368,3 +368,134 @@ describe("compareMilestones — end-to-end shape", () => {
     expect(r).toHaveProperty("bLabel");
   });
 });
+
+describe("compareMilestones — id-first matching (stable IDs)", () => {
+  const expWithId = (id, n, c, t, v, p = "m") => ({ id, n, c, t, v, p });
+  const savWithId = (id, n, c, v, p = "m") => ({ id, n, c, v, p });
+
+  it("matches items with the same id across renames, showing as 'changed' not add+remove", () => {
+    // Same id, different name → would have been add+remove under name matching;
+    // now should be a single "changed" row.
+    const a = input({ exp: [expWithId("i_groc", "Groceries", "Food", "N", "100", "w")] });
+    const b = input({ exp: [expWithId("i_groc", "Groceries+Household", "Food", "N", "100", "w")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].status).toBe("unchanged"); // value didn't change
+    expect(r.items.rows[0].matchedBy).toBe("id");
+    expect(r.items.rows[0].name).toBe("Groceries+Household"); // post-rename name shown
+  });
+
+  it("rename + value change → 'changed' with id match", () => {
+    const a = input({ exp: [expWithId("i_x", "Netflix", "Ent", "D", "15", "m")] });
+    const b = input({ exp: [expWithId("i_x", "Streaming", "Ent", "D", "20", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].status).toBe("changed");
+    expect(r.items.rows[0].matchedBy).toBe("id");
+    expect(r.items.rows[0].name).toBe("Streaming");
+  });
+
+  it("falls back to name matching when only one side has ids", () => {
+    // Old milestone (no ids) compared against current (has ids).
+    const a = input({ exp: [exp("Netflix", "Ent", "D", "15", "m")] });
+    const b = input({ exp: [expWithId("i_x", "Netflix", "Ent", "D", "20", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].status).toBe("changed");
+    expect(r.items.rows[0].matchedBy).toBe("name");
+  });
+
+  it("falls back to name matching when both sides lack ids (legacy data)", () => {
+    const a = input({ exp: [exp("Netflix", "Ent", "D", "15", "m")] });
+    const b = input({ exp: [exp("Netflix", "Ent", "D", "20", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].status).toBe("changed");
+    expect(r.items.rows[0].matchedBy).toBe("name");
+  });
+
+  it("id mismatch with same name → still matches by name when no id-pair exists", () => {
+    // A has "i_a" + "Netflix"; B has "i_b" + "Netflix". Neither id is on
+    // both sides, so pass-1 fails. Pass-2 name match succeeds.
+    const a = input({ exp: [expWithId("i_a", "Netflix", "Ent", "D", "15", "m")] });
+    const b = input({ exp: [expWithId("i_b", "Netflix", "Ent", "D", "15", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].matchedBy).toBe("name");
+    expect(r.items.rows[0].status).toBe("unchanged");
+  });
+
+  it("id-paired item that also has same-name counterpart on the other side: id wins, name-twin is added/removed", () => {
+    // A: [Netflix id=a]
+    // B: [Netflix id=b, Netflix id=a]
+    // Pass 1: A's i_a matches B's i_a (the 2nd row). Pass 2: nothing left
+    // unmatched on A side, so B's i_b "Netflix" surfaces as "added".
+    const a = input({ exp: [expWithId("i_a", "Netflix", "Ent", "D", "15", "m")] });
+    const b = input({ exp: [
+      expWithId("i_b", "Netflix", "Ent", "D", "20", "m"),
+      expWithId("i_a", "Netflix", "Ent", "D", "15", "m"),
+    ] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(2);
+    const matched = r.items.rows.find(row => row.matchedBy === "id");
+    expect(matched).toBeTruthy();
+    expect(matched.status).toBe("unchanged");
+    const added = r.items.rows.find(row => row.status === "added");
+    expect(added).toBeTruthy();
+    expect(added.bItem.id).toBe("i_b");
+  });
+
+  it("id matching respects section boundaries: same id in N and D doesn't cross", () => {
+    // Pathological but worth pinning: if some bug ever wrote the same id
+    // into items of different types, matching shouldn't cross sections.
+    const a = input({ exp: [expWithId("i_x", "Groceries", "Food", "N", "100", "w")] });
+    const b = input({ exp: [expWithId("i_x", "Dining", "Food", "D", "100", "w")] });
+    const r = compareMilestones(a, b);
+    // A's N item is "removed" (no id-match in N), B's D item is "added".
+    expect(r.items.rows).toHaveLength(2);
+    const removed = r.items.rows.find(row => row.status === "removed");
+    const added = r.items.rows.find(row => row.status === "added");
+    expect(removed).toBeTruthy();
+    expect(added).toBeTruthy();
+  });
+
+  it("savings items match by id too", () => {
+    const a = input({ sav: [savWithId("i_ef", "Emergency Fund", "Sav", "200", "m")] });
+    const b = input({ sav: [savWithId("i_ef", "Emergency Reserve", "Sav", "250", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(1);
+    expect(r.items.rows[0].matchedBy).toBe("id");
+    expect(r.items.rows[0].section).toBe("S");
+    expect(r.items.rows[0].status).toBe("changed");
+    expect(r.items.rows[0].name).toBe("Emergency Reserve");
+  });
+
+  it("two items with same name but distinct ids → both treated as id-distinct", () => {
+    // A has two "Subscription" items with different ids (legitimate dupes).
+    // B has them too, paired by id. All four match correctly.
+    const a = input({ exp: [
+      expWithId("i_1", "Subscription", "Tech", "D", "10", "m"),
+      expWithId("i_2", "Subscription", "Tech", "D", "20", "m"),
+    ] });
+    const b = input({ exp: [
+      expWithId("i_2", "Subscription", "Tech", "D", "25", "m"),
+      expWithId("i_1", "Subscription", "Tech", "D", "10", "m"),
+    ] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(2);
+    expect(r.items.rows.every(row => row.matchedBy === "id")).toBe(true);
+    // The i_1 pair is unchanged, i_2 went 20→25.
+    const m1 = r.items.rows.find(row => row.aItem?.id === "i_1");
+    const m2 = r.items.rows.find(row => row.aItem?.id === "i_2");
+    expect(m1.status).toBe("unchanged");
+    expect(m2.status).toBe("changed");
+  });
+
+  it("matchedBy: null on added and removed rows", () => {
+    const a = input({ exp: [expWithId("i_only_a", "OnlyA", "X", "N", "10", "m")] });
+    const b = input({ exp: [expWithId("i_only_b", "OnlyB", "X", "N", "20", "m")] });
+    const r = compareMilestones(a, b);
+    expect(r.items.rows).toHaveLength(2);
+    expect(r.items.rows.every(row => row.matchedBy === null)).toBe(true);
+  });
+});

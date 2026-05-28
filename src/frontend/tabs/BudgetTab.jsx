@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
+import { newItemId } from "../utils/itemIds.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
 
@@ -218,16 +219,16 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         </div>
 
         <CSH color="var(--c-taxable, #556FB5)" collapsed={collapsed.nec} onToggle={() => toggleSec("nec")}>Necessity Expenses</CSH>
-        {!collapsed.nec && necI.map(item => <ExpRowInner key={item.n + "_" + item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
+        {!collapsed.nec && necI.map(item => <ExpRowInner key={item.id || (item.n + "_" + item.idx)} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
         <Row label="Subtotal — Necessity" wk={-tNW} mo={-moC(tNW)} y48={-y4(tNW)} y52={-y4(tNW)} bold border color="var(--c-taxable, #556FB5)" />
 
         <CSH color="var(--c-totaltax, #E8573A)" collapsed={collapsed.dis} onToggle={() => toggleSec("dis")}>Discretionary Expenses</CSH>
-        {!collapsed.dis && disI.map(item => <ExpRowInner key={item.n + "_" + item.idx} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
+        {!collapsed.dis && disI.map(item => <ExpRowInner key={item.id || (item.n + "_" + item.idx)} item={item} cats={cats} onUpdate={u => updExp(item.idx, u)} onRemove={() => rmExp(item.idx)} />)}
         <Row label="Subtotal — Discretionary" wk={-tDW} mo={-moC(tDW)} y48={-y4(tDW)} y52={-y4(tDW)} bold border color="var(--c-totaltax, #E8573A)" />
         <Row label="Total All Expenses" wk={-tExpW} mo={-moC(tExpW)} y48={-y4(tExpW)} y52={-y4(tExpW)} bold border />
 
         <CSH color="#2ECC71" collapsed={collapsed.sav} onToggle={() => toggleSec("sav")}>Savings Goals</CSH>
-        {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.n + "_" + item.idx} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
+        {!collapsed.sav && savSorted.map(item => <SavRowInner key={item.id || (item.n + "_" + item.idx)} item={item} savCats={savCats} onUpdate={u => updSav(item.idx, u)} onRemove={() => rmSav(item.idx)} />)}
         <Row label="Total Savings" wk={-tSavW} mo={-moC(tSavW)} y48={-y4(tSavW)} y52={-y5(tSavW)} bold border color="#2ECC71" />
 
         {/* The three rows below mix signs across columns (wk/mo/y48 can be
@@ -331,7 +332,7 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
                 <NI value={niV} onChange={setNiV} prefix="$" /></div>
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
                 <button onClick={() => setShowAddItem(false)} style={{ padding: "9px 18px", border: "2px solid var(--bdr, #ddd)", borderRadius: 8, background: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "var(--tx3,#888)" }}>Cancel</button>
-                <button onClick={() => { if (!niN.trim()) return; if (niS === "exp") setExp([...exp, { n: niN.trim(), c: niC || cats[0], t: niT, v: niV || "0", p: niP }]); else setSav([...sav, { n: niN.trim(), c: niC || savCats[0], v: niV || "0", p: niP }]); setNiN(""); setNiV(""); setShowAddItem(false); }}
+                <button onClick={() => { if (!niN.trim()) return; if (niS === "exp") setExp([...exp, { id: newItemId(), n: niN.trim(), c: niC || cats[0], t: niT, v: niV || "0", p: niP }]); else setSav([...sav, { id: newItemId(), n: niN.trim(), c: niC || savCats[0], v: niV || "0", p: niP }]); setNiN(""); setNiV(""); setShowAddItem(false); }}
                   style={{ padding: "9px 18px", background: "#E8573A", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: "pointer" }}>+ Add</button>
               </div>
             </div>
@@ -393,8 +394,8 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
                   else if (bulkPer === "m") yearly = numVal * 12;
                   yearly = Math.round(yearly * 100) / 100;
                   if (bulkTargets.current) {
-                    if (bulkSec === "exp") setExp(prev => [...prev, { n: name, c: bulkCat || cats[0], t: bulkType, v: val, p: bulkPer }]);
-                    else setSav(prev => [...prev, { n: name, c: bulkCat || savCats[0], v: val, p: bulkPer }]);
+                    if (bulkSec === "exp") setExp(prev => [...prev, { id: newItemId(), n: name, c: bulkCat || cats[0], t: bulkType, v: val, p: bulkPer }]);
+                    else setSav(prev => [...prev, { id: newItemId(), n: name, c: bulkCat || savCats[0], v: val, p: bulkPer }]);
                   }
                   const selectedIds = Object.entries(bulkTargets).filter(([k, v]) => k !== "current" && v).map(([k]) => +k || k);
                   if (selectedIds.length > 0) {
