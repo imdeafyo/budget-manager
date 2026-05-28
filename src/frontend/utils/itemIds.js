@@ -107,3 +107,34 @@ export function ensureIdsInPlace(arr) {
     }
   }
 }
+
+/* Decide what the first post-load auto-save should do.
+   ---------------------------------------------------------------
+   Extracted as a pure function so the migration-persistence bug has a
+   regression test. The bug: the auto-save effect stamps a no-op
+   baseline on the first run after load and skips the network write
+   (correct, for the state-wipe guard). But when the load-time stable-IDs
+   migration assigns new ids, the in-memory state diverges from the
+   server's copy — and the baseline-skip would swallow that divergence,
+   so the ids would never persist. A passive load (open app, touch
+   nothing) must still write the migrated ids back.
+
+   Args:
+     baselineNull   — true when lastSavedHashRef.current === null (first run)
+     migrationDirty — true when the load-time backfill assigned ids that
+                      weren't on the server copy
+
+   Returns one of:
+     "skip-stamp-baseline" — first run, nothing migrated: stamp & skip PUT
+     "put-migration"       — first run, migration dirty: PUT then stamp
+     "normal"              — not the first run: fall through to hash compare
+
+   Truth table:
+     baselineNull=false                       → "normal"
+     baselineNull=true,  migrationDirty=false → "skip-stamp-baseline"
+     baselineNull=true,  migrationDirty=true  → "put-migration" */
+export function firstSaveAction(baselineNull, migrationDirty) {
+  if (!baselineNull) return "normal";
+  if (migrationDirty) return "put-migration";
+  return "skip-stamp-baseline";
+}

@@ -3,7 +3,7 @@ import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PR
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
-import { ensureIds, newItemId } from "../utils/itemIds.js";
+import { ensureIds, newItemId, firstSaveAction } from "../utils/itemIds.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
 import { useM } from "../components/ui.jsx";
@@ -446,6 +446,14 @@ export default function useAppState() {
      Storing as a ref (not state) so updating it doesn't re-render or
      re-fire the save effect. */
   const lastSavedHashRef = useRef(null);
+  /* Stable-IDs phase: when the load-time backfill assigns ids that
+     weren't on the server's copy, the state in memory diverges from
+     what's persisted. The first-save baseline-stamp (which normally
+     skips the PUT because loaded state == server state) would swallow
+     that divergence and the ids would never persist. This ref flags
+     "the migration changed something, so the first save MUST go through
+     instead of just stamping the baseline." */
+  const migrationDirtyRef = useRef(false);
   useEffect(() => { (async () => {
     try {
       const res = await apiFetch("/api/state");
@@ -462,10 +470,22 @@ export default function useAppState() {
         /* Stable-IDs backfill: ensure every exp/sav item carries a stable
            `id` so Ending Obligation refs and Milestone Compare can match
            by identity rather than name/position. Idempotent — items that
-           already have an id pass through untouched. Backfilled ids
-           persist on next auto-save. */
-        if (Array.isArray(d.exp)) d.exp = ensureIds(d.exp);
-        if (Array.isArray(d.sav)) d.sav = ensureIds(d.sav);
+           already have an id pass through untouched. `ensureIds` returns
+           the SAME array reference when nothing needed assigning, so a
+           reference change is a reliable "the migration did something"
+           signal. When it fires, we mark migrationDirtyRef so the first
+           auto-save persists the new ids instead of just stamping the
+           no-op baseline. */
+        if (Array.isArray(d.exp)) {
+          const next = ensureIds(d.exp);
+          if (next !== d.exp) migrationDirtyRef.current = true;
+          d.exp = next;
+        }
+        if (Array.isArray(d.sav)) {
+          const next = ensureIds(d.sav);
+          if (next !== d.sav) migrationDirtyRef.current = true;
+          d.sav = next;
+        }
         if (Array.isArray(d.milestones)) {
           d.milestones = d.milestones.map(ms => {
             if (!ms || typeof ms !== "object" || !ms.fullState) return ms;
@@ -473,6 +493,7 @@ export default function useAppState() {
             const nextExp = Array.isArray(fs.exp) ? ensureIds(fs.exp) : fs.exp;
             const nextSav = Array.isArray(fs.sav) ? ensureIds(fs.sav) : fs.sav;
             if (nextExp === fs.exp && nextSav === fs.sav) return ms; // no-op fast path
+            migrationDirtyRef.current = true;
             return { ...ms, fullState: { ...fs, exp: nextExp, sav: nextSav } };
           });
         }
@@ -691,8 +712,27 @@ export default function useAppState() {
         // saves a redundant round-trip AND establishes the baseline for
         // future skip-comparisons.
         if (lastSavedHashRef.current === null) {
-          lastSavedHashRef.current = payload;
-          log.info("state.save.baseline", { size: payload.length });
+          /* Stable-IDs phase: if the load-time migration assigned new
+             ids, the in-memory state diverges from the server copy and
+             we MUST persist it. Otherwise stamp the no-op baseline and
+             skip the PUT (state-wipe guard). Decision extracted to
+             firstSaveAction() in utils/itemIds.js for regression testing. */
+          const action = firstSaveAction(true, migrationDirtyRef.current);
+          if (action === "skip-stamp-baseline") {
+            lastSavedHashRef.current = payload;
+            log.info("state.save.baseline", { size: payload.length });
+            return;
+          }
+          // action === "put-migration": persist the migrated ids.
+          migrationDirtyRef.current = false;
+          log.info("state.save.migration", { size: payload.length });
+          const res = await apiFetch("/api/state", { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload });
+          if (res.ok) {
+            lastSavedHashRef.current = payload;
+            log.info("state.save", { size: payload.length, reqId: res.reqId, migration: true });
+          } else {
+            log.warn("state.save.fail", { status: res.status, size: payload.length, reqId: res.reqId });
+          }
           return;
         }
         // Subsequent saves: skip if payload identical to last sync.

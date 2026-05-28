@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { newItemId, ensureIds, ensureIdsInPlace } from "./itemIds.js";
+import { newItemId, ensureIds, ensureIdsInPlace, firstSaveAction } from "./itemIds.js";
 
 describe("newItemId", () => {
   it("returns a string with the i_ prefix", () => {
@@ -133,5 +133,24 @@ describe("ensureIdsInPlace", () => {
     const arr = [null, { n: "a" }, undefined];
     expect(() => ensureIdsInPlace(arr)).not.toThrow();
     expect(arr[1].id).toMatch(/^i_/);
+  });
+});
+
+describe("firstSaveAction — migration persistence regression", () => {
+  it("stamps baseline and skips PUT on first save when nothing migrated", () => {
+    // The state-wipe guard's normal behavior: don't write back on load.
+    expect(firstSaveAction(true, false)).toBe("skip-stamp-baseline");
+  });
+
+  it("forces a PUT on first save when the migration assigned new ids", () => {
+    // THE BUG: without this, backfilled ids never reach the server on a
+    // passive load (open app, touch nothing). Must PUT to persist.
+    expect(firstSaveAction(true, true)).toBe("put-migration");
+  });
+
+  it("falls through to normal hash-compare on subsequent saves", () => {
+    // baselineNull=false → not the first run, regardless of dirty flag.
+    expect(firstSaveAction(false, false)).toBe("normal");
+    expect(firstSaveAction(false, true)).toBe("normal");
   });
 });
