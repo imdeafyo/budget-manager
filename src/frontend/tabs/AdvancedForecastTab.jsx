@@ -288,6 +288,21 @@ export default function AdvancedForecastTab({
     return () => document.removeEventListener("keydown", onKey);
   }, [addMenuOpen]);
 
+  /* Bulk "As-of" date for the Ending Obligations section.
+     ---------------------------------------------------------------
+     Sets every obligation's `balanceAsOf` and every sub-loan's
+     `balanceAsOf` to the same date in one click. Lives at the top
+     of the Ending Obligations card so users can refresh all
+     balances at once after checking statements.
+
+     Local state — not persisted. Default seeds to today (the most
+     common case: "I just refreshed all my balances"). The input is
+     <input type="month">, same YYYY-MM format the per-row fields use. */
+  const [bulkAsOf, setBulkAsOf] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
+
   /* Sorted view for rendering. `manual` keeps the persisted index order;
      otherwise produce a fresh sorted copy each render. The underlying
      `accounts` array is never reordered by sorting — only by user drag. */
@@ -498,6 +513,27 @@ export default function AdvancedForecastTab({
     setForecast(prev => {
       const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
       return { ...prev, endingItems: cur.filter(ei => ei.id !== id) };
+    });
+  };
+
+  /* Bulk-set `balanceAsOf` to `ym` on every ending obligation and every
+     sub-loan within them. Single setForecast call so the update batches
+     into one auto-save round-trip. Does NOT touch balance numbers — the
+     as-of is purely a "when was this accurate" anchor that tells the
+     roll-forward math how stale each balance is. */
+  const applyBulkAsOf = (ym) => {
+    if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return;
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      const next = cur.map(ei => {
+        const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
+        return {
+          ...ei,
+          balanceAsOf: ym,
+          subLoans: subLoans.map(sl => ({ ...sl, balanceAsOf: ym })),
+        };
+      });
+      return { ...prev, endingItems: next };
     });
   };
 
@@ -1933,6 +1969,48 @@ export default function AdvancedForecastTab({
           <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400E", background: "rgba(243,156,18,0.12)", border: "1px solid rgba(243,156,18,0.35)", borderRadius: 6 }}>
             ⚠ {endingItemConflicts.length} budget item{endingItemConflicts.length === 1 ? " is" : "s are"} referenced by multiple ending obligations.
             Only one obligation per budget line is supported — please remove duplicates below.
+          </div>
+        )}
+
+        {/* Bulk As-of toggle — sets balanceAsOf on every obligation +
+           sub-loan in one click. Only shown when there's something to
+           sweep. Doesn't touch balance numbers; just stamps the "when
+           was this accurate" anchor that drives roll-forward math. */}
+        {endingItems.length > 0 && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: "8px 10px",
+            marginBottom: 10,
+            background: "var(--input-bg,#fafafa)",
+            border: "1px solid var(--bdr,#e2e2e2)",
+            borderRadius: 6,
+            fontSize: 11.5,
+          }}>
+            <span style={{ color: "var(--tx2,#555)", fontWeight: 600 }}>Bulk as-of:</span>
+            <input
+              type="month"
+              value={bulkAsOf}
+              onChange={e => setBulkAsOf(e.target.value)}
+              style={{ padding: "4px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "var(--input-color,#222)" }}
+            />
+            <button
+              type="button"
+              onClick={() => applyBulkAsOf(bulkAsOf)}
+              title={(() => {
+                const subLoanCount = endingItems.reduce(
+                  (n, ei) => n + (Array.isArray(ei.subLoans) ? ei.subLoans.length : 0), 0);
+                const parts = [`${endingItems.length} obligation${endingItems.length === 1 ? "" : "s"}`];
+                if (subLoanCount > 0) parts.push(`${subLoanCount} sub-loan${subLoanCount === 1 ? "" : "s"}`);
+                return `Set As-of on ${parts.join(" + ")} to ${bulkAsOf}. Balances are not changed.`;
+              })()}
+              style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: "none", borderRadius: 4, background: "#556FB5", color: "#fff", cursor: "pointer" }}
+            >Apply to all</button>
+            <span style={{ color: "var(--tx3,#888)", fontSize: 10.5 }}>
+              Sets the "balance was accurate as of" date on every obligation and sub-loan. Doesn't change balance amounts.
+            </span>
           </div>
         )}
 
