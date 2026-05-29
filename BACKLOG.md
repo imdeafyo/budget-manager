@@ -87,6 +87,54 @@ Out of scope for the first cut (could be a follow-up):
 Not urgent. Real friction will appear over months of editing, not
 weeks. Probably 1–2 sessions when it's time.
 
+### Account balance as-of + roll-forward (unify with bulk as-of)
+
+The "Bulk as-of: Apply to all" control on Advanced only touches Ending
+Obligations and their sub-loans, because those are the only things
+that carry a `balanceAsOf` field. Forecast **accounts** don't have one
+— an account's `startBalance` is treated as "the balance right now, at
+the projection base year-month." So there's no way to enter "my 401k
+was $312k as of my last statement (2026-02)" and have the forecast roll
+it forward to today; you have to mentally update it yourself.
+
+This makes the as-of model inconsistent across the page (loans roll
+forward, accounts don't) and the bulk button silently skips accounts.
+Surfaced 2026-05-28 — Corey expected the bulk control to cover both.
+
+Why it's not a one-line button fix: `rollForwardBalance` in
+`endingItems.js` is built for *debt* — it accrues interest and
+**subtracts** a monthly payment, walking a balance down. An investment
+account is the sign-flipped mirror: accrue return and **add**
+contributions, walking the balance up. Can't reuse the function as-is.
+
+Scope when picked up:
+
+- Add `balanceAsOf` to the account shape (`defaultForecastAccounts`
+  in taxDB.js + loader migration: missing `balanceAsOf` defaults to
+  base year-month, same one-time-backfill shim pattern as milestones).
+- New roll-forward helper (sibling to `rollForwardBalance`) for the
+  growth case: `startBalance` accrues `annualReturn` monthly and adds
+  contributions over the gap from `balanceAsOf` to base. **Open design
+  question — how do contributions interact with the roll-forward gap?**
+  Options: (a) ignore contributions during the gap, roll the balance
+  by return only (simplest, slight undercount); (b) accrue the
+  account's projected monthly contribution over the gap too (more
+  accurate, but the contribution figure is itself derived from
+  budget/actuals and may not have been valid during the gap). Lean (a)
+  for the first cut — the gap is usually 1–3 months, contribution
+  error is small, and it avoids the "was this contribution rate even
+  true back then" rabbit hole.
+- Per-account as-of input in the accounts table (mirrors the sub-loan
+  as-of input UI that already exists).
+- Extend `applyBulkAsOf` to also stamp every account's `balanceAsOf`,
+  and update the bulk button's tooltip/label to say it covers accounts
+  too. Stale-months hint on accounts like loans have.
+- Tests: roll-forward math (return-only and, if chosen, with
+  contributions), no-op when as-of ≥ base, loader backfill idempotency,
+  bulk-apply hits accounts.
+
+Probably 1 session. Decide the contribution question first.
+
 ## Server / Infrastructure
 
 ### PVC for log persistence (Phase 6.5b-B, deferred)
