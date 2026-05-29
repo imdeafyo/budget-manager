@@ -131,6 +131,59 @@ flow stream); UI is its own design problem. Park until 8A/9B/14 ship
 and the simple single-spending override has been used in anger for a
 few months.
 
+### Time-varying FIRE target (expense step-down as obligations / loans end)
+
+The FIRE target's *expense basis* is a single static number (Simple
+takes an override defaulting to current expenses; Advanced uses
+`tExpW × 48`). It never steps down when a budgeted obligation ends —
+so the model assumes you carry your mortgage payment forever, which
+overstates the required nest egg for anyone with a payoff date inside
+their horizon.
+
+The inputs to fix this already exist and don't talk to FIRE yet:
+
+- `utils/endingItems.js` (Ending Obligations) already computes *when*
+  a budgeted expense stops freeing cash flow, including loan-mode
+  obligations that derive `endsOn` via amortization. That's the
+  "mortgage line drops out of expenses on date N" signal.
+- Phase 14 (Loans), once it ships, produces a payoff date +
+  amortization curve per loan — a cleaner source for the same signal.
+
+Distinct from Phase 16 above: Phase 16 is about spending changing
+*within retirement* (go-go / slow-go / no-go age bands). This is about
+spending changing *on the way to FI* because a financed obligation
+ends. They compose — the eventual model is a spending curve that both
+steps down at obligation payoffs and varies by retirement age band.
+
+Scope when picked up:
+
+- Build a time-series expense profile: start from current annual
+  expenses, subtract each obligation's annualized payment from its
+  end month onward (Ending Obligations first; fold in Phase 14 Loans
+  payoff dates once they exist).
+- Make the FIRE target a *curve*, not a scalar: at each year, target =
+  (expenses-at-that-year) gross-up via the existing tax-aware
+  `fireTarget.js` mix logic. The account mix already moves with growth;
+  this makes the expense side move too.
+- Redefine "crossover" as the projected balance line meeting the
+  *stepped* target line, rather than a flat horizontal target. The FI
+  year is the first year balance ≥ target-at-that-year.
+- UI: render the target as a stepped line on the Advanced chart (it's
+  flat-horizontal today). Tooltip or annotation at each step noting
+  which obligation ended ("Mortgage P&I paid off — target drops $Xk").
+- Escape hatch: keep the "Use classic rule" / flat-target toggle for
+  people who'd rather reason about a single number.
+
+**Sequencing: do NOT start before Phase 14 (Loans) ships.** Loans is
+what produces clean amortization payoff dates; building expense
+step-down first means hand-rolling the amortization data Loans is
+about to provide. `endingItems.js` covers the non-loan obligation case
+(daycare ending, etc.) and could seed an early partial, but the loan
+case is the headline use and it wants Loans first.
+
+Probably 2 sessions (expense-profile + curve math + tests, then chart
++ crossover UI). Surfaced 2026-05-28.
+
 ### Healthcare cushion as a structured input
 
 Currently the pre-Medicare healthcare gap is handled by a tooltip
