@@ -5,6 +5,7 @@ import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, ca
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef } from "../utils/endingItems.js";
+import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { newLoanId, resolveLoans, aggregateDebt, totalRemainingInterest, payoffMonthIndex } from "../utils/loans.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
@@ -2054,6 +2055,70 @@ export default function AdvancedForecastTab({
                 loanResult = computeLoanEndsOn(ei.balance, ei.annualRate, liveMonthly, baseYearMonth);
               }
 
+              /* Sub-loans (Phase 14 follow-up): when present, the single
+                 balance/rate is REPLACED by per-rate sub-loans, each
+                 amortizing independently. The math lives in subLoans.js;
+                 here we just resolve the group for display. Graduation
+                 entry + freed-payment indicator are later sessions, so we
+                 pass graduation:{enabled:false} for now (flat per-loan). */
+              const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
+              const hasSubLoans = subLoans.length > 0;
+              const subResult = (isLoanMode && hasSubLoans)
+                ? resolveSubLoanGroup(subLoans, { enabled: false }, baseYearMonth)
+                : null;
+              /* Balance-weighted average rate + combined balance for the
+                 read-only summary that replaces the single-rate display. */
+              const subSummary = hasSubLoans ? (() => {
+                let bal = 0, weighted = 0;
+                for (const s of subLoans) {
+                  const b = Number(s.balance) || 0;
+                  bal += b;
+                  weighted += b * (Number(s.annualRate) || 0);
+                }
+                return { totalBalance: bal, avgRate: bal > 0 ? weighted / bal : 0 };
+              })() : null;
+
+              const updateSubLoanAt = (slIdx, patch) => {
+                const next = subLoans.map((s, i) => i === slIdx ? { ...s, ...patch } : s);
+                updateEndingItem(ei.id, withGroupEndsOn(next));
+              };
+              const removeSubLoanAt = (slIdx) => {
+                const next = subLoans.slice();
+                next.splice(slIdx, 1);
+                updateEndingItem(ei.id, withGroupEndsOn(next));
+              };
+              const addSubLoan = () => {
+                /* Seed a new sub-loan. If this is the FIRST one, fold the
+                   existing single balance/rate in as the seed so the user
+                   doesn't lose what they typed. */
+                const seed = subLoans.length === 0
+                  ? { balance: Number(ei.balance) || 0, annualRate: Number(ei.annualRate) || 0 }
+                  : { balance: 0, annualRate: 0 };
+                const sl = {
+                  id: `sl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+                  label: `Sub-loan ${subLoans.length + 1}`,
+                  balance: seed.balance,
+                  annualRate: seed.annualRate,
+                  payments: [0],     // single flat payment for now (graduation later)
+                  extraMonthly: 0,
+                };
+                updateEndingItem(ei.id, withGroupEndsOn([...subLoans, sl]));
+              };
+              /* Build a patch that includes the recomputed group payoff
+                 date so resolveEndingEvents (which reads ei.endsOn) fires
+                 the freed-cash event when the LAST sub-loan clears. When a
+                 sub-loan can't amortize we leave endsOn untouched and the
+                 summary surfaces the error. Removing all sub-loans reverts
+                 to the single-rate balance/rate path. */
+              function withGroupEndsOn(nextSubLoans) {
+                const patch = { subLoans: nextSubLoans };
+                if (nextSubLoans.length > 0) {
+                  const g = resolveSubLoanGroup(nextSubLoans, { enabled: false }, baseYearMonth);
+                  if (g.groupEndsOn && !g.anyError) patch.endsOn = g.groupEndsOn;
+                }
+                return patch;
+              }
+
               const conflictsHere = endingItemConflicts.some(c => c.ids.includes(ei.id));
 
               /* Ref-list mutation helpers (Phase 14a). Each operates on
@@ -2347,6 +2412,61 @@ export default function AdvancedForecastTab({
                         onChange={e => updateEndingItem(ei.id, { endsOn: e.target.value })}
                         style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
                       />
+                    ) : hasSubLoans ? (
+                      /* === Sub-loan breakdown (multi-rate) === */
+                      <div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {subLoans.map((sl, slIdx) => {
+                            const r = subResult?.results.find(x => x.id === sl.id);
+                            return (
+                              <div key={sl.id} style={{ border: "1px solid var(--bdr,#e2e2e2)", borderRadius: 6, padding: 6, background: "var(--input-bg,#fafafa)" }}>
+                                <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                                  <input
+                                    type="text"
+                                    value={sl.label || ""}
+                                    onChange={e => updateSubLoanAt(slIdx, { label: e.target.value })}
+                                    placeholder={`Sub-loan ${slIdx + 1}`}
+                                    style={{ flex: 1, padding: 4, fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "var(--input-color,#222)" }}
+                                  />
+                                  <button onClick={() => removeSubLoanAt(slIdx)} title="Remove sub-loan"
+                                    style={{ border: "none", background: "transparent", color: "var(--tx3,#999)", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 4px" }}>×</button>
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
+                                  <div>
+                                    <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Balance</label>
+                                    <NI value={String(sl.balance ?? 0)} onChange={v => updateSubLoanAt(slIdx, { balance: evalF(v) })} onBlurResolve prefix="$" />
+                                  </div>
+                                  <div>
+                                    <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Rate %</label>
+                                    <NI value={String(sl.annualRate ?? 0)} onChange={v => updateSubLoanAt(slIdx, { annualRate: evalF(v) })} onBlurResolve />
+                                  </div>
+                                  <div>
+                                    <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Payment</label>
+                                    <NI value={String((sl.payments && sl.payments[0]) ?? 0)} onChange={v => updateSubLoanAt(slIdx, { payments: [evalF(v)] })} onBlurResolve prefix="$" />
+                                  </div>
+                                </div>
+                                <div style={{ marginTop: 3, fontSize: 9.5, color: "var(--tx3,#888)" }}>
+                                  {r?.ok ? (
+                                    <>Pays off <strong style={{ color: "var(--card-color,#222)" }}>{r.endsOn}</strong> ({r.months} mo)</>
+                                  ) : r?.reason === "negative-amortization" ? (
+                                    <span style={{ color: "#E8573A" }}>⚠ payment below interest</span>
+                                  ) : r?.reason === "no-payment" ? (
+                                    <span style={{ color: "#E8573A" }}>set a payment</span>
+                                  ) : r?.reason === "horizon-exceeded" ? (
+                                    <span style={{ color: "#E8573A" }}>&gt;50yr — check inputs</span>
+                                  ) : (
+                                    <span style={{ fontStyle: "italic" }}>—</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <button onClick={addSubLoan}
+                          style={{ marginTop: 6, padding: "3px 8px", fontSize: 10, fontWeight: 700, border: "1px dashed var(--bdr,#bbb)", borderRadius: 6, background: "transparent", color: "var(--tx2,#666)", cursor: "pointer" }}>
+                          + Add sub-loan
+                        </button>
+                      </div>
                     ) : (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                         <div>
@@ -2391,7 +2511,21 @@ export default function AdvancedForecastTab({
                       </div>
                     )}
                     {/* Computed-endsOn display for loan mode */}
-                    {ei.mode === "loan" && (
+                    {ei.mode === "loan" && hasSubLoans && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: "var(--tx3,#888)", borderTop: "1px solid var(--bdr,#eee)", paddingTop: 5 }}>
+                        <div>Combined: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(Math.round(subSummary.totalBalance))}</strong> @ <strong style={{ color: "var(--card-color,#222)" }}>{subSummary.avgRate.toFixed(2)}%</strong> avg</div>
+                        <div style={{ marginTop: 2 }}>
+                          {subResult?.groupEndsOn && !subResult.anyError ? (
+                            <>All paid off <strong style={{ color: "var(--card-color,#222)" }}>{subResult.groupEndsOn}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>({subResult.groupMonths} mo)</span></>
+                          ) : subResult?.anyError ? (
+                            <span style={{ color: "#E8573A" }}>⚠ one or more sub-loans don't pay off — check inputs</span>
+                          ) : (
+                            <span style={{ fontStyle: "italic" }}>Awaiting valid inputs</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {ei.mode === "loan" && !hasSubLoans && (
                       <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
                         {loanResult?.ok ? (
                           <>Pays off: <strong style={{ color: "var(--card-color,#222)" }}>{loanResult.endsOn}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>({loanResult.months} mo)</span></>
@@ -2406,6 +2540,10 @@ export default function AdvancedForecastTab({
                         ) : (
                           <span style={{ fontStyle: "italic" }}>Awaiting valid inputs</span>
                         )}
+                        <button onClick={addSubLoan}
+                          style={{ marginLeft: 8, padding: "2px 7px", fontSize: 9.5, fontWeight: 700, border: "1px dashed var(--bdr,#bbb)", borderRadius: 6, background: "transparent", color: "var(--tx2,#666)", cursor: "pointer" }}>
+                          Break into sub-loans
+                        </button>
                       </div>
                     )}
                   </div>
