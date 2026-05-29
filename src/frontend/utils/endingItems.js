@@ -538,3 +538,121 @@ export function rollForwardBalance(balance, annualRatePct, monthlyPayment, asOfY
   }
   return { ok: true, rolledBalance: bal, monthsRolled: i, paidOffDuringRoll: paidOff };
 }
+
+/* Aggregate routed linked-item monthly amounts by sub-loan and slot.
+   ---------------------------------------------------------------
+   In the per-item routing model (Phase 14b follow-up), each linked
+   budget-item ref carries a `routedTo: { subLoanId, slot }` field.
+   `slot` is "required" or "extra". `routedTo: null` (or missing)
+   means the ref is unallocated — its cash flows into the obligation
+   but isn't claimed by any sub-loan.
+
+   This helper walks parallel `refs` and `refResolutions` arrays and
+   returns a per-sub-loan map of the routed monthly totals.
+
+   Inputs:
+     refs              — array from getItemRefs(ei); each may carry
+                         a `routedTo: { subLoanId, slot }` field
+     refResolutions    — parallel array as built by AdvancedForecastTab:
+                         each element has { ref, monthly, isOrphan, ... }.
+                         An orphaned (or null-monthly) row is skipped.
+     subLoanIds        — array of currently-existing sub-loan ids.
+                         Used to detect orphan routings (the user
+                         deleted a sub-loan but a ref still routes
+                         to its old id).
+
+   Returns:
+     {
+       byId: {
+         [subLoanId]: {
+           required: number,
+           extra: number,
+           requiredSources: string[],  // names of refs routing here as required
+           extraSources: string[],     // names of refs routing here as extra
+         }
+       },
+       unallocated: number,            // sum of monthly amounts whose routedTo is null
+                                       //   or has an orphan subLoanId
+       unallocatedSources: string[],   // names of refs in the unallocated pool
+       orphanRoutings: [{ refName, subLoanId, slot }]  // routings pointing at
+                                                       //   deleted sub-loan ids
+     }
+
+   Behavior notes:
+     - Resolutions where `monthly` is null/non-finite/<=0 are SILENTLY
+       SKIPPED. They show up elsewhere (orphan banner on the obligation
+       row). The whole-obligation orphan signal stays the source of
+       truth for "this obligation isn't pulling anything"; this helper
+       just keeps the routed-totals map clean of NaNs.
+     - A ref with `routedTo: { subLoanId: "X", slot: "required" }`
+       where "X" isn't in subLoanIds → goes to orphanRoutings AND its
+       monthly contributes to `unallocated`. We treat the routing
+       as broken and the cash as no-longer-claimed (consistent with
+       how a deleted-sub-loan would behave).
+     - A ref with malformed routedTo (missing subLoanId, or slot not
+       in {"required","extra"}) is also treated as unallocated. */
+export function routedTotalsBySubLoan(refs, refResolutions, subLoanIds) {
+  const byId = {};
+  const orphanRoutings = [];
+  const unallocatedSources = [];
+  let unallocated = 0;
+
+  const validSlots = new Set(["required", "extra"]);
+  const slIdSet = new Set(Array.isArray(subLoanIds) ? subLoanIds : []);
+
+  const safeRefs = Array.isArray(refs) ? refs : [];
+  const safeRes = Array.isArray(refResolutions) ? refResolutions : [];
+  const n = Math.min(safeRefs.length, safeRes.length);
+
+  for (let i = 0; i < n; i++) {
+    const ref = safeRefs[i];
+    const rr = safeRes[i];
+    if (!ref || !rr) continue;
+    const m = Number(rr.monthly);
+    if (!isFinite(m) || m <= 0) continue;
+
+    const refName = (ref && typeof ref.name === "string") ? ref.name : "(unnamed)";
+    const rt = ref.routedTo;
+
+    const routedOk = rt
+      && typeof rt === "object"
+      && typeof rt.subLoanId === "string"
+      && rt.subLoanId.length > 0
+      && validSlots.has(rt.slot);
+
+    if (!routedOk) {
+      unallocated += m;
+      unallocatedSources.push(refName);
+      continue;
+    }
+
+    if (!slIdSet.has(rt.subLoanId)) {
+      /* Routing points at a sub-loan that no longer exists. Surface
+         the orphan AND push the cash into unallocated — the user
+         needs to either remove the routing or re-route to an
+         existing sub-loan. */
+      orphanRoutings.push({ refName, subLoanId: rt.subLoanId, slot: rt.slot });
+      unallocated += m;
+      unallocatedSources.push(refName);
+      continue;
+    }
+
+    if (!byId[rt.subLoanId]) {
+      byId[rt.subLoanId] = {
+        required: 0,
+        extra: 0,
+        requiredSources: [],
+        extraSources: [],
+      };
+    }
+    if (rt.slot === "required") {
+      byId[rt.subLoanId].required += m;
+      byId[rt.subLoanId].requiredSources.push(refName);
+    } else {
+      byId[rt.subLoanId].extra += m;
+      byId[rt.subLoanId].extraSources.push(refName);
+    }
+  }
+
+  return { byId, unallocated, unallocatedSources, orphanRoutings };
+}

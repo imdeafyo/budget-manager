@@ -12,6 +12,7 @@ import {
   resolveItemRef,
   monthsSinceAsOf,
   rollForwardBalance,
+  routedTotalsBySubLoan,
 } from "./endingItems.js";
 
 describe("newEndingItemId", () => {
@@ -784,5 +785,179 @@ describe("rollForwardBalance", () => {
     expect(r.ok).toBe(true);
     expect(r.monthsRolled).toBe(1);
     expect(r.rolledBalance).toBeCloseTo(1010, 2); // 1000 * (1 + 0.01)
+  });
+});
+
+describe("routedTotalsBySubLoan", () => {
+  /* Helper: build a parallel (refs, refResolutions, subLoanIds) triple
+     from a compact list of {name, monthly, routedTo?} so the tests
+     stay readable. */
+  function mk(rows, subLoanIds = ["AA", "AB"]) {
+    const refs = rows.map(r => ({
+      section: "exp",
+      id: r.id || `id_${r.name}`,
+      idx: 0,
+      name: r.name,
+      ...(r.routedTo !== undefined ? { routedTo: r.routedTo } : {}),
+    }));
+    const refResolutions = rows.map(r => ({
+      ref: refs[rows.indexOf(r)],
+      monthly: r.monthly,
+      isOrphan: r.monthly == null,
+    }));
+    return { refs, refResolutions, subLoanIds };
+  }
+
+  it("nothing routed: all linked monthly goes to unallocated", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100 },
+      { name: "B", monthly: 250 },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId).toEqual({});
+    expect(out.unallocated).toBe(350);
+    expect(out.unallocatedSources).toEqual(["A", "B"]);
+    expect(out.orphanRoutings).toEqual([]);
+  });
+
+  it("explicit routedTo: null is treated as unallocated", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: null },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.unallocated).toBe(100);
+    expect(out.unallocatedSources).toEqual(["A"]);
+    expect(out.byId).toEqual({});
+  });
+
+  it("one ref routed as required: byId reflects the single amount and source", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "Great Lakes", monthly: 220, routedTo: { subLoanId: "AA", slot: "required" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA).toEqual({
+      required: 220,
+      extra: 0,
+      requiredSources: ["Great Lakes"],
+      extraSources: [],
+    });
+    expect(out.unallocated).toBe(0);
+  });
+
+  it("multiple refs to the same sub-loan/slot sum correctly", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: 50, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "C", monthly: 25, routedTo: { subLoanId: "AA", slot: "required" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA.required).toBe(175);
+    expect(out.byId.AA.requiredSources).toEqual(["A", "B", "C"]);
+    expect(out.byId.AA.extra).toBe(0);
+  });
+
+  it("mixed required+extra on the same sub-loan: both buckets fill", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 200, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: 75, routedTo: { subLoanId: "AA", slot: "extra" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA).toEqual({
+      required: 200,
+      extra: 75,
+      requiredSources: ["A"],
+      extraSources: ["B"],
+    });
+  });
+
+  it("refs distributed across multiple sub-loans: each gets its own row", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: 200, routedTo: { subLoanId: "AB", slot: "required" } },
+      { name: "C", monthly: 50, routedTo: { subLoanId: "AB", slot: "extra" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA.required).toBe(100);
+    expect(out.byId.AB.required).toBe(200);
+    expect(out.byId.AB.extra).toBe(50);
+    expect(out.unallocated).toBe(0);
+  });
+
+  it("orphan routing (sub-loan id no longer exists): captured + cash unallocates", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: 250, routedTo: { subLoanId: "DELETED", slot: "extra" } },
+    ], ["AA", "AB"]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA.required).toBe(100);
+    expect(out.byId.DELETED).toBeUndefined();
+    expect(out.orphanRoutings).toEqual([
+      { refName: "B", subLoanId: "DELETED", slot: "extra" },
+    ]);
+    /* Orphan-routed cash falls into unallocated so the reconciliation
+       line stays honest about how much money the obligation is
+       actually claiming. */
+    expect(out.unallocated).toBe(250);
+    expect(out.unallocatedSources).toEqual(["B"]);
+  });
+
+  it("malformed routedTo (missing subLoanId): treated as unallocated, NOT orphan", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { slot: "required" } },
+      { name: "B", monthly: 50, routedTo: { subLoanId: "", slot: "required" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.unallocated).toBe(150);
+    expect(out.unallocatedSources).toEqual(["A", "B"]);
+    expect(out.orphanRoutings).toEqual([]);
+    expect(out.byId).toEqual({});
+  });
+
+  it("malformed slot (not 'required' or 'extra'): unallocated", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { subLoanId: "AA", slot: "principal" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.unallocated).toBe(100);
+    expect(out.byId).toEqual({});
+  });
+
+  it("orphaned ref (null monthly) is silently skipped", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 100, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: null, routedTo: { subLoanId: "AA", slot: "extra" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId.AA.required).toBe(100);
+    expect(out.byId.AA.extra).toBe(0); // B's null was skipped
+    expect(out.unallocated).toBe(0);
+  });
+
+  it("empty inputs return empty result", () => {
+    expect(routedTotalsBySubLoan([], [], [])).toEqual({
+      byId: {},
+      unallocated: 0,
+      unallocatedSources: [],
+      orphanRoutings: [],
+    });
+  });
+
+  it("undefined inputs degrade gracefully (don't crash)", () => {
+    expect(routedTotalsBySubLoan(undefined, undefined, undefined)).toEqual({
+      byId: {},
+      unallocated: 0,
+      unallocatedSources: [],
+      orphanRoutings: [],
+    });
+  });
+
+  it("zero-monthly refs are skipped (no claim)", () => {
+    const { refs, refResolutions, subLoanIds } = mk([
+      { name: "A", monthly: 0, routedTo: { subLoanId: "AA", slot: "required" } },
+      { name: "B", monthly: -5, routedTo: { subLoanId: "AA", slot: "required" } },
+    ]);
+    const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
+    expect(out.byId).toEqual({});
+    expect(out.unallocated).toBe(0);
   });
 });

@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan } from "../utils/endingItems.js";
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { newLoanId, resolveLoans, aggregateDebt, totalRemainingInterest, payoffMonthIndex } from "../utils/loans.js";
@@ -2083,8 +2083,43 @@ export default function AdvancedForecastTab({
                  pass graduation:{enabled:false} for now (flat per-loan). */
               const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
               const hasSubLoans = subLoans.length > 0;
+              /* Per-item routing (Phase 14b follow-up): each linked ref
+                 may carry { routedTo: { subLoanId, slot } }. Aggregate
+                 those into per-sub-loan totals, then BUILD an "effective"
+                 sub-loan list whose Payment/Extra come from routed
+                 totals (when any ref routes to that sub-loan) or fall
+                 back to the stored payments[0]/extraMonthly. The
+                 effective list is what we hand to resolveSubLoanGroup
+                 and what the UI reads back when rendering — the stored
+                 values stay untouched (so unrouted obligations behave
+                 exactly as they always did, and a user removing all
+                 routings reverts to manual entry). */
+              const subLoanIds = subLoans.map(s => s.id);
+              const routedTotalsForRefs = hasSubLoans
+                ? routedTotalsBySubLoan(refs, refResolutions, subLoanIds)
+                : { byId: {}, unallocated: 0, unallocatedSources: [], orphanRoutings: [] };
+              const effectiveSubLoans = hasSubLoans
+                ? subLoans.map(sl => {
+                    const t = routedTotalsForRefs.byId[sl.id];
+                    if (!t) return sl;
+                    /* Only override the field the user routed something
+                       into. If only "required" got routed, we override
+                       payments[0] but leave extraMonthly as the stored
+                       value (so a user could route required from the
+                       budget but still type extras manually). Same the
+                       other way. */
+                    const next = { ...sl };
+                    if (t.requiredSources.length > 0) {
+                      next.payments = [Math.round(t.required * 100) / 100];
+                    }
+                    if (t.extraSources.length > 0) {
+                      next.extraMonthly = Math.round(t.extra * 100) / 100;
+                    }
+                    return next;
+                  })
+                : subLoans;
               const subResult = (isLoanMode && hasSubLoans)
-                ? resolveSubLoanGroup(subLoans, { enabled: false }, baseYearMonth)
+                ? resolveSubLoanGroup(effectiveSubLoans, { enabled: false }, baseYearMonth)
                 : null;
               /* Balance-weighted average rate + combined balance for the
                  read-only summary that replaces the single-rate display. */
@@ -2138,7 +2173,28 @@ export default function AdvancedForecastTab({
               function withGroupEndsOn(nextSubLoans) {
                 const patch = { subLoans: nextSubLoans };
                 if (nextSubLoans.length > 0) {
-                  const g = resolveSubLoanGroup(nextSubLoans, { enabled: false }, baseYearMonth);
+                  /* Apply the same routed-override pass we use for
+                     display, so the persisted endsOn matches what the
+                     math layer will actually see at projection time.
+                     Without this, editing balance/rate while routings
+                     are active would re-stamp endsOn using the stored
+                     (possibly zero) payment fields and silently drift
+                     the freed-cash event off-date. */
+                  const nextIds = nextSubLoans.map(s => s.id);
+                  const t = routedTotalsBySubLoan(refs, refResolutions, nextIds);
+                  const effective = nextSubLoans.map(sl => {
+                    const bucket = t.byId[sl.id];
+                    if (!bucket) return sl;
+                    const out = { ...sl };
+                    if (bucket.requiredSources.length > 0) {
+                      out.payments = [Math.round(bucket.required * 100) / 100];
+                    }
+                    if (bucket.extraSources.length > 0) {
+                      out.extraMonthly = Math.round(bucket.extra * 100) / 100;
+                    }
+                    return out;
+                  });
+                  const g = resolveSubLoanGroup(effective, { enabled: false }, baseYearMonth);
                   if (g.groupEndsOn && !g.anyError) patch.endsOn = g.groupEndsOn;
                 }
                 return patch;
@@ -2148,16 +2204,68 @@ export default function AdvancedForecastTab({
 
               /* Ref-list mutation helpers (Phase 14a). Each operates on
                  ei.itemRefs; they patch into updateEndingItem so the
-                 whole flow goes through the standard update path. */
+                 whole flow goes through the standard update path.
+
+                 Phase 14b follow-up: when sub-loans exist, refs carry a
+                 routedTo field that drives effective sub-loan payments.
+                 Any change to refs (or to routedTo) must re-derive
+                 endsOn so the persisted group payoff date stays in
+                 sync with what the math layer will compute. The helper
+                 below recomputes endsOn given a candidate refs array,
+                 using current sub-loans. Mirrors withGroupEndsOn but
+                 for the refs side of the same equation. */
+              function endsOnPatchForRefs(nextRefs) {
+                if (!isLoanMode || !hasSubLoans) return {};
+                /* Build a synthetic refResolutions parallel to nextRefs:
+                   monthly stays the same per-ref since we're not
+                   changing budget items here, only routing. We resolve
+                   each candidate ref through resolveItemRef the same
+                   way the live render does. */
+                const nextResolutions = nextRefs.map(ref => {
+                  if (!ref || typeof ref.section !== "string") {
+                    return { ref, monthly: null };
+                  }
+                  const { item } = resolveItemRef(ref, exp, sav);
+                  const monthly = item ? monthlyAmountFor(ref) : null;
+                  return { ref, monthly };
+                });
+                const ids = subLoans.map(s => s.id);
+                const t = routedTotalsBySubLoan(nextRefs, nextResolutions, ids);
+                const effective = subLoans.map(sl => {
+                  const bucket = t.byId[sl.id];
+                  if (!bucket) return sl;
+                  const out = { ...sl };
+                  if (bucket.requiredSources.length > 0) {
+                    out.payments = [Math.round(bucket.required * 100) / 100];
+                  }
+                  if (bucket.extraSources.length > 0) {
+                    out.extraMonthly = Math.round(bucket.extra * 100) / 100;
+                  }
+                  return out;
+                });
+                const g = resolveSubLoanGroup(effective, { enabled: false }, baseYearMonth);
+                if (g.groupEndsOn && !g.anyError) return { endsOn: g.groupEndsOn };
+                return {};
+              }
+
               const setRefAt = (slotIdx, newRef) => {
                 const next = refs.slice();
                 next[slotIdx] = newRef;
-                updateEndingItem(ei.id, { itemRefs: next });
+                updateEndingItem(ei.id, { itemRefs: next, ...endsOnPatchForRefs(next) });
               };
               const removeRefAt = (slotIdx) => {
                 const next = refs.slice();
                 next.splice(slotIdx, 1);
-                updateEndingItem(ei.id, { itemRefs: next });
+                updateEndingItem(ei.id, { itemRefs: next, ...endsOnPatchForRefs(next) });
+              };
+              const setRoutingAt = (slotIdx, routedTo) => {
+                /* Patch only the routedTo field on the targeted ref.
+                   Pass null to clear. Re-derive endsOn since the
+                   effective sub-loan payment streams have shifted. */
+                const next = refs.slice();
+                if (!next[slotIdx]) return;
+                next[slotIdx] = { ...next[slotIdx], routedTo: routedTo || null };
+                updateEndingItem(ei.id, { itemRefs: next, ...endsOnPatchForRefs(next) });
               };
               const appendRef = () => {
                 /* Find the first option not already claimed by anyone
@@ -2175,7 +2283,8 @@ export default function AdvancedForecastTab({
                 const newRef = firstAvailable
                   ? { section: firstAvailable.section, id: firstAvailable.id || undefined, idx: firstAvailable.idx, name: firstAvailable.name }
                   : null;
-                updateEndingItem(ei.id, { itemRefs: [...refs, newRef] });
+                const nextRefs = [...refs, newRef];
+                updateEndingItem(ei.id, { itemRefs: nextRefs, ...endsOnPatchForRefs(nextRefs) });
               };
 
               /* Row-level "has any issue" flag for the border. Includes
@@ -2318,6 +2427,75 @@ export default function AdvancedForecastTab({
                                   })}
                                 </optgroup>
                               </select>
+                              {/* Per-item routing dropdown (Phase 14b
+                                 follow-up). Only meaningful when sub-
+                                 loans exist — otherwise the obligation
+                                 is a single-loan or date-mode and there's
+                                 nothing to route to. Each option pins
+                                 this ref's monthly to a specific sub-
+                                 loan/slot; unallocated cash falls into
+                                 the reconciliation line below. */}
+                              {isLoanMode && hasSubLoans && (() => {
+                                const currentRouted = rr.ref?.routedTo;
+                                const validSlots = currentRouted
+                                  && typeof currentRouted === "object"
+                                  && (currentRouted.slot === "required" || currentRouted.slot === "extra");
+                                const isOrphanRouted = !!validSlots
+                                  && typeof currentRouted.subLoanId === "string"
+                                  && currentRouted.subLoanId.length > 0
+                                  && !subLoanIds.includes(currentRouted.subLoanId);
+                                const currentValue = (validSlots && !isOrphanRouted && subLoanIds.includes(currentRouted.subLoanId))
+                                  ? `${currentRouted.subLoanId}::${currentRouted.slot}`
+                                  : "";
+                                return (
+                                  <select
+                                    value={isOrphanRouted ? "__orphan__" : currentValue}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      if (!v || v === "__orphan__") {
+                                        setRoutingAt(slotIdx, null);
+                                        return;
+                                      }
+                                      const [subLoanId, slot] = v.split("::");
+                                      setRoutingAt(slotIdx, { subLoanId, slot });
+                                    }}
+                                    title={isOrphanRouted
+                                      ? "This routing points at a sub-loan that was deleted. Pick a new destination or leave unallocated."
+                                      : "Route this linked item to a sub-loan as required payment or extra principal."}
+                                    style={{
+                                      flex: "0 0 auto",
+                                      maxWidth: 165,
+                                      padding: 6,
+                                      fontSize: 11,
+                                      border: `1px solid ${isOrphanRouted ? "#E8573A" : (currentValue ? "var(--bdr,#bbb)" : "var(--bdr,#ddd)")}`,
+                                      borderRadius: 6,
+                                      background: "var(--input-bg,#fafafa)",
+                                      color: "var(--input-color,#222)",
+                                    }}
+                                  >
+                                    <option value="">— unallocated —</option>
+                                    {isOrphanRouted && (
+                                      <option value="__orphan__" disabled>
+                                        ⚠ routing to deleted sub-loan
+                                      </option>
+                                    )}
+                                    <optgroup label="Required">
+                                      {subLoans.map(sl => (
+                                        <option key={`req-${sl.id}`} value={`${sl.id}::required`}>
+                                          {sl.label || sl.id}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                    <optgroup label="Extras">
+                                      {subLoans.map(sl => (
+                                        <option key={`ext-${sl.id}`} value={`${sl.id}::extra`}>
+                                          {sl.label || sl.id}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  </select>
+                                );
+                              })()}
                               {/* Per-slot remove button (only when >1 ref) */}
                               {!onlyOneRef && (
                                 <button
@@ -2509,16 +2687,58 @@ export default function AdvancedForecastTab({
                                   </div>
                                   <div>
                                     <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Payment</label>
-                                    <NI value={String((sl.payments && sl.payments[0]) ?? 0)} onChange={v => updateSubLoanAt(slIdx, { payments: [evalF(v)] })} onBlurResolve prefix="$" />
+                                    {(() => {
+                                      /* Routed when ANY linked ref has
+                                         routedTo {subLoanId: sl.id, slot:"required"}.
+                                         When routed, the field is a read-
+                                         only display of the sum, with a
+                                         "(from: <names>)" caption. When
+                                         unrouted, the field is the same
+                                         editable NI as before — back-
+                                         compat with obligations that
+                                         never set up per-item routing. */
+                                      const bucket = routedTotalsForRefs.byId[sl.id];
+                                      const routed = bucket && bucket.requiredSources.length > 0;
+                                      if (routed) {
+                                        return (
+                                          <>
+                                            <div
+                                              style={{
+                                                padding: "4px 6px",
+                                                fontSize: 11,
+                                                border: "1px dashed var(--bdr,#bbb)",
+                                                borderRadius: 4,
+                                                background: "var(--card-bg,#f0f4ee)",
+                                                color: "var(--input-color,#222)",
+                                                fontFamily: "var(--num-font, inherit)",
+                                                lineHeight: 1.4,
+                                              }}
+                                              title={`Routed from linked item${bucket.requiredSources.length === 1 ? "" : "s"}: ${bucket.requiredSources.join(", ")}`}
+                                            >
+                                              {fmt(bucket.required)}
+                                            </div>
+                                            <div style={{ fontSize: 8.5, color: "var(--tx3,#888)", marginTop: 1, lineHeight: 1.2 }}>
+                                              from: {bucket.requiredSources.join(", ")}
+                                            </div>
+                                          </>
+                                        );
+                                      }
+                                      return (
+                                        <NI value={String((sl.payments && sl.payments[0]) ?? 0)} onChange={v => updateSubLoanAt(slIdx, { payments: [evalF(v)] })} onBlurResolve prefix="$" />
+                                      );
+                                    })()}
                                   </div>
                                 </div>
                                 {/* Row 2: As of date + Extra principal.
                                    As-of anchors the balance to a calendar
                                    month so the roll-forward knows how far
                                    to advance. Extra is the directed extra
-                                   principal — auto-set by the obligation-
-                                   level "Direct surplus to" picker when
-                                   linked items exceed required payments. */}
+                                   principal — when a linked item is routed
+                                   here as "Extras", Extra is read-only
+                                   and displays the routed total. When
+                                   nothing routes here as Extras, Extra is
+                                   editable (back-compat with obligations
+                                   that don't use per-item routing). */}
                                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
                                   <div>
                                     <label
@@ -2535,9 +2755,39 @@ export default function AdvancedForecastTab({
                                   <div>
                                     <label
                                       style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}
-                                      title="Extra monthly principal directed to this sub-loan, on top of the Payment. Use the obligation-level 'Direct surplus to' picker to auto-fill this from leftover linked-item cash."
+                                      title="Extra monthly principal directed to this sub-loan, on top of the Payment. Route a linked budget item here as 'Extras' on the left to auto-fill from the budget, or type a value directly when nothing is routed."
                                     >Extra</label>
-                                    <NI value={String(sl.extraMonthly ?? 0)} onChange={v => updateSubLoanAt(slIdx, { extraMonthly: evalF(v) })} onBlurResolve prefix="$" />
+                                    {(() => {
+                                      const bucket = routedTotalsForRefs.byId[sl.id];
+                                      const routed = bucket && bucket.extraSources.length > 0;
+                                      if (routed) {
+                                        return (
+                                          <>
+                                            <div
+                                              style={{
+                                                padding: "4px 6px",
+                                                fontSize: 11,
+                                                border: "1px dashed var(--bdr,#bbb)",
+                                                borderRadius: 4,
+                                                background: "var(--card-bg,#f0f4ee)",
+                                                color: "var(--input-color,#222)",
+                                                fontFamily: "var(--num-font, inherit)",
+                                                lineHeight: 1.4,
+                                              }}
+                                              title={`Routed from linked item${bucket.extraSources.length === 1 ? "" : "s"}: ${bucket.extraSources.join(", ")}`}
+                                            >
+                                              {fmt(bucket.extra)}
+                                            </div>
+                                            <div style={{ fontSize: 8.5, color: "var(--tx3,#888)", marginTop: 1, lineHeight: 1.2 }}>
+                                              from: {bucket.extraSources.join(", ")}
+                                            </div>
+                                          </>
+                                        );
+                                      }
+                                      return (
+                                        <NI value={String(sl.extraMonthly ?? 0)} onChange={v => updateSubLoanAt(slIdx, { extraMonthly: evalF(v) })} onBlurResolve prefix="$" />
+                                      );
+                                    })()}
                                   </div>
                                 </div>
                                 <div style={{ marginTop: 3, fontSize: 9.5, color: "var(--tx3,#888)" }}>
@@ -2653,77 +2903,79 @@ export default function AdvancedForecastTab({
                       <div style={{ marginTop: 6, fontSize: 11, color: "var(--tx3,#888)", borderTop: "1px solid var(--bdr,#eee)", paddingTop: 5 }}>
                         <div>Combined: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(Math.round(subSummary.totalBalance))}</strong> @ <strong style={{ color: "var(--card-color,#222)" }}>{subSummary.avgRate.toFixed(2)}%</strong> avg</div>
 
-                        {/* === Reconciliation: linked items vs sum of
-                             (required payments + directed extras).
-                             A surplus is cash from the budget that isn't
-                             paying down any sub-loan — silently dropped
-                             before this UI. A deficit means the user is
-                             promising more than the budget covers. */}
+                        {/* === Reconciliation (Phase 14b follow-up):
+                             with per-item routing, the budget is the
+                             source of truth. We tally three things:
+                               - Linked: the live monthly from the
+                                 linked budget items (was already shown)
+                               - Routed: how much of that is claimed by
+                                 a sub-loan (required + extras combined)
+                               - Unallocated: linked - routed — cash
+                                 from the budget that isn't claimed by
+                                 any sub-loan, surfaced amber so the
+                                 user can either route it or shrink the
+                                 linked items.
+                             We additionally surface "needs more cash
+                             than budget supplies" when the effective
+                             sub-loan totals (which factor in any user-
+                             typed unrouted values) exceed the linked
+                             amount. Mirrors the deficit-case warning
+                             from the prior design — the old surplus
+                             picker is gone, replaced by per-item
+                             routing dropdowns above. */}
                         {(() => {
-                          const requiredTotal = subLoans.reduce(
-                            (s, sl) => s + (Number(sl.payments && sl.payments[0]) || 0), 0);
-                          const extraTotal = subLoans.reduce(
-                            (s, sl) => s + (Math.max(0, Number(sl.extraMonthly) || 0)), 0);
-                          const allocated = requiredTotal + extraTotal;
+                          /* Sum effective payments + extras across sub-
+                             loans. effectiveSubLoans is what the math
+                             layer sees (routed overrides applied). */
+                          let effectiveTotal = 0;
+                          for (const sl of effectiveSubLoans) {
+                            effectiveTotal += Number(sl.payments && sl.payments[0]) || 0;
+                            effectiveTotal += Math.max(0, Number(sl.extraMonthly) || 0);
+                          }
+                          /* Routed total = sum of all per-sub-loan
+                             buckets the helper built. This is the cash
+                             that flows from budget to debt. */
+                          let routedTotal = 0;
+                          for (const id of Object.keys(routedTotalsForRefs.byId)) {
+                            const b = routedTotalsForRefs.byId[id];
+                            routedTotal += b.required + b.extra;
+                          }
                           const linked = Number(liveMonthly) || 0;
-                          const diff = linked - allocated;
-                          /* Treat tiny float drift as matched. */
-                          const matched = Math.abs(diff) < 0.005;
-                          const surplus = diff > 0.005 ? diff : 0;
-                          const deficit = diff < -0.005 ? -diff : 0;
-                          const okSubLoans = (subResult?.results || []).filter(r => r.ok);
+                          const unallocated = routedTotalsForRefs.unallocated;
+                          /* "Deficit" = sub-loans demand more total cash
+                             than the budget supplies via linked items.
+                             Computed from effective totals so it
+                             includes both routed-from-budget and
+                             user-typed-unrouted contributions. */
+                          const deficit = effectiveTotal - linked > 0.005
+                            ? effectiveTotal - linked
+                            : 0;
+                          const matched = Math.abs(linked - routedTotal) < 0.005 && deficit === 0;
                           return (
                             <div style={{ marginTop: 4 }}>
                               <div>
                                 Linked: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(linked)}</strong>
-                                {" · "}Required + extras: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(allocated)}</strong>
+                                {" · "}Routed: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(routedTotal)}</strong>
                                 {matched ? (
                                   <span style={{ color: "#3F8F3F", marginLeft: 4 }}>✓</span>
-                                ) : surplus > 0 ? (
-                                  <span style={{ color: "#92400E", marginLeft: 4 }}>· surplus {fmt(surplus)}</span>
-                                ) : (
-                                  <span style={{ color: "#E8573A", marginLeft: 4 }}>· short {fmt(deficit)}</span>
-                                )}
+                                ) : unallocated > 0.005 ? (
+                                  <span style={{ color: "#92400E", marginLeft: 4 }} title="Cash from linked budget items that isn't routed to any sub-loan. Use the routing dropdowns above to direct it.">
+                                    · unallocated {fmt(unallocated)}
+                                  </span>
+                                ) : null}
                               </div>
-                              {surplus > 0 && okSubLoans.length > 0 && (
-                                <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                  <span>Direct {fmt(surplus)} surplus to:</span>
-                                  <select
-                                    value=""
-                                    onChange={e => {
-                                      const id = e.target.value;
-                                      if (!id) return;
-                                      /* Add the surplus to the chosen sub-
-                                         loan's extraMonthly. We ADD (not
-                                         replace) so a user assigning surplus
-                                         twice stacks correctly. */
-                                      const idx = subLoans.findIndex(s => s.id === id);
-                                      if (idx < 0) return;
-                                      const cur = Math.max(0, Number(subLoans[idx].extraMonthly) || 0);
-                                      const next = subLoans.map((s, i) =>
-                                        i === idx ? { ...s, extraMonthly: Math.round((cur + surplus) * 100) / 100 } : s
-                                      );
-                                      updateEndingItem(ei.id, withGroupEndsOn(next));
-                                    }}
-                                    style={{ padding: "3px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
-                                  >
-                                    <option value="">— pick a sub-loan —</option>
-                                    {okSubLoans.map(r => {
-                                      const sl = subLoans.find(s => s.id === r.id);
-                                      return (
-                                        <option key={r.id} value={r.id}>
-                                          {sl?.label || r.label || r.id} ({(sl?.annualRate ?? 0).toFixed(2)}%)
-                                        </option>
-                                      );
-                                    })}
-                                  </select>
-                                  <span style={{ color: "var(--tx3,#aaa)", fontSize: 10 }} title="Highest rate first is the avalanche default — but you choose.">avalanche: pick highest rate</span>
-                                </div>
-                              )}
                               {deficit > 0 && (
                                 <div style={{ marginTop: 2, fontSize: 10, color: "#E8573A" }}>
-                                  Sub-loan payments exceed linked budget items by {fmt(deficit)}.
-                                  Either lower a Payment/Extra here or raise the linked budget line.
+                                  Sub-loan Payment/Extra fields demand {fmt(deficit)} beyond what the budget supplies.
+                                  Lower a typed value or raise the linked budget line.
+                                </div>
+                              )}
+                              {routedTotalsForRefs.orphanRoutings.length > 0 && (
+                                <div style={{ marginTop: 2, fontSize: 10, color: "#92400E" }}>
+                                  ⚠ {routedTotalsForRefs.orphanRoutings.length === 1
+                                    ? "1 linked item is routed to a deleted sub-loan"
+                                    : `${routedTotalsForRefs.orphanRoutings.length} linked items are routed to deleted sub-loans`}
+                                  {" — "}re-pick destinations above or set to unallocated.
                                 </div>
                               )}
                             </div>
