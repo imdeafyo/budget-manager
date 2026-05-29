@@ -467,3 +467,74 @@ export function findItemRefConflicts(endingItems) {
   }
   return conflicts;
 }
+
+/* Months between two "YYYY-MM" strings, asOf -> base.
+   Positive when base is later than asOf (the typical case — balance was
+   entered N months ago). Zero when equal. Negative when asOf is in the
+   future relative to base (caller should treat as "no roll needed").
+   Returns null if either input is malformed. */
+export function monthsSinceAsOf(asOfYearMonth, baseYearMonth) {
+  if (!asOfYearMonth || !baseYearMonth) return null;
+  const [yA, mA] = String(asOfYearMonth).split("-").map(Number);
+  const [yB, mB] = String(baseYearMonth).split("-").map(Number);
+  if (![yA, mA, yB, mB].every((n) => isFinite(n))) return null;
+  return (yB - yA) * 12 + (mB - mA);
+}
+
+/* Roll a loan balance forward in time. Given a balance stated as-of
+   some past month, advance it month-by-month to `baseYearMonth` using
+   standard amortization: each month, interest accrues at annualRatePct
+   on the balance, then the monthlyPayment is applied.
+
+   Returns:
+     { ok: true, rolledBalance, monthsRolled, paidOffDuringRoll }
+       paidOffDuringRoll is true if the balance hit zero during the roll
+       (rolledBalance will be 0). monthsRolled is the count of months
+       actually simulated (may be less than the as-of -> base distance
+       if the loan paid off early).
+     { ok: false, reason }
+       "invalid-input"     bad rates/dates
+       "no-roll-needed"    asOf >= base (rolledBalance = balance)
+
+   Notes:
+     - Annual rate is in PERCENT (5.25 means 5.25%).
+     - Neg-am during the roll is allowed (balance grows; we don't fail).
+       The downstream amortization will surface neg-am as its own error.
+     - This is the same math the user's lender uses month-to-month, so
+       the rolled balance should match the lender's current statement to
+       within a few dollars (closer if the as-of date matches a statement
+       cycle). */
+export function rollForwardBalance(balance, annualRatePct, monthlyPayment, asOfYearMonth, baseYearMonth) {
+  const bal0 = Number(balance);
+  const rPct = Number(annualRatePct);
+  const pay = Number(monthlyPayment);
+
+  if (!isFinite(bal0) || bal0 <= 0) return { ok: false, reason: "invalid-input" };
+  if (!isFinite(rPct) || rPct < 0) return { ok: false, reason: "invalid-input" };
+  if (!isFinite(pay) || pay < 0) return { ok: false, reason: "invalid-input" };
+
+  const n = monthsSinceAsOf(asOfYearMonth, baseYearMonth);
+  if (n === null) return { ok: false, reason: "invalid-input" };
+  if (n <= 0) {
+    /* No-op: as-of is current or in the future. Treat as "balance is
+       already correct as of base". */
+    return { ok: true, rolledBalance: bal0, monthsRolled: 0, paidOffDuringRoll: false };
+  }
+
+  const r = (rPct / 100) / 12;
+  let bal = bal0;
+  let paidOff = false;
+  let i = 0;
+  for (; i < n; i++) {
+    const interest = bal * r;
+    const next = bal + interest - pay;
+    if (next <= 0) {
+      bal = 0;
+      paidOff = true;
+      i++;
+      break;
+    }
+    bal = next;
+  }
+  return { ok: true, rolledBalance: bal, monthsRolled: i, paidOffDuringRoll: paidOff };
+}

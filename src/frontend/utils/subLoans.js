@@ -124,10 +124,22 @@ export function stepDatesToOffsets(steps, baseYearMonth) {
    once a later (graduated) step raises the payment. We only declare
    negative-amortization if we hit the final segment and STILL can't cover
    interest — before then, a balance that grows is allowed (it's what
-   graduated plans actually do early on). */
+   graduated plans actually do early on).
+
+   Optional roll-forward (opts.balanceAsOf + opts.baseYearMonth):
+     When provided and asOf predates base, the stated balance is rolled
+     forward to base by applying interest + segment-0 payment + extra
+     month-by-month. This keeps the projection honest when the user typed
+     a balance N months ago and hasn't updated it. The simulation then
+     amortizes from the rolled balance starting at month index 0 (which
+     IS base — the roll-forward consumed the lag). If the loan paid off
+     during the roll, returns { ok: false, reason: "paid-off-pre-base" }.
+     The result includes rolledFrom = { startBalance, monthsRolled } when
+     a roll happened (monthsRolled > 0), null otherwise. */
 export function simulateSubLoan(subLoan, stepOffsets, opts = {}) {
   const maxMonths = opts.maxMonths ?? MAX_SUBLOAN_MONTHS;
   let bal = Number(subLoan.balance);
+  const startBalance = bal;
   const rPct = Number(subLoan.annualRate);
   const payments = subLoan.payments;
   const extra = Math.max(0, Number(subLoan.extraMonthly) || 0);
@@ -139,12 +151,45 @@ export function simulateSubLoan(subLoan, stepOffsets, opts = {}) {
   const lastSeg = Array.isArray(stepOffsets) ? stepOffsets.length : 0;
   const schedule = [];
   let totalInterest = 0;
+  let rolledFrom = null;
 
   // Quick check: is there any positive payment anywhere?
   const anyPayment =
     (Array.isArray(payments) ? payments : []).some((p) => Number(p) > 0) ||
     extra > 0;
   if (!anyPayment) return { ok: false, reason: "no-payment" };
+
+  /* Roll-forward the stated balance from `balanceAsOf` to `baseYearMonth`.
+     Uses segment-0 payment (the segment that was active before base) plus
+     directed extra. We don't fail on neg-am during the roll — the user's
+     actual lender accepted the payments and the balance is what it is. */
+  if (opts.balanceAsOf && opts.baseYearMonth) {
+    const lag = (() => {
+      const [yA, mA] = String(opts.balanceAsOf).split("-").map(Number);
+      const [yB, mB] = String(opts.baseYearMonth).split("-").map(Number);
+      if (![yA, mA, yB, mB].every((n) => isFinite(n))) return 0;
+      return (yB - yA) * 12 + (mB - mA);
+    })();
+    if (lag > 0) {
+      const seg0Pay = paymentForSegment(payments, 0) + extra;
+      let rollMonths = 0;
+      for (let i = 0; i < lag; i++) {
+        const interest = bal * r;
+        const next = bal + interest - seg0Pay;
+        rollMonths++;
+        if (next <= 0) {
+          bal = 0;
+          break;
+        }
+        bal = next;
+      }
+      if (bal <= 0) {
+        return { ok: false, reason: "paid-off-pre-base", rolledFrom: { startBalance, monthsRolled: rollMonths } };
+      }
+      rolledFrom = { startBalance, monthsRolled: rollMonths };
+    }
+  }
+
 
   for (let i = 0; i < maxMonths; i++) {
     const seg = segmentForMonth(i, stepOffsets);
@@ -193,6 +238,7 @@ export function simulateSubLoan(subLoan, stepOffsets, opts = {}) {
         paidOffOffset: i + 1,
         schedule,
         totalInterest,
+        rolledFrom,
       };
     }
 
@@ -213,6 +259,7 @@ export function simulateSubLoan(subLoan, stepOffsets, opts = {}) {
         paidOffOffset: i + 1,
         schedule,
         totalInterest,
+        rolledFrom,
       };
     }
   }
@@ -257,7 +304,15 @@ export function resolveSubLoanGroup(subLoans, graduation, baseYearMonth, opts = 
   let anyError = false;
 
   for (const sl of list) {
-    const sim = simulateSubLoan(sl, stepOffsets, opts);
+    /* Each sub-loan can carry its own `balanceAsOf`. We pass it via opts
+       along with baseYearMonth so simulateSubLoan can roll the stated
+       balance forward to today before amortizing. */
+    const simOpts = {
+      ...opts,
+      baseYearMonth,
+      balanceAsOf: sl.balanceAsOf,
+    };
+    const sim = simulateSubLoan(sl, stepOffsets, simOpts);
     if (!sim.ok) {
       anyError = true;
       results.push({
@@ -265,6 +320,7 @@ export function resolveSubLoanGroup(subLoans, graduation, baseYearMonth, opts = 
         label: sl.label,
         ok: false,
         reason: sim.reason,
+        rolledFrom: sim.rolledFrom || null,
       });
       continue;
     }
@@ -284,6 +340,7 @@ export function resolveSubLoanGroup(subLoans, graduation, baseYearMonth, opts = 
       totalInterest: sim.totalInterest,
       schedule: sim.schedule,
       freedPayment,
+      rolledFrom: sim.rolledFrom || null,
     });
     freedEvents.push({
       id: sl.id,

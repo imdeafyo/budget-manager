@@ -288,3 +288,119 @@ describe("combinedPaymentAtMonth", () => {
     expect(combinedPaymentAtMonth(subLoans, { enabled: false }, baseYM, 8, res)).toBe(400 + 100);
   });
 });
+
+describe("simulateSubLoan — balanceAsOf roll-forward", () => {
+  it("no-ops when balanceAsOf == baseYearMonth", () => {
+    /* As-of equals base — there's nothing to roll. Result should match
+       the no-roll case exactly, with rolledFrom = null. */
+    const sl = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 };
+    const r = simulateSubLoan(sl, [], {
+      balanceAsOf: "2026-05",
+      baseYearMonth: "2026-05",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.rolledFrom).toBeNull();
+  });
+
+  it("no-ops when balanceAsOf is in the future (treats balance as current)", () => {
+    const sl = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 };
+    const r = simulateSubLoan(sl, [], {
+      balanceAsOf: "2026-10",
+      baseYearMonth: "2026-05",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.rolledFrom).toBeNull();
+  });
+
+  it("rolls a stated balance forward before amortizing", () => {
+    /* Sub-loan: 10000 @ 5% paying 200/mo. Stated as-of 12 months before
+       base. Roll-forward should land at ~8055.85 (verified in the
+       endingItems.test.js closed-form). Then amortizing $8055.85 @ 5% at
+       $200/mo should take fewer months than amortizing $10k from scratch. */
+    const sl = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 };
+    const fresh = simulateSubLoan(sl, [], {
+      balanceAsOf: "2026-05",
+      baseYearMonth: "2026-05",
+    });
+    const rolled = simulateSubLoan(sl, [], {
+      balanceAsOf: "2025-05",
+      baseYearMonth: "2026-05",
+    });
+    expect(rolled.ok).toBe(true);
+    expect(rolled.rolledFrom).toEqual({ startBalance: 10000, monthsRolled: 12 });
+    expect(rolled.months).toBe(fresh.months - 12);
+  });
+
+  it("extra principal applies during the roll-forward too", () => {
+    /* If the user has been paying $200 + $100 extra all along, the rolled
+       balance should reflect that. So the rolled-forward path with
+       extraMonthly=100 should end up lower than with extra=0. */
+    const slNoExtra = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 };
+    const slExtra = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 100 };
+    const a = simulateSubLoan(slNoExtra, [], { balanceAsOf: "2025-05", baseYearMonth: "2026-05" });
+    const b = simulateSubLoan(slExtra, [], { balanceAsOf: "2025-05", baseYearMonth: "2026-05" });
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    // Both rolled 12 months, but b pays $100 extra each month → lower balance,
+    // and therefore fewer remaining months from base.
+    expect(b.schedule[0].remaining).toBeLessThan(a.schedule[0].remaining);
+  });
+
+  it("returns paid-off-pre-base when balance hits zero during the roll", () => {
+    /* Tiny balance, big payment, large lag — pays off before base. */
+    const sl = { balance: 200, annualRate: 0, payments: [100], extraMonthly: 0 };
+    const r = simulateSubLoan(sl, [], {
+      balanceAsOf: "2025-05",
+      baseYearMonth: "2026-05",
+    });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("paid-off-pre-base");
+    expect(r.rolledFrom).toBeDefined();
+    expect(r.rolledFrom.monthsRolled).toBe(2); // 2 payments of $100 on $200
+  });
+
+  it("ignores asOf when only one of asOf/base is provided", () => {
+    /* The roll-forward requires BOTH balanceAsOf AND baseYearMonth in
+       opts — passing just one is a no-op (safe default for callers that
+       don't yet thread the as-of date). */
+    const sl = { balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 };
+    const r = simulateSubLoan(sl, [], { balanceAsOf: "2025-05" });
+    expect(r.ok).toBe(true);
+    expect(r.rolledFrom).toBeNull();
+  });
+});
+
+describe("resolveSubLoanGroup — per-sub-loan balanceAsOf", () => {
+  it("propagates rolledFrom into ok results", () => {
+    const list = [
+      { id: "a", label: "A", balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0, balanceAsOf: "2025-05" },
+      { id: "b", label: "B", balance: 5000, annualRate: 3, payments: [150], extraMonthly: 0 }, // no as-of
+    ];
+    const res = resolveSubLoanGroup(list, { enabled: false }, "2026-05");
+    const a = res.results.find((r) => r.id === "a");
+    const b = res.results.find((r) => r.id === "b");
+    expect(a.ok).toBe(true);
+    expect(a.rolledFrom).toEqual({ startBalance: 10000, monthsRolled: 12 });
+    expect(b.ok).toBe(true);
+    expect(b.rolledFrom).toBeNull();
+  });
+
+  it("surfaces paid-off-pre-base as anyError with rolledFrom intact", () => {
+    const list = [
+      { id: "tiny", label: "Tiny", balance: 200, annualRate: 0, payments: [100], extraMonthly: 0, balanceAsOf: "2025-05" },
+    ];
+    const res = resolveSubLoanGroup(list, { enabled: false }, "2026-05");
+    expect(res.anyError).toBe(true);
+    expect(res.results[0].ok).toBe(false);
+    expect(res.results[0].reason).toBe("paid-off-pre-base");
+    expect(res.results[0].rolledFrom).toBeDefined();
+  });
+
+  it("does not roll when a sub-loan has no balanceAsOf field", () => {
+    const list = [
+      { id: "a", label: "A", balance: 10000, annualRate: 5, payments: [200], extraMonthly: 0 },
+    ];
+    const res = resolveSubLoanGroup(list, { enabled: false }, "2026-05");
+    expect(res.results[0].rolledFrom).toBeNull();
+  });
+});

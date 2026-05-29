@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf } from "../utils/endingItems.js";
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { newLoanId, resolveLoans, aggregateDebt, totalRemainingInterest, payoffMonthIndex } from "../utils/loans.js";
@@ -2049,11 +2049,31 @@ export default function AdvancedForecastTab({
                  for live preview; the persisted value is what the math
                  layer trusts (resolveEndingEvents reads ei.endsOn).
                  Loan-mode uses the SUMMED monthly across all linked items
-                 (e.g. mortgage P&I + extra principal payment combined). */
+                 (e.g. mortgage P&I + extra principal payment combined).
+
+                 Roll-forward: if `ei.balanceAsOf` predates `baseYearMonth`,
+                 we advance the stated balance to today using the linked
+                 monthly payment before amortizing. This keeps the projection
+                 honest when the user typed the balance N months ago and
+                 hasn't refreshed it. */
               let loanResult = null;
+              let rolledLoanBalance = Number(ei.balance) || 0;
+              let loanRollMonths = 0;
               if (isLoanMode && liveMonthly != null) {
-                loanResult = computeLoanEndsOn(ei.balance, ei.annualRate, liveMonthly, baseYearMonth);
+                if (ei.balanceAsOf && baseYearMonth) {
+                  const roll = rollForwardBalance(ei.balance, ei.annualRate, liveMonthly, ei.balanceAsOf, baseYearMonth);
+                  if (roll.ok) {
+                    rolledLoanBalance = roll.rolledBalance;
+                    loanRollMonths = roll.monthsRolled;
+                  }
+                }
+                loanResult = (rolledLoanBalance > 0)
+                  ? computeLoanEndsOn(rolledLoanBalance, ei.annualRate, liveMonthly, baseYearMonth)
+                  : { ok: false, reason: "paid-off-pre-base" };
               }
+              const loanStaleMonths = ei.balanceAsOf
+                ? (monthsSinceAsOf(ei.balanceAsOf, baseYearMonth) || 0)
+                : 0;
 
               /* Sub-loans (Phase 14 follow-up): when present, the single
                  balance/rate is REPLACED by per-rate sub-loans, each
@@ -2089,16 +2109,21 @@ export default function AdvancedForecastTab({
               };
               const addSubLoan = () => {
                 /* Seed a new sub-loan. If this is the FIRST one, fold the
-                   existing single balance/rate in as the seed so the user
-                   doesn't lose what they typed. */
+                   existing single balance/rate (and as-of date) in as the
+                   seed so the user doesn't lose what they typed. */
                 const seed = subLoans.length === 0
-                  ? { balance: Number(ei.balance) || 0, annualRate: Number(ei.annualRate) || 0 }
-                  : { balance: 0, annualRate: 0 };
+                  ? {
+                      balance: Number(ei.balance) || 0,
+                      annualRate: Number(ei.annualRate) || 0,
+                      balanceAsOf: ei.balanceAsOf || baseYearMonth,
+                    }
+                  : { balance: 0, annualRate: 0, balanceAsOf: baseYearMonth };
                 const sl = {
                   id: `sl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
                   label: `Sub-loan ${subLoans.length + 1}`,
                   balance: seed.balance,
                   annualRate: seed.annualRate,
+                  balanceAsOf: seed.balanceAsOf,
                   payments: [0],     // single flat payment for now (graduation later)
                   extraMonthly: 0,
                 };
@@ -2165,7 +2190,7 @@ export default function AdvancedForecastTab({
                   borderRadius: 8,
                   background: "var(--card-bg,#fff)",
                   display: "grid",
-                  gridTemplateColumns: mob ? "1fr" : "1.6fr 1fr 1.4fr auto",
+                  gridTemplateColumns: mob ? "1fr" : "1.6fr 2.4fr auto",
                   gap: 10,
                   alignItems: "start",
                 }}>
@@ -2376,6 +2401,38 @@ export default function AdvancedForecastTab({
                         </span>
                       )}
                     </div>
+
+                    {/* Destination account — sits in the linked-items column,
+                       stacked under the combined-monthly hint, so the mode
+                       column has full horizontal room for sub-loan cards. */}
+                    <div style={{ marginTop: 10 }}>
+                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Redirect To</label>
+                      <select
+                        value={ei.destAccountId || ""}
+                        onChange={e => updateEndingItem(ei.id, { destAccountId: e.target.value })}
+                        style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                      >
+                        <option value="">— pick destination —</option>
+                        {accounts.map(a => (
+                          <option key={a.id} value={a.id}>
+                            {deriveAccountName(a, p1Name, p2Name)}
+                          </option>
+                        ))}
+                      </select>
+                      <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
+                        {!ei.destAccountId ? (
+                          <span style={{ color: "#E8573A" }}>Pick a destination account</span>
+                        ) : destIsCapped ? (
+                          <span style={{ color: "#92400E" }} title="Pool caps apply to the base annual contribution only — the freed monthly cash flows through uncapped in X-A. If you're hitting a 401(k)/IRA/HSA ceiling, the math may overstate.">
+                            ⚠ Capped pool — caps may understate effect
+                          </span>
+                        ) : isOutOfHorizon ? (
+                          <span style={{ color: "var(--tx3,#888)", fontStyle: "italic" }}>
+                            Past {horizon}y horizon — no visible effect
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
 
                   {/* Mode toggle + date or loan inputs */}
@@ -2434,7 +2491,17 @@ export default function AdvancedForecastTab({
                                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4 }}>
                                   <div>
                                     <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Balance</label>
-                                    <NI value={String(sl.balance ?? 0)} onChange={v => updateSubLoanAt(slIdx, { balance: evalF(v) })} onBlurResolve prefix="$" />
+                                    <NI
+                                      value={String(sl.balance ?? 0)}
+                                      onChange={v => {
+                                        /* Editing balance is a refresh: bump
+                                           balanceAsOf to today so the new
+                                           number isn't compounded forward. */
+                                        updateSubLoanAt(slIdx, { balance: evalF(v), balanceAsOf: baseYearMonth });
+                                      }}
+                                      onBlurResolve
+                                      prefix="$"
+                                    />
                                   </div>
                                   <div>
                                     <label style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}>Rate %</label>
@@ -2445,15 +2512,65 @@ export default function AdvancedForecastTab({
                                     <NI value={String((sl.payments && sl.payments[0]) ?? 0)} onChange={v => updateSubLoanAt(slIdx, { payments: [evalF(v)] })} onBlurResolve prefix="$" />
                                   </div>
                                 </div>
+                                {/* Row 2: As of date + Extra principal.
+                                   As-of anchors the balance to a calendar
+                                   month so the roll-forward knows how far
+                                   to advance. Extra is the directed extra
+                                   principal — auto-set by the obligation-
+                                   level "Direct surplus to" picker when
+                                   linked items exceed required payments. */}
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
+                                  <div>
+                                    <label
+                                      style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}
+                                      title="The month this balance was accurate. Editing the balance auto-sets this to the current month."
+                                    >As of</label>
+                                    <input
+                                      type="month"
+                                      value={sl.balanceAsOf || baseYearMonth}
+                                      onChange={e => updateSubLoanAt(slIdx, { balanceAsOf: e.target.value })}
+                                      style={{ width: "100%", padding: 4, fontSize: 10.5, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "var(--input-color,#222)" }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label
+                                      style={{ display: "block", fontSize: 8, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 1 }}
+                                      title="Extra monthly principal directed to this sub-loan, on top of the Payment. Use the obligation-level 'Direct surplus to' picker to auto-fill this from leftover linked-item cash."
+                                    >Extra</label>
+                                    <NI value={String(sl.extraMonthly ?? 0)} onChange={v => updateSubLoanAt(slIdx, { extraMonthly: evalF(v) })} onBlurResolve prefix="$" />
+                                  </div>
+                                </div>
                                 <div style={{ marginTop: 3, fontSize: 9.5, color: "var(--tx3,#888)" }}>
                                   {r?.ok ? (
-                                    <>Pays off <strong style={{ color: "var(--card-color,#222)" }}>{r.endsOn}</strong> ({r.months} mo)</>
+                                    <>
+                                      Pays off <strong style={{ color: "var(--card-color,#222)" }}>{r.endsOn}</strong> ({r.months} mo)
+                                      {r.rolledFrom && r.rolledFrom.monthsRolled > 0 && (() => {
+                                        /* The remaining balance at base = the
+                                           balance at the start of schedule[0],
+                                           i.e. before the first payment is
+                                           applied. schedule[0].remaining is
+                                           AFTER payment, so add back interest
+                                           + payment - extra to get the start.
+                                           Easier: compute interest + principal
+                                           = payment on row 0, so
+                                           start = remaining + principal. */
+                                        const row0 = r.schedule[0];
+                                        const startBal = row0 ? Math.max(0, row0.remaining + row0.principal) : 0;
+                                        return (
+                                          <span style={{ color: "var(--tx3,#aaa)" }}>
+                                            {" "}· rolled {r.rolledFrom.monthsRolled}mo to <strong style={{ color: "var(--card-color,#666)" }}>{fmt(Math.round(startBal))}</strong>
+                                          </span>
+                                        );
+                                      })()}
+                                    </>
                                   ) : r?.reason === "negative-amortization" ? (
                                     <span style={{ color: "#E8573A" }}>⚠ payment below interest</span>
                                   ) : r?.reason === "no-payment" ? (
                                     <span style={{ color: "#E8573A" }}>set a payment</span>
                                   ) : r?.reason === "horizon-exceeded" ? (
                                     <span style={{ color: "#E8573A" }}>&gt;50yr — check inputs</span>
+                                  ) : r?.reason === "paid-off-pre-base" ? (
+                                    <span style={{ color: "#888" }}>paid off — refresh balance or remove</span>
                                   ) : (
                                     <span style={{ fontStyle: "italic" }}>—</span>
                                   )}
@@ -2468,20 +2585,19 @@ export default function AdvancedForecastTab({
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
                         <div>
                           <label style={{ display: "block", fontSize: 9, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 2 }}>Balance</label>
                           <NI
                             value={String(ei.balance ?? 0)}
                             onChange={v => {
                               const num = evalF(v);
-                              const patch = { balance: num };
-                              /* Recompute endsOn live so the math layer
-                                 sees the new payoff date without a save
-                                 step. We only update when the result is
-                                 valid; invalid (zero-payment, neg-am)
-                                 leaves the old endsOn alone and the UI
-                                 shows the error below. */
+                              /* Editing the balance is treated as a refresh:
+                                 the new number is the user's current truth,
+                                 so `balanceAsOf` snaps to base. This keeps
+                                 the roll-forward from compounding interest
+                                 on a value the user just typed. */
+                              const patch = { balance: num, balanceAsOf: baseYearMonth };
                               if (liveMonthly != null && liveMonthly > 0) {
                                 const r = computeLoanEndsOn(num, ei.annualRate, liveMonthly, baseYearMonth);
                                 if (r.ok) patch.endsOn = r.endsOn;
@@ -2500,7 +2616,10 @@ export default function AdvancedForecastTab({
                               const num = evalF(v);
                               const patch = { annualRate: num };
                               if (liveMonthly != null && liveMonthly > 0) {
-                                const r = computeLoanEndsOn(ei.balance, num, liveMonthly, baseYearMonth);
+                                /* Recompute endsOn using the rolled balance —
+                                   not the raw `ei.balance` — so the displayed
+                                   payoff date matches what the user sees. */
+                                const r = computeLoanEndsOn(rolledLoanBalance, num, liveMonthly, baseYearMonth);
                                 if (r.ok) patch.endsOn = r.endsOn;
                               }
                               updateEndingItem(ei.id, patch);
@@ -2508,13 +2627,110 @@ export default function AdvancedForecastTab({
                             onBlurResolve
                           />
                         </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: 9, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 2 }} title="The month this balance was accurate. Editing the balance auto-sets this to the current month.">As of</label>
+                          <input
+                            type="month"
+                            value={ei.balanceAsOf || baseYearMonth}
+                            onChange={e => {
+                              const v = e.target.value;
+                              updateEndingItem(ei.id, { balanceAsOf: v });
+                            }}
+                            style={{ width: "100%", padding: 6, fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {/* Roll-forward summary line for single-loan mode */}
+                    {ei.mode === "loan" && !hasSubLoans && loanRollMonths > 0 && (
+                      <div style={{ marginTop: 4, fontSize: 10, color: loanStaleMonths >= 3 ? "#92400E" : "var(--tx3,#888)" }}>
+                        Rolled forward {loanRollMonths} mo: {fmt(Math.round(Number(ei.balance) || 0))} → <strong>{fmt(Math.round(rolledLoanBalance))}</strong>
+                        {loanStaleMonths >= 3 && <span> · refresh suggested</span>}
                       </div>
                     )}
                     {/* Computed-endsOn display for loan mode */}
                     {ei.mode === "loan" && hasSubLoans && (
                       <div style={{ marginTop: 6, fontSize: 11, color: "var(--tx3,#888)", borderTop: "1px solid var(--bdr,#eee)", paddingTop: 5 }}>
                         <div>Combined: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(Math.round(subSummary.totalBalance))}</strong> @ <strong style={{ color: "var(--card-color,#222)" }}>{subSummary.avgRate.toFixed(2)}%</strong> avg</div>
-                        <div style={{ marginTop: 2 }}>
+
+                        {/* === Reconciliation: linked items vs sum of
+                             (required payments + directed extras).
+                             A surplus is cash from the budget that isn't
+                             paying down any sub-loan — silently dropped
+                             before this UI. A deficit means the user is
+                             promising more than the budget covers. */}
+                        {(() => {
+                          const requiredTotal = subLoans.reduce(
+                            (s, sl) => s + (Number(sl.payments && sl.payments[0]) || 0), 0);
+                          const extraTotal = subLoans.reduce(
+                            (s, sl) => s + (Math.max(0, Number(sl.extraMonthly) || 0)), 0);
+                          const allocated = requiredTotal + extraTotal;
+                          const linked = Number(liveMonthly) || 0;
+                          const diff = linked - allocated;
+                          /* Treat tiny float drift as matched. */
+                          const matched = Math.abs(diff) < 0.005;
+                          const surplus = diff > 0.005 ? diff : 0;
+                          const deficit = diff < -0.005 ? -diff : 0;
+                          const okSubLoans = (subResult?.results || []).filter(r => r.ok);
+                          return (
+                            <div style={{ marginTop: 4 }}>
+                              <div>
+                                Linked: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(linked)}</strong>
+                                {" · "}Required + extras: <strong style={{ color: "var(--card-color,#222)" }}>{fmt(allocated)}</strong>
+                                {matched ? (
+                                  <span style={{ color: "#3F8F3F", marginLeft: 4 }}>✓</span>
+                                ) : surplus > 0 ? (
+                                  <span style={{ color: "#92400E", marginLeft: 4 }}>· surplus {fmt(surplus)}</span>
+                                ) : (
+                                  <span style={{ color: "#E8573A", marginLeft: 4 }}>· short {fmt(deficit)}</span>
+                                )}
+                              </div>
+                              {surplus > 0 && okSubLoans.length > 0 && (
+                                <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                  <span>Direct {fmt(surplus)} surplus to:</span>
+                                  <select
+                                    value=""
+                                    onChange={e => {
+                                      const id = e.target.value;
+                                      if (!id) return;
+                                      /* Add the surplus to the chosen sub-
+                                         loan's extraMonthly. We ADD (not
+                                         replace) so a user assigning surplus
+                                         twice stacks correctly. */
+                                      const idx = subLoans.findIndex(s => s.id === id);
+                                      if (idx < 0) return;
+                                      const cur = Math.max(0, Number(subLoans[idx].extraMonthly) || 0);
+                                      const next = subLoans.map((s, i) =>
+                                        i === idx ? { ...s, extraMonthly: Math.round((cur + surplus) * 100) / 100 } : s
+                                      );
+                                      updateEndingItem(ei.id, withGroupEndsOn(next));
+                                    }}
+                                    style={{ padding: "3px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                                  >
+                                    <option value="">— pick a sub-loan —</option>
+                                    {okSubLoans.map(r => {
+                                      const sl = subLoans.find(s => s.id === r.id);
+                                      return (
+                                        <option key={r.id} value={r.id}>
+                                          {sl?.label || r.label || r.id} ({(sl?.annualRate ?? 0).toFixed(2)}%)
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                  <span style={{ color: "var(--tx3,#aaa)", fontSize: 10 }} title="Highest rate first is the avalanche default — but you choose.">avalanche: pick highest rate</span>
+                                </div>
+                              )}
+                              {deficit > 0 && (
+                                <div style={{ marginTop: 2, fontSize: 10, color: "#E8573A" }}>
+                                  Sub-loan payments exceed linked budget items by {fmt(deficit)}.
+                                  Either lower a Payment/Extra here or raise the linked budget line.
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
+                        <div style={{ marginTop: 4 }}>
                           {subResult?.groupEndsOn && !subResult.anyError ? (
                             <>All paid off <strong style={{ color: "var(--card-color,#222)" }}>{subResult.groupEndsOn}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>({subResult.groupMonths} mo)</span></>
                           ) : subResult?.anyError ? (
@@ -2546,37 +2762,6 @@ export default function AdvancedForecastTab({
                         </button>
                       </div>
                     )}
-                  </div>
-
-                  {/* Destination account */}
-                  <div>
-                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Redirect To</label>
-                    <select
-                      value={ei.destAccountId || ""}
-                      onChange={e => updateEndingItem(ei.id, { destAccountId: e.target.value })}
-                      style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
-                    >
-                      <option value="">— pick destination —</option>
-                      {accounts.map(a => (
-                        <option key={a.id} value={a.id}>
-                          {deriveAccountName(a, p1Name, p2Name)}
-                        </option>
-                      ))}
-                    </select>
-                    {/* Status hints under destination */}
-                    <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
-                      {!ei.destAccountId ? (
-                        <span style={{ color: "#E8573A" }}>Pick a destination account</span>
-                      ) : destIsCapped ? (
-                        <span style={{ color: "#92400E" }} title="Pool caps apply to the base annual contribution only — the freed monthly cash flows through uncapped in X-A. If you're hitting a 401(k)/IRA/HSA ceiling, the math may overstate.">
-                          ⚠ Capped pool — caps may understate effect
-                        </span>
-                      ) : isOutOfHorizon ? (
-                        <span style={{ color: "var(--tx3,#888)", fontStyle: "italic" }}>
-                          Past {horizon}y horizon — no visible effect
-                        </span>
-                      ) : null}
-                    </div>
                   </div>
 
                   {/* Remove button */}

@@ -10,6 +10,8 @@ import {
   eventsByAccount,
   findItemRefConflicts,
   resolveItemRef,
+  monthsSinceAsOf,
+  rollForwardBalance,
 } from "./endingItems.js";
 
 describe("newEndingItemId", () => {
@@ -677,5 +679,110 @@ describe("findItemRefConflicts — id-aware", () => {
     const conflicts = findItemRefConflicts(items);
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].key).toBe("exp::2");
+  });
+});
+
+describe("monthsSinceAsOf", () => {
+  it("returns positive months when base is later than asOf", () => {
+    expect(monthsSinceAsOf("2026-01", "2026-05")).toBe(4);
+    expect(monthsSinceAsOf("2025-01", "2026-05")).toBe(16);
+  });
+  it("returns zero when equal", () => {
+    expect(monthsSinceAsOf("2026-05", "2026-05")).toBe(0);
+  });
+  it("returns negative when asOf is in the future relative to base", () => {
+    expect(monthsSinceAsOf("2026-10", "2026-05")).toBe(-5);
+  });
+  it("handles year boundaries", () => {
+    expect(monthsSinceAsOf("2025-11", "2026-02")).toBe(3);
+    expect(monthsSinceAsOf("2025-12", "2026-01")).toBe(1);
+  });
+  it("returns null on malformed input", () => {
+    expect(monthsSinceAsOf(null, "2026-05")).toBeNull();
+    expect(monthsSinceAsOf("not-a-date", "2026-05")).toBeNull();
+    expect(monthsSinceAsOf("2026-05", "garbage")).toBeNull();
+    expect(monthsSinceAsOf("2026-05", null)).toBeNull();
+  });
+});
+
+describe("rollForwardBalance", () => {
+  it("no-ops when asOf >= base", () => {
+    /* Future as-of (or matching base) should leave balance unchanged with
+       monthsRolled === 0 — the loan hasn't been "paid against" yet. */
+    const same = rollForwardBalance(10000, 5, 200, "2026-05", "2026-05");
+    expect(same).toEqual({ ok: true, rolledBalance: 10000, monthsRolled: 0, paidOffDuringRoll: false });
+    const future = rollForwardBalance(10000, 5, 200, "2026-10", "2026-05");
+    expect(future.ok).toBe(true);
+    expect(future.rolledBalance).toBe(10000);
+    expect(future.monthsRolled).toBe(0);
+    expect(future.paidOffDuringRoll).toBe(false);
+  });
+
+  it("rolls a typical amortizing loan forward one month correctly", () => {
+    /* $10,000 @ 5%, $200/mo. After 1 month:
+         interest = 10000 * 0.05/12 = 41.6667
+         next bal = 10000 + 41.67 - 200 = 9841.67 */
+    const r = rollForwardBalance(10000, 5, 200, "2026-04", "2026-05");
+    expect(r.ok).toBe(true);
+    expect(r.monthsRolled).toBe(1);
+    expect(r.rolledBalance).toBeCloseTo(9841.67, 2);
+    expect(r.paidOffDuringRoll).toBe(false);
+  });
+
+  it("rolls forward multiple months", () => {
+    /* Same loan, 12 months. Closed-form check:
+         B_k = P(1+r)^k - M * ((1+r)^k - 1) / r
+       with P=10000, M=200, r=0.05/12, k=12 → ~8055.85. */
+    const r = rollForwardBalance(10000, 5, 200, "2025-05", "2026-05");
+    expect(r.ok).toBe(true);
+    expect(r.monthsRolled).toBe(12);
+    expect(r.rolledBalance).toBeCloseTo(8055.85, 1);
+  });
+
+  it("handles zero-rate loans (straight subtraction)", () => {
+    const r = rollForwardBalance(1000, 0, 100, "2026-01", "2026-05");
+    expect(r.ok).toBe(true);
+    expect(r.monthsRolled).toBe(4);
+    expect(r.rolledBalance).toBeCloseTo(600, 6);
+  });
+
+  it("clamps to zero and marks paidOffDuringRoll when the loan pays off mid-roll", () => {
+    /* $100 balance, $50/mo, 0% — pays off in 2 months. Roll 6 months
+       forward should clamp at 0 with paidOffDuringRoll true. */
+    const r = rollForwardBalance(100, 0, 50, "2026-01", "2026-07");
+    expect(r.ok).toBe(true);
+    expect(r.rolledBalance).toBe(0);
+    expect(r.paidOffDuringRoll).toBe(true);
+    expect(r.monthsRolled).toBe(2); // hit zero on the 2nd month
+  });
+
+  it("allows neg-am during roll (balance grows, no error)", () => {
+    /* $10k @ 10%, $50/mo — payment doesn't cover interest. Balance
+       should grow over the roll period. We don't error here; the
+       downstream amortization will surface neg-am properly. */
+    const r = rollForwardBalance(10000, 10, 50, "2025-05", "2026-05");
+    expect(r.ok).toBe(true);
+    expect(r.monthsRolled).toBe(12);
+    expect(r.rolledBalance).toBeGreaterThan(10000);
+    expect(r.paidOffDuringRoll).toBe(false);
+  });
+
+  it("rejects invalid input", () => {
+    expect(rollForwardBalance(0, 5, 100, "2026-01", "2026-05").ok).toBe(false);
+    expect(rollForwardBalance(-100, 5, 100, "2026-01", "2026-05").ok).toBe(false);
+    expect(rollForwardBalance(1000, -1, 100, "2026-01", "2026-05").ok).toBe(false);
+    expect(rollForwardBalance(1000, 5, -10, "2026-01", "2026-05").ok).toBe(false);
+    expect(rollForwardBalance(1000, 5, 100, "bad", "2026-05").ok).toBe(false);
+    expect(rollForwardBalance(1000, 5, 100, "2026-01", null).ok).toBe(false);
+  });
+
+  it("allows zero payment (balance just accrues interest)", () => {
+    /* Edge case: user knows the balance but hasn't entered a payment yet.
+       Roll-forward should still work — interest accrues, no principal
+       paid. The downstream monthsToPayoff will then return zero-payment. */
+    const r = rollForwardBalance(1000, 12, 0, "2026-04", "2026-05");
+    expect(r.ok).toBe(true);
+    expect(r.monthsRolled).toBe(1);
+    expect(r.rolledBalance).toBeCloseTo(1010, 2); // 1000 * (1 + 0.01)
   });
 });
