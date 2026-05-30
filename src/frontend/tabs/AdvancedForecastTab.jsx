@@ -288,21 +288,6 @@ export default function AdvancedForecastTab({
     return () => document.removeEventListener("keydown", onKey);
   }, [addMenuOpen]);
 
-  /* Bulk "As-of" date for the Ending Obligations section.
-     ---------------------------------------------------------------
-     Sets every obligation's `balanceAsOf` and every sub-loan's
-     `balanceAsOf` to the same date in one click. Lives at the top
-     of the Ending Obligations card so users can refresh all
-     balances at once after checking statements.
-
-     Local state — not persisted. Default seeds to today (the most
-     common case: "I just refreshed all my balances"). The input is
-     <input type="month">, same YYYY-MM format the per-row fields use. */
-  const [bulkAsOf, setBulkAsOf] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  });
-
   /* Sorted view for rendering. `manual` keeps the persisted index order;
      otherwise produce a fresh sorted copy each render. The underlying
      `accounts` array is never reordered by sorting — only by user drag. */
@@ -560,34 +545,6 @@ export default function AdvancedForecastTab({
     setForecast(prev => {
       const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
       return { ...prev, endingItems: cur.filter(ei => ei.id !== id) };
-    });
-  };
-
-  /* Bulk-set `balanceAsOf` to `ym` on every ending obligation and every
-     sub-loan within them. Single setForecast call so the update batches
-     into one auto-save round-trip. Does NOT touch balance numbers — the
-     as-of is purely a "when was this accurate" anchor that tells the
-     roll-forward math how stale each balance is. */
-  const applyBulkAsOf = (ym) => {
-    if (!ym || !/^\d{4}-\d{2}$/.test(ym)) return;
-    setForecast(prev => {
-      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
-      const next = cur.map(ei => {
-        const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
-        return {
-          ...ei,
-          balanceAsOf: ym,
-          subLoans: subLoans.map(sl => ({ ...sl, balanceAsOf: ym })),
-        };
-      });
-      /* Also stamp every forecast account's display-only balanceAsOf.
-         For accounts this is purely a "when was this accurate" note — the
-         projection still starts from startBalance verbatim (no roll-forward,
-         since we can't know market returns for the gap). For loans/sub-loans
-         it additionally drives roll-forward math. */
-      const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
-      const nextAccounts = prevAccounts.map(a => ({ ...a, balanceAsOf: ym }));
-      return { ...prev, endingItems: next, accounts: nextAccounts };
     });
   };
 
@@ -1035,13 +992,29 @@ export default function AdvancedForecastTab({
     if (!globalAsOf || !/^\d{4}-\d{2}$/.test(globalAsOf)) return;
     setForecast(prev => {
       const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
-      return { ...prev, accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: globalAsOf })) };
+      const prevItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      return {
+        ...prev,
+        accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: globalAsOf })),
+        endingItems: prevItems.map(ei => {
+          const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
+          return { ...ei, balanceAsOf: globalAsOf, subLoans: subLoans.map(sl => ({ ...sl, balanceAsOf: globalAsOf })) };
+        }),
+      };
     });
   };
   const clearAsOfAll = () => {
     setForecast(prev => {
       const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
-      return { ...prev, accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: undefined })) };
+      const prevItems = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      return {
+        ...prev,
+        accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: undefined })),
+        endingItems: prevItems.map(ei => {
+          const subLoans = Array.isArray(ei.subLoans) ? ei.subLoans : [];
+          return { ...ei, balanceAsOf: undefined, subLoans: subLoans.map(sl => ({ ...sl, balanceAsOf: undefined })) };
+        }),
+      };
     });
   };
   /* Shared as-of state across accounts: null = no accounts, "" = all blank
@@ -1738,7 +1711,7 @@ export default function AdvancedForecastTab({
           <button
             onClick={applyAsOfToAll}
             disabled={accounts.length === 0}
-            title="Set every account's 'accurate as of' date to this month. Each account's balance is then aged forward to today at its own return rate (growth only) before projecting — so accounts and loans stay on the same clock."
+            title="Set the 'accurate as of' date on every account, obligation, and sub-loan to this month. Accounts and loans are aged forward to today (accounts at their return rate, loans along their schedule) so everything stays on the same clock."
             style={{
               padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5,
               background: accounts.length === 0 ? "var(--input-bg,#f5f5f5)" : "#556FB5",
@@ -1754,7 +1727,7 @@ export default function AdvancedForecastTab({
             >Clear all</button>
           )}
           <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
-            When your balances were last accurate. Accounts age forward to today at their return rate. Per-account dates can still be set individually below; blank = current.
+            When your balances were last accurate — applies to accounts, obligations, and sub-loans. Accounts age forward to today at their return rate. Per-item dates can still be set individually below; blank = current.
           </span>
         </div>
 
@@ -2190,49 +2163,9 @@ export default function AdvancedForecastTab({
           </div>
         )}
 
-        {/* Bulk As-of — stamps balanceAsOf on every obligation + sub-loan
-           AND every forecast account in one click. For loans it drives
-           roll-forward math; for accounts it's a display-only "accurate as
-           of" note (the projection still starts from startBalance verbatim).
-           Lives in this card but covers accounts too as a convenience. */}
-        {endingItems.length > 0 && (
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
-            padding: "8px 10px",
-            marginBottom: 10,
-            background: "var(--input-bg,#fafafa)",
-            border: "1px solid var(--bdr,#e2e2e2)",
-            borderRadius: 6,
-            fontSize: 11.5,
-          }}>
-            <span style={{ color: "var(--tx2,#555)", fontWeight: 600 }}>Bulk as-of:</span>
-            <input
-              type="month"
-              value={bulkAsOf}
-              onChange={e => setBulkAsOf(e.target.value)}
-              style={{ padding: "4px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "var(--input-color,#222)" }}
-            />
-            <button
-              type="button"
-              onClick={() => applyBulkAsOf(bulkAsOf)}
-              title={(() => {
-                const subLoanCount = endingItems.reduce(
-                  (n, ei) => n + (Array.isArray(ei.subLoans) ? ei.subLoans.length : 0), 0);
-                const parts = [`${endingItems.length} obligation${endingItems.length === 1 ? "" : "s"}`];
-                if (subLoanCount > 0) parts.push(`${subLoanCount} sub-loan${subLoanCount === 1 ? "" : "s"}`);
-                if (accounts.length > 0) parts.push(`${accounts.length} account${accounts.length === 1 ? "" : "s"}`);
-                return `Set As-of on ${parts.join(" + ")} to ${bulkAsOf}. Balances are not changed.`;
-              })()}
-              style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: "none", borderRadius: 4, background: "#556FB5", color: "#fff", cursor: "pointer" }}
-            >Apply to all</button>
-            <span style={{ color: "var(--tx3,#888)", fontSize: 10.5 }}>
-              Stamps the "accurate as of" date on every obligation, sub-loan, and account. Doesn't edit your balance numbers — but accounts and loans both age forward from this date in the projection.
-            </span>
-          </div>
-        )}
+        {/* As-of dates are stamped from the master "Accurate as of" control
+           at the top of the Accounts card (covers accounts + obligations +
+           sub-loans). Per-obligation dates remain editable on each row. */}
 
         {endingItems.length === 0 ? (
           <div style={{ padding: "16px 12px", fontSize: 12, color: "var(--tx3,#888)", fontStyle: "italic", textAlign: "center", background: "var(--input-bg,#fafafa)", borderRadius: 6, border: "1px dashed var(--bdr,#ddd)" }}>
