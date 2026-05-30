@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
@@ -1151,6 +1151,48 @@ export default function AdvancedForecastTab({
   const fireTarget = fireResult.target;
   const fireMultiplierNum = fireResult.multiplierEquivalent || 25;
 
+  /* Per-year FIRE spending reduction from ending obligations.
+     ---------------------------------------------------------------
+     When an obligation marked reducesFire ends, the user no longer needs
+     to fund that expense in retirement, so the FIRE target should step
+     DOWN from that year forward. reductionByYear[y] is the annual
+     (today's-$) reduction in effect once every qualifying obligation that
+     has ended by year y is counted.
+
+     Unit coherence: monthlyAmountFor returns wk*48/12 (budget 48-paycheck
+     basis → monthly). fireSpendingReductionByYear annualizes ×12, giving
+     wk*48 — the SAME annual basis as fireAnnualExpenses (tExpW*48). So a
+     reduction subtracts cleanly from the spend that drives the target.
+
+     A manual retirementSpendingOverride disables the auto step-down: if
+     the user has typed an explicit retirement spend, that's their final
+     word and obligations shouldn't second-guess it. */
+  const fireReduction = useMemo(() => {
+    const yrs = Math.max(0, Math.floor(Number(horizon) || 0));
+    return fireSpendingReductionByYear(endingItems, monthlyAmountFor, baseYearMonth, yrs);
+    // monthlyAmountFor closes over exp/sav.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endingItems, exp, sav, baseYearMonth, horizon]);
+
+  /* Today's-$ FIRE target for a given integer projection year, after
+     subtracting obligations ended by that year. Reuses computeFireTarget
+     so the tax gross-up applies to the reduced spend too — a smaller
+     ordinary-income withdrawal can land in lower brackets, so the target
+     drop is slightly more than the raw spend drop / swr. When the override
+     is set, or when reductions don't apply, this collapses to fireTarget. */
+  const fireBaseTargetForYear = useMemo(() => {
+    const reductions = fireReduction.reductionByYear;
+    const overridden = retirementSpendingOverride != null;
+    return (y) => {
+      if (!fireEnabled) return 0;
+      const yi = Math.max(0, Math.min(reductions.length - 1, Math.round(y)));
+      const cut = overridden ? 0 : (reductions[yi] || 0);
+      if (cut <= 0) return fireTarget;
+      const reducedSpend = Math.max(0, fireSpending - cut);
+      return computeFireTarget(reducedSpend, fireAccountMix, taxConfig, swr, useSimpleMultiplier).target;
+    };
+  }, [fireReduction, retirementSpendingOverride, fireEnabled, fireTarget, fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier]);
+
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.
      Also includes:
@@ -1169,14 +1211,14 @@ export default function AdvancedForecastTab({
         calendarYear: row.calendarYear,
         total: row.totals.nominal,
         totalReal: row.totals.real,
-        fireThresh: showFire ? fireTarget * Math.pow(1 + inflRate, row.year) : null,
+        fireThresh: showFire ? fireBaseTargetForYear(row.year) * Math.pow(1 + inflRate, row.year) : null,
       };
       for (const a of accounts) {
         point[a.id] = row.byAccount[a.id]?.nominal || 0;
       }
       return point;
     });
-  }, [projection, accounts, fireEnabled, fireTarget, inflationPct]);
+  }, [projection, accounts, fireEnabled, fireTarget, fireBaseTargetForYear, inflationPct]);
 
   /* Color assignment per account. With Color by Owner the index is per-owner;
      with Color by Type the index is per-pool. */
@@ -1248,7 +1290,7 @@ export default function AdvancedForecastTab({
     const series = projection.years;
     if (!series.length) return null;
     const inflRate = (Number(inflationPct) || 0) / 100;
-    const targetAt = (y) => fireTarget * Math.pow(1 + inflRate, y);
+    const targetAt = (y) => fireBaseTargetForYear(y) * Math.pow(1 + inflRate, y);
     if (series[0].totals.nominal >= targetAt(0)) return 0;
     for (let y = 1; y < series.length; y++) {
       const tgt = targetAt(y);
@@ -1263,7 +1305,7 @@ export default function AdvancedForecastTab({
       }
     }
     return null;
-  }, [projection, fireEnabled, fireTarget, inflationPct]);
+  }, [projection, fireEnabled, fireTarget, fireBaseTargetForYear, inflationPct]);
 
   /* Look up the per-account current-year limit + ramp years for each
      account that participates in a pool. Used in the input row UI. */
@@ -1355,7 +1397,7 @@ export default function AdvancedForecastTab({
               {fireEnabled && fireTarget > 0 && (() => {
                 const inflRate = (Number(inflationPct) || 0) / 100;
                 const refYear = (yearsToFireAdv != null && yearsToFireAdv > 0) ? yearsToFireAdv : horizon;
-                const futureTarget = fireTarget * Math.pow(1 + inflRate, refYear);
+                const futureTarget = fireBaseTargetForYear(refYear) * Math.pow(1 + inflRate, refYear);
                 const yearLabel = (yearsToFireAdv != null && yearsToFireAdv > 0)
                   ? `at FI (year ${refYear.toFixed(1)})`
                   : `at year ${horizon}`;
@@ -3018,6 +3060,42 @@ export default function AdvancedForecastTab({
                         </button>
                       </div>
                     )}
+
+                    {/* Reduce-FIRE toggle: once this obligation ends, drop its
+                        amount from the retirement-spending figure that drives
+                        the FIRE target (the target steps down from that year).
+                        Default ON; disabled/greyed when a manual retirement-
+                        spending override is set, since the override is the
+                        user's final word on retirement spend. */}
+                    {(() => {
+                      const on = reducesFire(ei);
+                      const overridden = retirementSpendingOverride != null;
+                      return (
+                        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 7, opacity: overridden ? 0.5 : 1 }}>
+                          <button
+                            onClick={() => updateEndingItem(ei.id, { reducesFire: !on })}
+                            disabled={overridden}
+                            title={overridden
+                              ? "Disabled: a manual Retirement Spending override is set on the FIRE card, which takes precedence. Clear it to use per-obligation reductions."
+                              : "When ON, the FIRE target drops once this obligation ends — you won't be funding this expense in retirement. When OFF, the target ignores that this expense goes away (conservative)."}
+                            style={{
+                              position: "relative", width: 32, height: 18, borderRadius: 9, border: "none",
+                              background: on && !overridden ? "#27AE60" : "var(--bdr,#ccc)",
+                              cursor: overridden ? "default" : "pointer", flexShrink: 0, transition: "background 0.15s", padding: 0,
+                            }}
+                          >
+                            <span style={{ position: "absolute", top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left 0.15s" }} />
+                          </button>
+                          <span style={{ fontSize: 10.5, color: "var(--tx2,#666)" }}>
+                            Reduces FIRE target when it ends
+                          </span>
+                          <span
+                            title={"Once this obligation's end date passes, its monthly amount (×12) is subtracted from your retirement spending, so the FIRE target steps down from that year forward.\n\nLeave ON for expenses you genuinely won't have in retirement (mortgage, car loan). Turn OFF if the spending continues in some other form."}
+                            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 13, height: 13, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 8.5, fontWeight: 700, cursor: "help", flexShrink: 0 }}
+                          >?</span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Remove button */}
@@ -3295,7 +3373,7 @@ export default function AdvancedForecastTab({
                         the time they hit it. */}
                     <div style={{ fontSize: 10, color: "var(--tx3,#888)", marginTop: 2 }}>target today: {fmt(fireTarget)}</div>
                     <div style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
-                      target year {yearsToFireAdv.toFixed(1)}: {fmt(fireTarget * Math.pow(1 + (Number(inflationPct) || 0) / 100, yearsToFireAdv))}
+                      target year {yearsToFireAdv.toFixed(1)}: {fmt(fireBaseTargetForYear(yearsToFireAdv) * Math.pow(1 + (Number(inflationPct) || 0) / 100, yearsToFireAdv))}
                     </div>
                   </>
                 )}

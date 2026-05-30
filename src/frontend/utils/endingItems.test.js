@@ -13,6 +13,8 @@ import {
   monthsSinceAsOf,
   rollForwardBalance,
   routedTotalsBySubLoan,
+  reducesFire,
+  fireSpendingReductionByYear,
 } from "./endingItems.js";
 
 describe("newEndingItemId", () => {
@@ -959,5 +961,111 @@ describe("routedTotalsBySubLoan", () => {
     const out = routedTotalsBySubLoan(refs, refResolutions, subLoanIds);
     expect(out.byId).toEqual({});
     expect(out.unallocated).toBe(0);
+  });
+});
+
+describe("reducesFire — default-on shim", () => {
+  it("missing field defaults to true (opt-out semantics)", () => {
+    expect(reducesFire({ id: "ei_1" })).toBe(true);
+  });
+  it("explicit true is true", () => {
+    expect(reducesFire({ reducesFire: true })).toBe(true);
+  });
+  it("only explicit false opts out", () => {
+    expect(reducesFire({ reducesFire: false })).toBe(false);
+  });
+  it("non-boolean truthy values do not opt out (only === false)", () => {
+    expect(reducesFire({ reducesFire: 0 })).toBe(true);
+    expect(reducesFire({ reducesFire: null })).toBe(true);
+  });
+  it("null / non-object defaults to true", () => {
+    expect(reducesFire(null)).toBe(true);
+    expect(reducesFire(undefined)).toBe(true);
+  });
+});
+
+describe("fireSpendingReductionByYear", () => {
+  const baseYM = "2026-01";
+  const years = 20;
+
+  const mkItem = (overrides = {}) => ({
+    id: "ei_1",
+    itemRefs: [{ section: "exp", idx: 0, name: "Car loan" }],
+    destAccountId: "acc_cash_joint",
+    effect: "ends",
+    mode: "date",
+    endsOn: "2028-12",
+    ...overrides,
+  });
+
+  it("empty / null input returns zero-filled array of length years+1", () => {
+    const r = fireSpendingReductionByYear([], () => 1000, baseYM, years);
+    expect(r.reductionByYear).toHaveLength(years + 1);
+    expect(r.reductionByYear.every(v => v === 0)).toBe(true);
+    expect(r.contributors).toEqual([]);
+    expect(fireSpendingReductionByYear(null, () => 1000, baseYM, years).reductionByYear).toHaveLength(years + 1);
+  });
+
+  it("a $2000/mo expense ending 2028-12 reduces annual spend by $24k from year 3 on", () => {
+    // endsOn 2028-12 → idx = (2028-2026)*12 + (12-1) = 35; fireIdx = 36; ceil(36/12)=3
+    const r = fireSpendingReductionByYear([mkItem()], () => 2000, baseYM, years);
+    expect(r.reductionByYear[0]).toBe(0);
+    expect(r.reductionByYear[1]).toBe(0);
+    expect(r.reductionByYear[2]).toBe(0);
+    expect(r.reductionByYear[3]).toBe(24000);
+    expect(r.reductionByYear[20]).toBe(24000);
+    expect(r.contributors).toEqual([{ id: "ei_1", annualReduction: 24000, freesAtYear: 3 }]);
+  });
+
+  it("reducesFire:false contributes zero", () => {
+    const r = fireSpendingReductionByYear([mkItem({ reducesFire: false })], () => 2000, baseYM, years);
+    expect(r.reductionByYear.every(v => v === 0)).toBe(true);
+    expect(r.contributors).toEqual([]);
+  });
+
+  it("missing reducesFire still reduces (default on)", () => {
+    const r = fireSpendingReductionByYear([mkItem()], () => 2000, baseYM, years);
+    expect(r.reductionByYear[19]).toBe(24000);
+  });
+
+  it("effect=starts never reduces the target", () => {
+    const r = fireSpendingReductionByYear([mkItem({ effect: "starts" })], () => 2000, baseYM, years);
+    expect(r.reductionByYear.every(v => v === 0)).toBe(true);
+  });
+
+  it("orphaned (bad ref amount) contributes zero — never lowers target on broken link", () => {
+    expect(fireSpendingReductionByYear([mkItem()], () => null, baseYM, years).reductionByYear.every(v => v === 0)).toBe(true);
+    expect(fireSpendingReductionByYear([mkItem()], () => 0, baseYM, years).reductionByYear.every(v => v === 0)).toBe(true);
+    expect(fireSpendingReductionByYear([mkItem({ itemRefs: [] })], () => 2000, baseYM, years).reductionByYear.every(v => v === 0)).toBe(true);
+  });
+
+  it("out-of-horizon obligation contributes zero (no step within chart)", () => {
+    // ends in 30y on a 20y horizon
+    const r = fireSpendingReductionByYear([mkItem({ endsOn: "2056-01" })], () => 2000, baseYM, years);
+    expect(r.reductionByYear.every(v => v === 0)).toBe(true);
+    expect(r.contributors).toEqual([]);
+  });
+
+  it("multiple linked refs sum their monthly amounts", () => {
+    const item = mkItem({ itemRefs: [{ section: "exp", idx: 0, name: "A" }, { section: "exp", idx: 1, name: "B" }] });
+    const r = fireSpendingReductionByYear([item], () => 500, baseYM, years);
+    // 2 refs × $500/mo = $1000/mo × 12 = $12k/yr
+    expect(r.reductionByYear[3]).toBe(12000);
+  });
+
+  it("stacks multiple obligations ending at different years", () => {
+    const a = mkItem({ id: "ei_a", endsOn: "2028-12" }); // frees year 3
+    const b = mkItem({ id: "ei_b", endsOn: "2034-12" }); // idx=107, fire=108, ceil=9
+    const r = fireSpendingReductionByYear([a, b], () => 1000, baseYM, years);
+    expect(r.reductionByYear[2]).toBe(0);
+    expect(r.reductionByYear[3]).toBe(12000);   // only A
+    expect(r.reductionByYear[8]).toBe(12000);
+    expect(r.reductionByYear[9]).toBe(24000);   // A + B
+    expect(r.contributors.map(c => c.id)).toEqual(["ei_a", "ei_b"]); // sorted by freesAtYear
+  });
+
+  it("years=0 returns a single-element zero array", () => {
+    const r = fireSpendingReductionByYear([mkItem()], () => 2000, baseYM, 0);
+    expect(r.reductionByYear).toEqual([0]);
   });
 });

@@ -75,6 +75,24 @@ export function getItemRefs(ei) {
   return [];
 }
 
+/* Does this obligation reduce the FIRE retirement-spending target once it
+   ends? (Phase: ending-obligations → FIRE step-down.)
+   ---------------------------------------------------------------
+   When an obligation ends, the freed cash flow already redirects to a
+   forecast account (the contribution side). This flag governs the OTHER
+   half: whether the ended expense should also be subtracted from the
+   retirement-spending figure that drives the FIRE target — i.e. "I won't
+   be paying this in retirement, so I don't need to fund it."
+
+   Default ON. The reducesFire field is opt-OUT. The shim below treats a
+   missing field as true so that (a) obligations saved before this feature
+   existed and (b) the natural-intuition default both reduce the target.
+   Only an explicit `reducesFire === false` opts out. */
+export function reducesFire(ei) {
+  if (!ei || typeof ei !== "object") return true;
+  return ei.reducesFire !== false;
+}
+
 /* Normalize a name for fallback matching: trim + lowercase. */
 function _normName(name) {
   return String(name || "").trim().toLowerCase();
@@ -655,4 +673,96 @@ export function routedTotalsBySubLoan(refs, refResolutions, subLoanIds) {
   }
 
   return { byId, unallocated, unallocatedSources, orphanRoutings };
+}
+
+/* Per-year FIRE retirement-spending reduction.
+   ---------------------------------------------------------------
+   For the FIRE step-down: returns an array of length `years + 1` where
+   index y is the ANNUAL reduction (today's dollars) to subtract from
+   retirement spending once every obligation that (a) reduces FIRE and
+   (b) has ended by year y is accounted for.
+
+   "Ended by year y" uses the same endsOn index as resolveEndingEvents:
+   freed the month after the last payment (endsOnIdx + 1). We convert
+   that fire month index to a fractional year and treat the obligation
+   as reducing spend from the first projection year boundary at or after
+   it. Concretely: an obligation freeing at month index `fireIdx` reduces
+   spending for every year y where y*12 >= fireIdx — i.e. once a full
+   projection year has reached the freeing point. This keeps the step
+   aligned with the integer-year crossover grid the chart/target use.
+
+   Monthly amount → annual is ×12 here (calendar months), matching the
+   retirement-spending frame (annual after-tax spend), NOT the 48-paycheck
+   budget basis. The linked budget amounts arrive already-monthly from
+   `monthlyAmountFor`, so a $2,000/mo mortgage reduces annual spend by
+   $24,000 once it ends.
+
+   Only `effect === "ends"` obligations with `reducesFire(ei)` true and a
+   resolvable, in-range endsOn contribute. Orphaned / out-of-horizon /
+   opted-out / starts-effect obligations contribute zero (they leave the
+   target unchanged), which is the safe direction — a broken link should
+   never silently LOWER the target and make FIRE look closer than it is.
+
+   Args mirror resolveEndingEvents:
+     endingItems     — the obligations array
+     monthlyAmountFor— (ref) => monthly amount or null
+     baseYearMonth   — "YYYY-MM" of projection year 0
+     years           — integer projection horizon in years
+
+   Returns:
+     {
+       reductionByYear: number[],   // length years+1, cumulative annual reduction
+       contributors: [{ id, annualReduction, freesAtYear }],  // for UI/debug
+     }
+*/
+export function fireSpendingReductionByYear(endingItems, monthlyAmountFor, baseYearMonth, years) {
+  const n = Math.max(0, Math.floor(Number(years) || 0));
+  const reductionByYear = new Array(n + 1).fill(0);
+  const contributors = [];
+
+  if (!Array.isArray(endingItems) || endingItems.length === 0) {
+    return { reductionByYear, contributors };
+  }
+
+  const horizonMonths = n * 12;
+
+  for (const ei of endingItems) {
+    if (!ei || typeof ei !== "object") continue;
+    if (!reducesFire(ei)) continue;
+    // A "starts" obligation raises future spend, not lowers it; it must
+    // never reduce the FIRE target. UI only exposes "ends" today, but be
+    // explicit so scaffolding can't leak a wrong-signed reduction.
+    if (ei.effect === "starts") continue;
+
+    const refs = getItemRefs(ei);
+    if (refs.length === 0) continue;
+
+    let monthly = 0;
+    let anyBad = false;
+    for (const ref of refs) {
+      const m = monthlyAmountFor(ref);
+      if (m == null || !isFinite(m) || m <= 0) { anyBad = true; break; }
+      monthly += m;
+    }
+    if (anyBad) continue;
+
+    const endsOnIdx = yearMonthToIndex(ei.endsOn, baseYearMonth);
+    if (endsOnIdx == null) continue;
+
+    let fireIdx = endsOnIdx + 1;
+    if (fireIdx < 1) fireIdx = 1;
+    if (fireIdx > horizonMonths) continue; // out of horizon: no step within chart
+
+    const annualReduction = monthly * 12;
+    // First integer projection year at/after the freeing month.
+    const freesAtYear = Math.ceil(fireIdx / 12);
+    contributors.push({ id: ei.id, annualReduction, freesAtYear });
+
+    for (let y = freesAtYear; y <= n; y++) {
+      reductionByYear[y] += annualReduction;
+    }
+  }
+
+  contributors.sort((a, b) => a.freesAtYear - b.freesAtYear);
+  return { reductionByYear, contributors };
 }
