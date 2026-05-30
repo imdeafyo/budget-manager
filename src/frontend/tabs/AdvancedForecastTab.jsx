@@ -417,6 +417,53 @@ export default function AdvancedForecastTab({
   };
   const onCardDragEnd = () => { setCardDragId(null); setCardDragOverId(null); };
 
+  /* ── Year-by-Year table: custom column order ──
+     Lets the user drag any column header (except the pinned Year column)
+     into any position, so e.g. a specific account's balance can sit right
+     next to Year. Mirrors the card-order pattern: persist a flat array of
+     column ids, append newly-appeared columns at the end, filter vanished
+     ones. Column ids are stable:
+       "total", "debt", "<accId>" (balance), "<accId>__c" (contribution).
+     Year is NOT in the order list — it's always rendered first as a fixed
+     anchor (a table with no stable left label column is disorienting). */
+  const [colOrder, setColOrder] = useState(() => {
+    try {
+      const raw = localStorage.getItem("forecast-yby-col-order");
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("forecast-yby-col-order", JSON.stringify(colOrder || [])); } catch {}
+  }, [colOrder]);
+  const [colDragId, setColDragId] = useState(null);
+  const [colDragOverId, setColDragOverId] = useState(null);
+  const onColDragStart = (id) => (e) => {
+    setColDragId(id);
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", id); } catch {}
+  };
+  const onColDragOver = (id) => (e) => {
+    if (!colDragId || colDragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setColDragOverId(id);
+  };
+  const onColDragLeave = () => setColDragOverId(null);
+  const onColDrop = (id, allIds) => (e) => {
+    e.preventDefault();
+    if (!colDragId || colDragId === id) { setColDragId(null); setColDragOverId(null); return; }
+    const ids = [...allIds];
+    const fromIdx = ids.indexOf(colDragId);
+    const toIdx   = ids.indexOf(id);
+    if (fromIdx < 0 || toIdx < 0) { setColDragId(null); setColDragOverId(null); return; }
+    const [moved] = ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, moved);
+    setColOrder(ids);
+    setColDragId(null); setColDragOverId(null);
+  };
+  const onColDragEnd = () => { setColDragId(null); setColDragOverId(null); };
+  const resetColOrder = () => setColOrder([]);
+
   /* Per-account expand/collapse. Default: all collapsed for compactness. */
   const [expanded, setExpanded] = useState({});
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }));
@@ -3674,74 +3721,141 @@ export default function AdvancedForecastTab({
         </Card>
       )}
 
-      {/* Year-by-year table with per-account contribution columns */}
-      {accounts.length > 0 && (
+      {/* Year-by-year table with per-account contribution columns.
+          Columns (except the pinned Year column) are user-reorderable via
+          drag-and-drop on the header; order persists per-device. */}
+      {accounts.length > 0 && (() => {
+        /* Build column descriptors. Each: { id, label, color, italic,
+           cell(row) -> JSX/string, cellStyle(row) -> style }. Year is NOT
+           here — it's rendered as a fixed first column. */
+        const hasLoans = resolvedLoans.loans.length > 0;
+        const colDefs = {};
+        const baseColIds = [];
+
+        colDefs.total = {
+          id: "total", label: "Total", color: "var(--tx3,#888)",
+          cell: (row) => fmt(Math.round(row.totals.nominal)),
+          cellStyle: () => ({ padding: 6, textAlign: "right", fontWeight: 700, color: "var(--card-color,#222)" }),
+        };
+        baseColIds.push("total");
+
+        if (hasLoans) {
+          colDefs.debt = {
+            id: "debt", label: "Debt Remaining", color: "#C0392B",
+            cell: (row) => {
+              const d = debtByYear[row.year]?.total || 0;
+              return d > 0 ? fmt(Math.round(d)) : "—";
+            },
+            cellStyle: (row) => {
+              const d = debtByYear[row.year]?.total || 0;
+              return { padding: 6, textAlign: "right", color: d > 0 ? "#C0392B" : "var(--tx3,#bbb)", fontWeight: d > 0 ? 600 : 400, fontSize: 11 };
+            },
+          };
+          baseColIds.push("debt");
+        }
+
+        for (const a of accounts) {
+          colDefs[a.id] = {
+            id: a.id, label: deriveAccountName(a, p1Name, p2Name), color: accountColors[a.id],
+            cell: (row) => fmt(Math.round(row.byAccount[a.id]?.nominal || 0)),
+            cellStyle: (row) => {
+              const series = projection.accountSeries[a.id]?.[row.year];
+              const uw = series?.underwater;
+              return { padding: 6, textAlign: "right", color: uw ? "#C0392B" : "var(--tx2,#555)", fontWeight: uw ? 600 : 400 };
+            },
+          };
+          baseColIds.push(a.id);
+        }
+        for (const a of accounts) {
+          const cid = a.id + "__c";
+          colDefs[cid] = {
+            id: cid, label: deriveAccountName(a, p1Name, p2Name) + " Contrib.", color: "var(--tx3,#aaa)", italic: true,
+            cell: (row) => {
+              if (row.year === 0) return "—";
+              const c = row.byAccount[a.id]?.contribution || 0;
+              const series = projection.accountSeries[a.id]?.[row.year];
+              return fmt(Math.round(c)) + (series?.capped ? " ⚠" : "");
+            },
+            cellStyle: (row) => {
+              const series = projection.accountSeries[a.id]?.[row.year];
+              return { padding: 6, textAlign: "right", color: series?.capped ? "#E8573A" : "var(--tx3,#888)", fontStyle: "italic", fontSize: 11 };
+            },
+          };
+          baseColIds.push(cid);
+        }
+
+        /* Resolve the render order: take the saved order, keep only ids
+           that still exist, then append any new columns (in their natural
+           baseColIds order) that aren't in the saved order yet. Empty/null
+           saved order → natural order. */
+        const saved = Array.isArray(colOrder) ? colOrder : [];
+        const existing = new Set(baseColIds);
+        const ordered = saved.filter(id => existing.has(id));
+        const inOrder = new Set(ordered);
+        for (const id of baseColIds) if (!inOrder.has(id)) ordered.push(id);
+
+        const isCustom = saved.filter(id => existing.has(id)).length > 0
+          && JSON.stringify(ordered) !== JSON.stringify(baseColIds);
+
+        return (
         <Card>
-          <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Year-by-Year Breakdown</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 12px", flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0, fontFamily: "'Fraunces',serif", fontSize: 16, fontWeight: 800 }}>Year-by-Year Breakdown</h3>
+            <span style={{ fontSize: 11, color: "var(--tx3,#aaa)" }}>Drag column headers to reorder</span>
+            {isCustom && (
+              <button onClick={resetColOrder}
+                title="Reset columns to default order"
+                style={{ marginLeft: "auto", padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "var(--input-bg,#f5f5f5)", color: "var(--tx2,#555)", cursor: "pointer" }}>
+                Reset order
+              </button>
+            )}
+          </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ background: "var(--input-bg,#f8f8f8)" }}>
+                  {/* Pinned Year column — not draggable */}
                   <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Year</th>
-                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Total</th>
-                  {/* Debt Remaining column — only rendered when at least
-                      one loan is configured. Shows total debt across all
-                      active loans at end of that year. Sourced from
-                      debtByYear, which derives from the resolved-loan
-                      amortization schedule (NOT from the projection math —
-                      loans are decoupled from forecast accounts in
-                      Phase 14b). */}
-                  {resolvedLoans.loans.length > 0 && (
-                    <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "#C0392B", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Debt Remaining</th>
-                  )}
-                  {accounts.map(a => (
-                    <th key={a.id} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: accountColors[a.id], borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>{deriveAccountName(a, p1Name, p2Name)}</th>
-                  ))}
-                  {accounts.map(a => (
-                    <th key={a.id + "_c"} style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#aaa)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap", fontStyle: "italic" }}>{deriveAccountName(a, p1Name, p2Name)} Contrib.</th>
-                  ))}
+                  {ordered.map(id => {
+                    const def = colDefs[id];
+                    if (!def) return null;
+                    const isDragging = colDragId === id;
+                    const isOver = colDragOverId === id;
+                    return (
+                      <th key={id}
+                        draggable
+                        onDragStart={onColDragStart(id)}
+                        onDragOver={onColDragOver(id)}
+                        onDragLeave={onColDragLeave}
+                        onDrop={onColDrop(id, ordered)}
+                        onDragEnd={onColDragEnd}
+                        title="Drag to reorder this column"
+                        style={{
+                          padding: 8, textAlign: "right", fontWeight: 700, color: def.color,
+                          borderBottom: "1px solid var(--bdr,#ddd)",
+                          borderLeft: isOver ? "2px solid #556FB5" : "2px solid transparent",
+                          whiteSpace: "nowrap", fontStyle: def.italic ? "italic" : "normal",
+                          cursor: "grab", userSelect: "none",
+                          opacity: isDragging ? 0.4 : 1,
+                          background: isOver ? "rgba(85,111,181,0.08)" : "transparent",
+                        }}>
+                        <span style={{ color: "var(--tx3,#ccc)", marginRight: 4, fontWeight: 400 }}>⠿</span>{def.label}
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {projection.years.map(row => {
-                  /* Sum debt remaining at end-of-year, sourced from
-                     debtByYear (derived from the loan amortization
-                     schedule, not from the per-account projection math).
-                     Year 0 shows the at-base remaining principal. */
-                  const debtRemaining = resolvedLoans.loans.length > 0
-                    ? (debtByYear[row.year]?.total || 0)
-                    : 0;
-                  return (
+                {projection.years.map(row => (
                   <tr key={row.year} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
                     <td style={{ padding: 6, fontWeight: 700, color: "var(--card-color,#222)" }}>{row.year} <span style={{ color: "var(--tx3,#aaa)", fontWeight: 400 }}>({row.calendarYear})</span></td>
-                    <td style={{ padding: 6, textAlign: "right", fontWeight: 700, color: "var(--card-color,#222)" }}>{fmt(Math.round(row.totals.nominal))}</td>
-                    {resolvedLoans.loans.length > 0 && (
-                      <td style={{ padding: 6, textAlign: "right", color: debtRemaining > 0 ? "#C0392B" : "var(--tx3,#bbb)", fontWeight: debtRemaining > 0 ? 600 : 400, fontSize: 11 }}>
-                        {debtRemaining > 0 ? fmt(Math.round(debtRemaining)) : "—"}
-                      </td>
-                    )}
-                    {accounts.map(a => {
-                      const series = projection.accountSeries[a.id]?.[row.year];
-                      const isUnderwater = series?.underwater;
-                      return (
-                        <td key={a.id} style={{ padding: 6, textAlign: "right", color: isUnderwater ? "#C0392B" : "var(--tx2,#555)", fontWeight: isUnderwater ? 600 : 400 }}>
-                          {fmt(Math.round(row.byAccount[a.id]?.nominal || 0))}
-                        </td>
-                      );
-                    })}
-                    {accounts.map(a => {
-                      const c = row.byAccount[a.id]?.contribution || 0;
-                      const series = projection.accountSeries[a.id]?.[row.year];
-                      const wasCapped = series?.capped;
-                      return (
-                        <td key={a.id + "_c"} style={{ padding: 6, textAlign: "right", color: wasCapped ? "#E8573A" : "var(--tx3,#888)", fontStyle: "italic", fontSize: 11 }}>
-                          {row.year === 0 ? "—" : fmt(Math.round(c))}{wasCapped ? " ⚠" : ""}
-                        </td>
-                      );
+                    {ordered.map(id => {
+                      const def = colDefs[id];
+                      if (!def) return null;
+                      return <td key={id} style={def.cellStyle(row)}>{def.cell(row)}</td>;
                     })}
                   </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>
@@ -3751,7 +3865,8 @@ export default function AdvancedForecastTab({
             </div>
           )}
         </Card>
-      )}
+        );
+      })()}
     </div>
   );
 }
