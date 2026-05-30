@@ -3533,11 +3533,11 @@ export default function AdvancedForecastTab({
               Legend
             </button>
           </div>
-          <div style={{ width: "100%", height: 360 }}>
+          <div style={{ width: "100%", height: mob ? 380 : 520 }}>
             <ResponsiveContainer>
-              <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 24, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr,#e0e0e0)" />
-                <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} label={{ value: "Years from now", position: "insideBottom", offset: -2, fontSize: 11, fill: "var(--tx3,#888)" }} />
+                <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} label={{ value: "Years from now", position: "insideBottom", offset: -12, fontSize: 12, fill: "var(--tx3,#888)" }} />
                 <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
                 <Tooltip
                   contentStyle={{ background: "var(--card-bg,#fff)", border: "1px solid var(--bdr,#ddd)", borderRadius: 6, fontSize: 12 }}
