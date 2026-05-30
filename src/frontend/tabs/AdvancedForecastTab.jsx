@@ -3653,7 +3653,7 @@ export default function AdvancedForecastTab({
           </div>
           <div style={{ width: "100%", height: mob ? 380 : 520 }}>
             <ResponsiveContainer>
-              <ComposedChart data={chartData} margin={{ top: 10, right: 24, left: 8, bottom: 24 }}>
+              <ComposedChart data={chartData} margin={{ top: 28, right: 24, left: 8, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--bdr,#e0e0e0)" />
                 <XAxis dataKey="year" tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} label={{ value: "Years from now", position: "insideBottom", offset: -12, fontSize: 12, fill: "var(--tx3,#888)" }} />
                 <YAxis tickFormatter={fmtCompact} tick={{ fontSize: 11, fill: "var(--tx2,#555)" }} width={80} />
@@ -3773,7 +3773,8 @@ export default function AdvancedForecastTab({
                       strokeDasharray="4 2"
                       label={{
                         value: labelText,
-                        position: "top",
+                        position: "insideTop",
+                        dy: 6,
                         fill: color,
                         fontSize: 10,
                         fontWeight: 600,
