@@ -587,6 +587,78 @@ export default function AdvancedForecastTab({
       return changed ? { ...prev, endingItems: next } : prev;
     });
   }, [endingItems, exp, sav]);
+
+  /* Heal stale loan-mode `endsOn` (roll-forward drift).
+     ---------------------------------------------------------------
+     A loan obligation stores `endsOn` (the payoff "YYYY-MM"), which the
+     math layer AND the FIRE step-down both read. The displayed payoff
+     date, however, is computed live from the ROLLED-FORWARD balance —
+     `ei.balance` advanced from `ei.balanceAsOf` to today's baseYearMonth
+     using the linked monthly payment. As real calendar time passes,
+     baseYearMonth moves forward, the rolled balance shrinks, and the
+     displayed payoff date moves earlier — but the stored `endsOn` only
+     gets rewritten when the user edits balance/rate. So a mortgage could
+     DISPLAY "pays off 2050" while the persisted endsOn still says 2055,
+     and the FIRE target would step down on the stale (later) date.
+
+     This effect re-derives endsOn from the rolled balance and writes it
+     back when it drifts, so the stored value matches what's displayed.
+     Scoped to single (non-sub-loan) loan obligations — the case the UI
+     shows as "Pays off: <date>". Sub-loan groups have the same drift but
+     a more involved recompute (routed payments); that's tracked
+     separately and left untouched here rather than half-recomputed.
+
+     Idempotent: short-circuits once every loan's stored endsOn equals its
+     rolled-forward value (the common steady state). */
+  useEffect(() => {
+    if (!Array.isArray(endingItems) || endingItems.length === 0) return;
+    const updates = [];
+    for (const ei of endingItems) {
+      if (!ei || typeof ei !== "object") continue;
+      if (ei.mode !== "loan") continue;
+      if (Array.isArray(ei.subLoans) && ei.subLoans.length > 0) continue; // sub-loan path handled elsewhere
+      if (!baseYearMonth) continue;
+
+      // Summed monthly across linked refs (mirrors liveMonthly in render).
+      const refs = getItemRefs(ei);
+      if (refs.length === 0) continue;
+      let monthly = 0, anyBad = false;
+      for (const ref of refs) {
+        const m = monthlyAmountFor(ref);
+        if (m == null || !isFinite(m) || m <= 0) { anyBad = true; break; }
+        monthly += m;
+      }
+      if (anyBad || monthly <= 0) continue;
+
+      // Roll the stated balance forward to base, exactly as the display does.
+      let rolled = Number(ei.balance) || 0;
+      if (ei.balanceAsOf) {
+        const roll = rollForwardBalance(ei.balance, ei.annualRate, monthly, ei.balanceAsOf, baseYearMonth);
+        if (roll.ok) rolled = roll.rolledBalance;
+      }
+      if (rolled <= 0) continue; // paid off pre-base; leave endsOn (orphan/out-of-horizon handles it)
+
+      const r = computeLoanEndsOn(rolled, ei.annualRate, monthly, baseYearMonth);
+      if (!r.ok) continue;
+      if (r.endsOn !== ei.endsOn) {
+        updates.push({ id: ei.id, endsOn: r.endsOn });
+      }
+    }
+    if (updates.length === 0) return;
+    setForecast(prev => {
+      const cur = Array.isArray(prev?.endingItems) ? prev.endingItems : [];
+      const byId = new Map(updates.map(u => [u.id, u.endsOn]));
+      let changed = false;
+      const next = cur.map(ei => {
+        const newEndsOn = byId.get(ei.id);
+        if (newEndsOn != null && newEndsOn !== ei.endsOn) { changed = true; return { ...ei, endsOn: newEndsOn }; }
+        return ei;
+      });
+      return changed ? { ...prev, endingItems: next } : prev;
+    });
+    // monthlyAmountFor closes over exp/sav.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endingItems, exp, sav, baseYearMonth]);
   const addEndingItem = () => {
     /* Default destination: the first taxable/cash account in the list,
        or any non-capped account, or the first account overall. The user

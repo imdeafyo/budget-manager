@@ -1069,3 +1069,57 @@ describe("fireSpendingReductionByYear", () => {
     expect(r.reductionByYear).toEqual([0]);
   });
 });
+
+describe("loan endsOn roll-forward drift (FIRE step-down sync)", () => {
+  // Reproduces the bug: a balance stated months ago, rolled forward to
+  // base, pays off EARLIER than the same raw balance amortized from base.
+  // The healing effect re-derives endsOn from the rolled balance so the
+  // stored value (which the FIRE step-down reads) matches the display.
+  const base = "2026-01";
+
+  it("rolled-forward payoff is earlier than raw-balance payoff", () => {
+    // $400k @ 6.5%, $2528/mo, balance stated 60 months before base.
+    const balance = 400000, rate = 6.5, pay = 2528, asOf = "2021-01";
+    const raw = computeLoanEndsOn(balance, rate, pay, base);
+    const roll = rollForwardBalance(balance, rate, pay, asOf, base);
+    expect(roll.ok).toBe(true);
+    expect(roll.rolledBalance).toBeLessThan(balance);
+    const rolled = computeLoanEndsOn(roll.rolledBalance, rate, pay, base);
+    expect(raw.ok).toBe(true);
+    expect(rolled.ok).toBe(true);
+    // Rolled pays off sooner — fewer months remain.
+    expect(rolled.months).toBeLessThan(raw.months);
+    // The gap is meaningful (years, not rounding): ~60 months of paydown.
+    expect(raw.months - rolled.months).toBeGreaterThan(48);
+  });
+
+  it("no roll needed when balanceAsOf equals base — raw == rolled", () => {
+    const balance = 400000, rate = 6.5, pay = 2528;
+    const roll = rollForwardBalance(balance, rate, pay, base, base);
+    // asOf == base → no-roll-needed; rolled balance equals raw.
+    const rolledBal = roll.ok ? roll.rolledBalance : balance;
+    const raw = computeLoanEndsOn(balance, rate, pay, base);
+    const rolled = computeLoanEndsOn(rolledBal, rate, pay, base);
+    expect(rolled.months).toBe(raw.months);
+    expect(rolled.endsOn).toBe(raw.endsOn);
+  });
+
+  it("FIRE reduction keys off the (healed) rolled endsOn, not the stale raw one", () => {
+    const balance = 400000, rate = 6.5, pay = 2528, asOf = "2021-01";
+    const roll = rollForwardBalance(balance, rate, pay, asOf, base);
+    const healedEndsOn = computeLoanEndsOn(roll.rolledBalance, rate, pay, base).endsOn;
+    const staleEndsOn = computeLoanEndsOn(balance, rate, pay, base).endsOn;
+    expect(healedEndsOn).not.toBe(staleEndsOn);
+
+    // With the healed endsOn, the step-down fires at the displayed payoff year.
+    const item = {
+      id: "ei_m", itemRefs: [{ section: "exp", idx: 0, name: "Mortgage" }],
+      destAccountId: "acc", effect: "ends", mode: "loan", endsOn: healedEndsOn,
+    };
+    const years = 35;
+    const healedFreesAt = fireSpendingReductionByYear([item], () => pay, base, years).contributors[0].freesAtYear;
+    const staleFreesAt = fireSpendingReductionByYear([{ ...item, endsOn: staleEndsOn }], () => pay, base, years).contributors[0].freesAtYear;
+    // Healed obligation frees cash (and reduces the FIRE target) earlier.
+    expect(healedFreesAt).toBeLessThan(staleFreesAt);
+  });
+});
