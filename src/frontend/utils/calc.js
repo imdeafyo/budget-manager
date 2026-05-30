@@ -237,6 +237,41 @@ export function forecastGrowth(initialBalance, annualContribution, returnPct, in
   return out;
 }
 
+/* ── Roll an investment-account balance forward over a gap of months.
+   ---------------------------------------------------------------
+   Used when an account's balance was "accurate as of" a past month and
+   the projection's year 0 is TODAY. To keep accounts on the same clock
+   as loans (which roll forward along their payment schedule), we age the
+   stated balance forward at the account's own monthly return rate so the
+   year-0 seed represents today, not the stale as-of date.
+
+   GROWTH ONLY — no contributions are added over the gap. The entered
+   balance (typically a statement figure) already reflects whatever was
+   contributed up to the as-of date; re-adding contributions across the
+   gap would double-count. This answers only "what did this balance grow
+   to since I last checked," which is the consistent-with-loans behavior
+   the user asked for. The result is explicitly a MODEL ESTIMATE for the
+   gap, tuned by the same return knob as the forward projection.
+
+   Args:
+     startBalance     — balance as entered (as-of the past month)
+     annualReturnPct  — the account's annual return % (e.g. 7)
+     gapMonths        — whole months from as-of to today (>= 0)
+
+   Returns the rolled balance. gapMonths <= 0 (or non-finite) → startBalance
+   unchanged (nothing to roll). Negative balances are rolled too (a margin/
+   negative cash balance would grow more negative), which is mathematically
+   consistent, though account balances here are normally >= 0. */
+export function rollAccountForward(startBalance, annualReturnPct, gapMonths) {
+  const bal0 = Number(startBalance);
+  const r = Number(annualReturnPct);
+  const g = Math.floor(Number(gapMonths));
+  if (!isFinite(bal0)) return 0;
+  if (!isFinite(r) || !isFinite(g) || g <= 0) return bal0;
+  const monthlyR = Math.pow(1 + r / 100, 1 / 12) - 1;
+  return bal0 * Math.pow(1 + monthlyR, g);
+}
+
 /* ── Time to reach target (in years). Returns null if target unreachable
    with given return and contribution. Uses same monthly-compounding model. */
 export function yearsToTarget(initialBalance, annualContribution, returnPct, targetAmount, maxYears = 100) {

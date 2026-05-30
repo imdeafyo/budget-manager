@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, Area, Line, ComposedChart, ReferenceLine } from "recharts";
 import { Card, NI } from "../components/ui.jsx";
-import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk } from "../utils/calc.js";
+import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk, rollAccountForward } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
@@ -580,7 +580,14 @@ export default function AdvancedForecastTab({
           subLoans: subLoans.map(sl => ({ ...sl, balanceAsOf: ym })),
         };
       });
-      return { ...prev, endingItems: next };
+      /* Also stamp every forecast account's display-only balanceAsOf.
+         For accounts this is purely a "when was this accurate" note — the
+         projection still starts from startBalance verbatim (no roll-forward,
+         since we can't know market returns for the gap). For loans/sub-loans
+         it additionally drives roll-forward math. */
+      const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
+      const nextAccounts = prevAccounts.map(a => ({ ...a, balanceAsOf: ym }));
+      return { ...prev, endingItems: next, accounts: nextAccounts };
     });
   };
 
@@ -1225,15 +1232,32 @@ export default function AdvancedForecastTab({
 
   /* The accounts list passed to the projection, with effective contributions
      baked in. Keep `contribAmount` field name for compatibility with the
-     pure calc function. */
+     pure calc function.
+
+     Roll-forward: if an account has a `balanceAsOf` in the past, its
+     startBalance is aged forward to today (baseYearMonth) at its own return
+     rate, so year 0 represents TODAY — consistent with how loans roll
+     forward along their schedule. Growth only (no contributions over the
+     gap — the entered balance already includes past contributions). This
+     keeps the chart's accounts and loans on the same clock. */
   const projAccounts = useMemo(
-    () => accounts.map(a => ({ ...a, contribAmount: effectiveContribFor(a) })),
+    () => accounts.map(a => {
+      const seed = (() => {
+        if (!a.balanceAsOf) return Number(a.startBalance) || 0;
+        const gap = monthsSinceAsOf(a.balanceAsOf, baseYearMonth);
+        if (gap == null || gap <= 0) return Number(a.startBalance) || 0;
+        return rollAccountForward(a.startBalance, a.annualReturn, gap);
+      })();
+      return { ...a, startBalance: seed, contribAmount: effectiveContribFor(a) };
+    }),
     // All inputs read by autoContribFor / effectiveContribFor must be listed
     // here, otherwise the projection silently goes stale when the user edits
     // an upstream value (IRA $ on Income tab, transactions for cash-actuals,
     // tSavW/remW for cash-budget source). C.net and C.eaipNet drive the
-    // cash-budget variants; tExpW is the expense baseline.
-    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet]
+    // cash-budget variants; tExpW is the expense baseline. baseYearMonth
+    // drives the as-of roll-forward.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet, baseYearMonth]
   );
 
   /* Run the projection. */
@@ -1774,6 +1798,28 @@ export default function AdvancedForecastTab({
                       <NI value={String(a.startBalance)} onChange={v => updateAccount(a.id, { startBalance: evalF(v) })} onBlurResolve prefix="$" />
                     </div>
                     <div>
+                      <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Balance As-of
+                        <span title={"When this balance was last accurate (e.g. your statement date).\n\nThe projection ages this balance forward to TODAY at the account's return rate before projecting — so accounts stay on the same clock as loans (which also roll forward). Growth only; contributions aren't re-added over the gap since your entered balance already includes them.\n\nIt's a model estimate for the gap months — tune the return rate so it tracks reality, and refresh the balance when you re-check.\n\nLeave blank to treat the balance as accurate as of today (no roll-forward)."} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 12, height: 12, borderRadius: "50%", background: "var(--tx3,#888)", color: "#fff", fontSize: 8, fontWeight: 700, cursor: "help" }}>?</span>
+                      </label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input
+                          type="month"
+                          value={a.balanceAsOf || ""}
+                          onChange={e => updateAccount(a.id, { balanceAsOf: e.target.value || undefined })}
+                          style={{ flex: 1, minWidth: 0, padding: "5px 6px", fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                        />
+                        {a.balanceAsOf && (
+                          <button
+                            type="button"
+                            onClick={() => updateAccount(a.id, { balanceAsOf: undefined })}
+                            title="Clear as-of date"
+                            style={{ border: "none", background: "none", cursor: "pointer", fontSize: 14, color: "#ccc", padding: "0 2px", lineHeight: 1 }}
+                          >×</button>
+                        )}
+                      </div>
+                    </div>
+                    <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>Annual Return %</label>
                       <NI value={String(a.annualReturn)} onChange={v => updateAccount(a.id, { annualReturn: evalF(v) })} onBlurResolve />
                     </div>
@@ -2059,10 +2105,11 @@ export default function AdvancedForecastTab({
           </div>
         )}
 
-        {/* Bulk As-of toggle — sets balanceAsOf on every obligation +
-           sub-loan in one click. Only shown when there's something to
-           sweep. Doesn't touch balance numbers; just stamps the "when
-           was this accurate" anchor that drives roll-forward math. */}
+        {/* Bulk As-of — stamps balanceAsOf on every obligation + sub-loan
+           AND every forecast account in one click. For loans it drives
+           roll-forward math; for accounts it's a display-only "accurate as
+           of" note (the projection still starts from startBalance verbatim).
+           Lives in this card but covers accounts too as a convenience. */}
         {endingItems.length > 0 && (
           <div style={{
             display: "flex",
@@ -2091,12 +2138,13 @@ export default function AdvancedForecastTab({
                   (n, ei) => n + (Array.isArray(ei.subLoans) ? ei.subLoans.length : 0), 0);
                 const parts = [`${endingItems.length} obligation${endingItems.length === 1 ? "" : "s"}`];
                 if (subLoanCount > 0) parts.push(`${subLoanCount} sub-loan${subLoanCount === 1 ? "" : "s"}`);
+                if (accounts.length > 0) parts.push(`${accounts.length} account${accounts.length === 1 ? "" : "s"}`);
                 return `Set As-of on ${parts.join(" + ")} to ${bulkAsOf}. Balances are not changed.`;
               })()}
               style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700, border: "none", borderRadius: 4, background: "#556FB5", color: "#fff", cursor: "pointer" }}
             >Apply to all</button>
             <span style={{ color: "var(--tx3,#888)", fontSize: 10.5 }}>
-              Sets the "balance was accurate as of" date on every obligation and sub-loan. Doesn't change balance amounts.
+              Stamps the "accurate as of" date on every obligation, sub-loan, and account. Doesn't edit your balance numbers — but accounts and loans both age forward from this date in the projection.
             </span>
           </div>
         )}

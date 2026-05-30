@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   evalF, resolveFormula, calcMatch, calcFed, getMarg,
   calcStateTax, getStateMarg, toWk, fromWk, recalcMilestonePure,
-  forecastGrowth, yearsToTarget,
+  forecastGrowth, yearsToTarget, rollAccountForward,
   forecastGrowthAccounts, yearsToHitPoolLimit,
   cashBudgetContribution, poolHeadroom,
   fmtCompact
@@ -1770,5 +1770,43 @@ describe("poolHeadroom — Capped pool warning gate for ending obligations", () 
     });
     expect(r.atRisk).toBe(false);
     expect(r.pool).toBe(null);
+  });
+});
+
+describe("rollAccountForward — age a balance to today", () => {
+  it("gap 0 or negative returns the balance unchanged", () => {
+    expect(rollAccountForward(50000, 7, 0)).toBe(50000);
+    expect(rollAccountForward(50000, 7, -3)).toBe(50000);
+  });
+  it("12 months at 7% grows by ~7% (compounded monthly)", () => {
+    const out = rollAccountForward(100000, 7, 12);
+    expect(out).toBeGreaterThan(106900);
+    expect(out).toBeLessThan(107100); // ~107000, monthly compounding ≈ annual
+  });
+  it("6 months at 7% grows by roughly half a year", () => {
+    const out = rollAccountForward(100000, 7, 6);
+    // (1.07)^(6/12) ≈ 1.0344
+    expect(out).toBeGreaterThan(103300);
+    expect(out).toBeLessThan(103500);
+  });
+  it("0% return leaves the balance flat regardless of gap", () => {
+    expect(rollAccountForward(50000, 0, 24)).toBeCloseTo(50000, 6);
+  });
+  it("matches monthly-compounding convention used by forecastGrowth", () => {
+    // 1 month at 12% → balance × (1.12)^(1/12)
+    const expected = 10000 * Math.pow(1.12, 1 / 12);
+    expect(rollAccountForward(10000, 12, 1)).toBeCloseTo(expected, 6);
+  });
+  it("non-finite inputs are handled safely", () => {
+    expect(rollAccountForward(NaN, 7, 12)).toBe(0);
+    expect(rollAccountForward(50000, NaN, 12)).toBe(50000); // no usable rate → unchanged
+    expect(rollAccountForward(50000, 7, NaN)).toBe(50000);  // no usable gap → unchanged
+  });
+  it("fractional gapMonths floors to whole months", () => {
+    expect(rollAccountForward(100000, 7, 11.9)).toBe(rollAccountForward(100000, 7, 11));
+  });
+  it("negative balance rolls further negative (consistent compounding)", () => {
+    const out = rollAccountForward(-1000, 7, 12);
+    expect(out).toBeLessThan(-1000);
   });
 });
