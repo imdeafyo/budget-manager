@@ -275,7 +275,7 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                           value={ln.label || ""}
                           onChange={(e) => updateLoan(ln.id, { label: e.target.value })}
                           placeholder="e.g. home mortgage"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 140 }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 90, boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
@@ -293,7 +293,7 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                             updateLoan(ln.id, { principal: Number.isFinite(n) ? n : 0 });
                           }}
                           placeholder="$"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 110, textAlign: "right" }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 80, textAlign: "right", boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
@@ -308,7 +308,7 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                             updateLoan(ln.id, { interestRate: Number.isFinite(n) ? n : 0 });
                           }}
                           placeholder="%"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 70, textAlign: "right" }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 54, textAlign: "right", boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
@@ -324,7 +324,7 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                             updateLoan(ln.id, { termMonths: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0 });
                           }}
                           placeholder="months"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 80, textAlign: "right" }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 60, textAlign: "right", boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6 }}>
@@ -332,7 +332,7 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                           type="date"
                           value={ln.originationDate || ""}
                           onChange={(e) => updateLoan(ln.id, { originationDate: e.target.value })}
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 140 }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 130, boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right" }}>
@@ -351,13 +351,13 @@ export default function LoansTab({ forecast, setForecast, mob }) {
                             updateLoan(ln.id, { extraMonthlyPrincipal: Number.isFinite(n) && n >= 0 ? n : 0 });
                           }}
                           placeholder="$"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 90, textAlign: "right" }}
+                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 70, textAlign: "right", boxSizing: "border-box" }}
                         />
                       </td>
                       <td style={{ padding: 6, textAlign: "right", fontWeight: 600, color: "var(--card-color,#222)", whiteSpace: "nowrap" }}>
                         {monthlyDisplay}
                       </td>
-                      <td style={{ padding: 6, fontSize: 12, color: "var(--tx2,#555)", whiteSpace: "nowrap" }}>
+                      <td style={{ padding: 6, fontSize: 12, color: "var(--tx2,#555)" }}>
                         {payoffDisplay}
                       </td>
                       <td style={{ padding: 6, textAlign: "right", fontSize: 12, color: "#C0392B", whiteSpace: "nowrap" }}>
