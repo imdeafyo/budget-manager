@@ -358,3 +358,22 @@ income-driven repayment too without redesign. Park until Phase 14
 ships and a real graduated loan needs modeling.
 
 
+
+## App UX / shell
+
+### In-app bug feedback
+
+Capture a bug thought without leaving the app. Surfaced while scoping the
+Loans-tab move (sole dev + user, so reporters == fixer — value is low, it's
+really just a fast scratchpad for "fix this later").
+
+Lightest viable version if ever built:
+- Small textarea (modal or a footer affordance) that POSTs to a new
+  `/api/feedback` table (timestamp, text, current hash/route for context),
+  read back later from Settings → System.
+- Generic build has no server: degrade to appending entries into a
+  `st.feedback` array shown in the same Settings panel, or just skip the
+  widget there.
+
+Deliberately parked, not rejected. A note-to-self / reminder already covers
+the need today. Revisit only if bug thoughts are actually getting lost.
