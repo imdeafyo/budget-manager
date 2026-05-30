@@ -1018,6 +1018,40 @@ export default function AdvancedForecastTab({
       return { ...prev, accounts: prevAccounts.map(a => ({ ...a, annualIncrease: v })) };
     });
   };
+
+  /* Master "accurate as of" control for accounts (top of the Accounts
+     card). Mirrors the annual-increase apply pattern: one month input +
+     "Apply to all" stamps every account's balanceAsOf at once, and a
+     sync dot shows whether accounts currently share one as-of date.
+     Default seed: current month, so the common "everything is current"
+     case is one click. */
+  const [globalAsOf, setGlobalAsOf] = useState(() => {
+    try {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    } catch { return ""; }
+  });
+  const applyAsOfToAll = () => {
+    if (!globalAsOf || !/^\d{4}-\d{2}$/.test(globalAsOf)) return;
+    setForecast(prev => {
+      const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
+      return { ...prev, accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: globalAsOf })) };
+    });
+  };
+  const clearAsOfAll = () => {
+    setForecast(prev => {
+      const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
+      return { ...prev, accounts: prevAccounts.map(a => ({ ...a, balanceAsOf: undefined })) };
+    });
+  };
+  /* Shared as-of state across accounts: null = no accounts, "" = all blank
+     (no roll-forward), undefined = mixed, else the common "YYYY-MM". */
+  const sharedAsOf = (() => {
+    if (accounts.length === 0) return null;
+    const first = accounts[0].balanceAsOf || "";
+    return accounts.every(a => (a.balanceAsOf || "") === first) ? first : undefined;
+  })();
+
   /* Derive whether all accounts currently share a single annualIncrease
      value (and what it is). Used to subtly indicate "in sync" vs "mixed."
      null = no accounts, undefined = mixed. */
@@ -1670,6 +1704,57 @@ export default function AdvancedForecastTab({
           >Apply to all</button>
           <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
             % per year that contributions grow — proxies salary raises. Per-account values can still be tuned individually below.
+          </span>
+        </div>
+
+        {/* Master "accurate as of" — stamps every account's balanceAsOf in
+            one click. Accounts are then aged forward from this date to
+            today at their return rate (growth only), keeping them on the
+            same clock as loans. Sync dot: green = all share one date,
+            orange = mixed, gray = none. */}
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+            <span
+              style={{
+                display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                background: sharedAsOf === null ? "#888" : sharedAsOf === undefined ? "#F39C12" : "#2ECC71",
+              }}
+              title={sharedAsOf === null
+                ? "No accounts to compare"
+                : sharedAsOf === undefined
+                  ? `Accounts have different as-of dates. Click "Apply to all" to sync.`
+                  : sharedAsOf === ""
+                    ? "All accounts have no as-of date (treated as current — no roll-forward)"
+                    : `All accounts accurate as of ${sharedAsOf}`}
+            />
+            Accurate as of:
+          </span>
+          <input
+            type="month"
+            value={globalAsOf}
+            onChange={e => setGlobalAsOf(e.target.value)}
+            style={{ padding: "5px 6px", fontSize: 11, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "var(--input-color,#222)" }}
+          />
+          <button
+            onClick={applyAsOfToAll}
+            disabled={accounts.length === 0}
+            title="Set every account's 'accurate as of' date to this month. Each account's balance is then aged forward to today at its own return rate (growth only) before projecting — so accounts and loans stay on the same clock."
+            style={{
+              padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5,
+              background: accounts.length === 0 ? "var(--input-bg,#f5f5f5)" : "#556FB5",
+              color: accounts.length === 0 ? "var(--tx3,#aaa)" : "#fff",
+              cursor: accounts.length === 0 ? "not-allowed" : "pointer",
+            }}
+          >Apply to all</button>
+          {sharedAsOf !== null && sharedAsOf !== "" && (
+            <button
+              onClick={clearAsOfAll}
+              title="Clear the as-of date on all accounts — treats every balance as current (no roll-forward)."
+              style={{ padding: "4px 8px", fontSize: 10.5, fontWeight: 600, border: "1px solid var(--bdr,#ddd)", borderRadius: 5, background: "transparent", color: "var(--tx2,#555)", cursor: "pointer" }}
+            >Clear all</button>
+          )}
+          <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
+            When your balances were last accurate. Accounts age forward to today at their return rate. Per-account dates can still be set individually below; blank = current.
           </span>
         </div>
 
