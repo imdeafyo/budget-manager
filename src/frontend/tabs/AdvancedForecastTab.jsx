@@ -3727,7 +3727,14 @@ export default function AdvancedForecastTab({
                 const names = refs.map(r => r.name).filter(Boolean);
                 return names.length ? names.join(" + ") : "(unlinked obligation)";
               };
-              const claimedByOther = (eiId) => oneTimeEvents.some(o => o.id !== ev.id && o.linkedEndingId === eiId);
+              /* How many OTHER events already point at this obligation.
+                 Multiple lump-sum prepayments against the same loan over
+                 the years is a real workflow (e.g. annual extra principal),
+                 so we no longer BLOCK a second link — we just surface the
+                 count so it's clear the loan already has paydowns attached.
+                 The debt engine sums all linked lumps; the freed-cash /
+                 payoff date come from the combined paydown. */
+              const otherLinkCount = (eiId) => oneTimeEvents.filter(o => o.id !== ev.id && o.linkedEndingId === eiId).length;
               return (
                 <div key={ev.id} style={{ border: "1px solid var(--bdr,#e6e6e6)", borderRadius: 8, padding: 10, background: "var(--input-bg,#fafafa)" }}>
                   {/* Fields flow with flex-wrap: they sit side by side when
@@ -3814,11 +3821,14 @@ export default function AdvancedForecastTab({
                           style={inputStyle}
                         >
                           <option value="">— none —</option>
-                          {endsObligations.map(ei => (
-                            <option key={ei.id} value={ei.id} disabled={claimedByOther(ei.id)}>
-                              {labelForEi(ei)}{claimedByOther(ei.id) ? " (linked)" : ""}
-                            </option>
-                          ))}
+                          {endsObligations.map(ei => {
+                            const n = otherLinkCount(ei.id);
+                            return (
+                              <option key={ei.id} value={ei.id}>
+                                {labelForEi(ei)}{n > 0 ? ` (${n} other paydown${n > 1 ? "s" : ""})` : ""}
+                              </option>
+                            );
+                          })}
                         </select>
                       )}
                     </div>
