@@ -1574,8 +1574,8 @@ export default function AdvancedForecastTab({
               when reachable so the user can sanity-check the future-$
               number. Full configuration (spending override, tax breakdown,
               etc.) lives on the Simple Forecast tab card. */}
-          <span style={{ display: "inline-flex", flexDirection: "column", padding: fireEnabled ? "6px 10px" : "4px 8px", borderRadius: 8, background: fireEnabled ? "rgba(243,156,18,0.08)" : "transparent", border: fireEnabled ? "1px solid rgba(243,156,18,0.25)" : "1px solid transparent", gap: 3 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ display: "inline-flex", flexDirection: "column", padding: fireEnabled ? "6px 10px" : "4px 8px", borderRadius: 8, background: fireEnabled ? "rgba(243,156,18,0.08)" : "transparent", border: fireEnabled ? "1px solid rgba(243,156,18,0.25)" : "1px solid transparent", gap: 3, maxWidth: "100%", minWidth: 0, boxSizing: "border-box" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>FIRE:</span>
               <button onClick={() => setFireEnabled(!fireEnabled)} style={{ padding: "4px 10px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 6, background: fireEnabled ? "#F39C12" : "var(--input-bg,#f5f5f5)", color: fireEnabled ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }} title="Toggles FIRE mode in both Simple and Advanced views.">{fireEnabled ? "ON" : "OFF"}</button>
               {fireEnabled && (
@@ -1608,7 +1608,7 @@ export default function AdvancedForecastTab({
                   ? `at FI (year ${refYear.toFixed(1)})`
                   : `at year ${horizon}`;
                 return (
-                  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5 }}
+                  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 5, flexWrap: "wrap" }}
                     title={`${fireMultiplierNum.toFixed(1)}× effective multiplier${useSimpleMultiplier ? "" : " (after tax gross-up)"} on ${fmt(fireSpending)}/yr spending.\nInflated from today to year ${refYear.toFixed(1)} for the chart.\nFull breakdown on Simple Forecast tab.`}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>Target {yearLabel}:</span>
                     <strong style={{ fontSize: 17, fontWeight: 800, color: "#F39C12", fontFamily: "'Fraunces',serif" }}>{fmt(futureTarget)}</strong>
@@ -2607,7 +2607,7 @@ export default function AdvancedForecastTab({
                           );
                           const onlyOneRef = refs.length === 1;
                           return (
-                            <div key={slotIdx} style={{ display: "flex", gap: 4, alignItems: "stretch" }}>
+                            <div key={slotIdx} style={{ display: "flex", gap: 4, alignItems: "stretch", flexWrap: "wrap" }}>
                               <select
                                 value={ownKey || ""}
                                 onChange={e => {
@@ -2627,7 +2627,7 @@ export default function AdvancedForecastTab({
                                   if (!opt) return;
                                   setRefAt(slotIdx, { section: opt.section, id: opt.id || undefined, idx: opt.idx, name: opt.name });
                                 }}
-                                style={{ flex: 1, padding: 6, fontSize: 12, border: `1px solid ${rr.isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
+                                style={{ flex: 1, minWidth: 0, padding: 6, fontSize: 12, border: `1px solid ${rr.isOrphan ? "#E8573A" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
                               >
                                 <option value="" disabled={onlyOneRef}>
                                   {onlyOneRef ? "— must have at least one —" : "— remove this item —"}
