@@ -8,6 +8,7 @@ import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, f
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
+import { firstHsaAccountByOwner as computeFirstHsaByOwner, resolveHsaContribution } from "../utils/hsaAllocation.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
 
 /* ── Account type display metadata ──
@@ -180,6 +181,14 @@ export default function AdvancedForecastTab({
   // IRA dollar amounts from Income tab — used to auto-derive IRA account
   // contributions so users don't enter the same number twice.
   cIraTrad = "0", cIraRoth = "0", kIraTrad = "0", kIraRoth = "0",
+  // HSA per-person ANNUAL dollar amounts from the Income tab (Session 1 made
+  // HSA a first-class field). Employee amounts drive the budget/taxes; here
+  // they auto-fill the Advanced HSA account contributions so the same dollars
+  // aren't entered twice. Employer amounts are free money — forecast growth
+  // only, never in the budget. preDed/hsaEmployerMatchAnnual kept in the
+  // signature for back-compat with any caller that still passes them, but are
+  // no longer read for HSA.
+  cHsa = "0", kHsa = "0", cHsaEmployer = "0", kHsaEmployer = "0",
   preDed = [], hsaEmployerMatchAnnual = 0, tExpW = 0, tSavW = 0, remW = 0,
   // Budget items — used by the Ending Obligations section to enumerate
   // candidate budget lines in a single dropdown grouped by section, and
@@ -1074,22 +1083,18 @@ export default function AdvancedForecastTab({
     const matchPct = calcMatch(tot, tax?.kMatchTiers || [], tax?.kMatchBase || 0);
     return kSalNum * matchPct / 100;
   }, [kSalNum, k4preNum, k4roNum, tax?.kMatchTiers, tax?.kMatchBase]);
-  /* HSA employee weekly contribution: same convention as BudgetTab/simple-mode
-     (preDed rows whose name contains "hsa"). c+k summed × 52 for annual. */
-  const hsaEmployeeAnnualByOwner = useMemo(() => {
-    if (!Array.isArray(preDed)) return { p1: 0, p2: 0 };
-    let p1 = 0, p2 = 0;
-    for (const d of preDed) {
-      if (!d || typeof d.n !== "string") continue;
-      if (!d.n.toLowerCase().includes("hsa")) continue;
-      p1 += evalF(d.c) * 52;
-      p2 += evalF(d.k) * 52;
-    }
+  /* HSA employee + employer annual contributions, per owner. Reads the
+     first-class Income fields (cHsa/kHsa employee, cHsaEmployer/kHsaEmployer
+     employer) instead of the old preDed string-match. Employer dollars count
+     toward forecast balance growth (and the pool cap) but never the budget. */
+  const hsaAnnualByOwner = useMemo(() => {
+    const p1 = (evalF(cHsa) || 0) + (evalF(cHsaEmployer) || 0);
+    const p2 = (evalF(kHsa) || 0) + (evalF(kHsaEmployer) || 0);
     return { p1, p2 };
-  }, [preDed]);
+  }, [cHsa, kHsa, cHsaEmployer, kHsaEmployer]);
   const hsaTotalAnnual = useMemo(() => {
-    return hsaEmployeeAnnualByOwner.p1 + hsaEmployeeAnnualByOwner.p2 + (Number(hsaEmployerMatchAnnual) || 0);
-  }, [hsaEmployeeAnnualByOwner, hsaEmployerMatchAnnual]);
+    return hsaAnnualByOwner.p1 + hsaAnnualByOwner.p2;
+  }, [hsaAnnualByOwner]);
 
   const cLump = !!tax?.c401MatchLump;
   const kLump = !!tax?.k401MatchLump;
@@ -1129,6 +1134,14 @@ export default function AdvancedForecastTab({
     return out;
   }, [transactions, accounts, cats, savCats, transferCats]);
 
+  /* For the 100%-to-first-account rule: find each owner's first HSA account
+     (cash/invested/legacy) in account order. That account receives the owner's
+     entire HSA total; sibling HSA accounts for the same owner get 0 so the
+     contribution isn't counted multiple times. A per-account split UI is a
+     planned follow-up; until then this is the unambiguous default. Joint HSA
+     accounts are bucketed under a "joint" key (legacy default behavior). */
+  const firstHsaAccountByOwner = useMemo(() => computeFirstHsaByOwner(accounts), [accounts]);
+
   const autoContribFor = (a) => {
     if (a.owner === "p1") {
       if (a.type === "401k_pretax") {
@@ -1149,6 +1162,9 @@ export default function AdvancedForecastTab({
       // on Income, auto-derivation kicks in.
       if (a.type === "ira_traditional") return cIraTradNum > 0 ? cIraTradNum : null;
       if (a.type === "ira_roth")        return cIraRothNum > 0 ? cIraRothNum : null;
+      if (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa") {
+        return resolveHsaContribution(a, hsaAnnualByOwner.p1, firstHsaAccountByOwner);
+      }
     }
     if (a.owner === "p2") {
       if (a.type === "401k_pretax") {
@@ -1159,15 +1175,20 @@ export default function AdvancedForecastTab({
       if (a.type === "401k_match") return kLump ? 0 : kMatchAnnual;
       if (a.type === "ira_traditional") return kIraTradNum > 0 ? kIraTradNum : null;
       if (a.type === "ira_roth")        return kIraRothNum > 0 ? kIraRothNum : null;
+      if (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa") {
+        return resolveHsaContribution(a, hsaAnnualByOwner.p2, firstHsaAccountByOwner);
+      }
     }
     /* Joint HSA accounts: lump everything into "cash" by default. The user
        can flip individual rows to manual to allocate a portion to invested
        (most institutions hold contributions in cash until a minimum is
        reached, then sweep to invested).
-       TODO: HSA contributions live in preDed (string-matched on "hsa") for
-       historical reasons. A first-class field on the Income tab would be
-       cleaner — needs a one-time migration to move existing snapshot data.
-       Carrying this forward to a later phase per user request.
+       HSA contributions now read first-class per-person Income fields
+       (cHsa/kHsa employee + cHsaEmployer/kHsaEmployer employer) via
+       hsaAnnualByOwner. Each owner's full HSA total auto-fills their FIRST
+       HSA account (siblings get 0) to avoid double-counting. A per-account
+       split UI (let the user send X% to cash, Y% to invested) is the planned
+       follow-up; until then, flip a sibling row to manual to allocate by hand.
 
        TODO: pre-tax accounts (401k pretax, IRA traditional) don't account
        for withdrawal tax in the FIRE calculation. A pre-tax dollar in
@@ -1186,9 +1207,13 @@ export default function AdvancedForecastTab({
        taxable") is a future backlog item. Today, choosing a "+ bonus"
        budget variant on a cash account only adds bonus dollars to that
        cash account. */
-    if (a.type === "hsa_cash" && a.owner === "joint") return hsaTotalAnnual;
-    if (a.type === "hsa_invested" && a.owner === "joint") return 0;
-    if (a.type === "hsa" && a.owner === "joint") return hsaTotalAnnual;
+    // Joint HSA accounts: route the full household HSA total to the first
+    // joint HSA account (siblings 0), consistent with the per-person rule.
+    // Guard against zero so existing manual amounts aren't silently wiped.
+    if (a.owner === "joint" && (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa")) {
+      // Joint HSA: route the full household total to the first joint HSA account.
+      return resolveHsaContribution(a, hsaTotalAnnual, firstHsaAccountByOwner);
+    }
     /* Cash account contribution source — four "budget" variants and three
        "actual" windows besides manual:
          • "budget-48"            = (C.net × 48) − (tExpW × 48), the prior
@@ -1274,7 +1299,7 @@ export default function AdvancedForecastTab({
     // cash-budget variants; tExpW is the expense baseline. baseYearMonth
     // drives the as-of roll-forward.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet, baseYearMonth]
+    [accounts, cSalNum, kSalNum, c4preNum, c4roNum, k4preNum, k4roNum, cLump, kLump, cMatchAnnual, kMatchAnnual, hsaTotalAnnual, hsaAnnualByOwner, firstHsaAccountByOwner, cIraTradNum, cIraRothNum, kIraTradNum, kIraRothNum, cashActualByAccount, tSavW, remW, tExpW, C?.net, C?.eaipNet, baseYearMonth]
   );
 
   /* Run the projection. */
