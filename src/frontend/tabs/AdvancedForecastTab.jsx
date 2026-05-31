@@ -497,20 +497,24 @@ export default function AdvancedForecastTab({
       annualIncrease: 0,
       capAtLimit: !["taxable","cash","custom","401k_match"].includes(type),
     };
-    // Adding an HSA account with no existing HSA in the forecast:
-    // default coverage to self-only because the new account also defaults
-    // to a single-person owner (p1). Family coverage only makes sense when
-    // the HDHP itself is joint; we'd rather under-estimate the limit and
-    // let the user opt up via the per-row Coverage dropdown.
+    // HSA accounts carry per-account coverage (self vs family) since the
+    // limit is per-person. Default self-only — the safer under-estimate;
+    // the user opts up to family via the per-row Coverage dropdown.
     const isAddingHSA = type === "hsa_cash" || type === "hsa_invested" || type === "hsa";
+    if (isAddingHSA) newAcc.hsaCoverage = "self";
     setForecast(prev => {
       const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
-      const hasExistingHSA = prevAccounts.some(a => a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa");
-      const next = { ...prev, accounts: [...prevAccounts, newAcc] };
-      if (isAddingHSA && !hasExistingHSA && !prev?.hsaCoverage) {
-        next.hsaCoverage = "self-only";
+      // If this owner already has an HSA account, inherit its coverage so the
+      // two halves of one person's HSA stay in sync.
+      if (isAddingHSA) {
+        const sibling = prevAccounts.find(a =>
+          (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa") && a.owner === newAcc.owner
+        );
+        if (sibling && (sibling.hsaCoverage === "self" || sibling.hsaCoverage === "family")) {
+          newAcc.hsaCoverage = sibling.hsaCoverage;
+        }
       }
-      return next;
+      return { ...prev, accounts: [...prevAccounts, newAcc] };
     });
     setExpanded(p => ({ ...p, [id]: true }));
   };
@@ -2036,25 +2040,18 @@ export default function AdvancedForecastTab({
                         // not the account ownership directly — but in
                         // practice changing an HSA from joint to a single
                         // person almost always implies a self-only HDHP.
-                        // Flip hsaCoverage automatically so the IRS limit
-                        // recalculates to the lower self-only ceiling.
-                        // The user can override via the per-account
-                        // Coverage dropdown below if their setup is
-                        // unusual. Going joint → person is the common
-                        // case we're catching here.
-                        // Both the owner change and the optional coverage
-                        // flip happen in a single functional setForecast so
-                        // they atomically read+write the latest state — the
-                        // earlier setTimeout(0) workaround was masking the
-                        // stale-closure bug rather than fixing it.
+                        // Flip this account's per-account hsaCoverage to "self"
+                        // so the per-person IRS limit recalculates to the lower
+                        // self-only ceiling. The user can override via the
+                        // Coverage dropdown below. Both writes happen in one
+                        // functional setForecast for stale-closure safety.
                         setForecast(prev => {
                           const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
-                          const nextAccounts = prevAccounts.map(x => x.id === a.id ? { ...x, owner: newOwner } : x);
-                          const next = { ...prev, accounts: nextAccounts };
-                          if (isHSA && a.owner === "joint" && newOwner !== "joint" && (prev?.hsaCoverage || "family") === "family") {
-                            next.hsaCoverage = "self-only";
-                          }
-                          return next;
+                          const flipToSelf = isHSA && a.owner === "joint" && newOwner !== "joint" && a.hsaCoverage !== "self";
+                          const nextAccounts = prevAccounts.map(x => x.id === a.id
+                            ? { ...x, owner: newOwner, ...(flipToSelf ? { hsaCoverage: "self" } : {}) }
+                            : x);
+                          return { ...prev, accounts: nextAccounts };
                         });
                       }} style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}>
                         <option value="p1">{p1Name}</option>
@@ -2201,26 +2198,36 @@ export default function AdvancedForecastTab({
                         Cap at IRS limit
                       </label>
                     </div>
-                    {/* HSA coverage selector — only on HSA accounts. Used to
-                        be a global toolbar chip but it's really an HSA-specific
-                        setting (other account types ignore it), so the input
-                        lives on the HSA row that needs it. Still persists in
-                        forecast.hsaCoverage (single household-level setting,
-                        unchanged for backward-compat with snapshots). */}
+                    {/* HSA coverage selector — per-account, but synced across
+                        all HSA accounts of the same owner (Corey's cash +
+                        invested are the same HSA dollar, so they share one
+                        coverage). HSA limits are per-person regardless of
+                        coverage; this just picks the self-only vs family
+                        dollar ceiling for THIS person. */}
                     {isHSA && (
                       <div style={{ gridColumn: mob ? "1/-1" : "auto" }}>
                         <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}
-                          title="HSA contribution limit depends on health-plan coverage. Family limit (~$8,300 in 2025) is roughly 2× self-only.">
+                          title="HSA contribution limit is per person. Self-only (~$4,400 in 2026) if this person is on a self-only HDHP; Family (~$8,300) if on a family HDHP.">
                           HSA Coverage
                         </label>
                         <select
-                          value={hsaCoverage}
-                          onChange={e => setForecast(prev => ({ ...prev, hsaCoverage: e.target.value }))}
+                          value={a.hsaCoverage === "self" ? "self" : "family"}
+                          onChange={e => {
+                            const cov = e.target.value;
+                            // Sync across all HSA accounts of the same owner so
+                            // the two halves of one HSA can't disagree.
+                            setForecast(prev => {
+                              const prevAccounts = Array.isArray(prev?.accounts) ? prev.accounts : [];
+                              const isHSAType = t => t === "hsa_cash" || t === "hsa_invested" || t === "hsa";
+                              return { ...prev, accounts: prevAccounts.map(acc =>
+                                (isHSAType(acc.type) && acc.owner === a.owner) ? { ...acc, hsaCoverage: cov } : acc
+                              ) };
+                            });
+                          }}
                           style={{ width: "100%", padding: 6, fontSize: 12, border: "1px solid var(--bdr,#ddd)", borderRadius: 6, background: "var(--input-bg,#fafafa)", color: "var(--input-color,#222)" }}
                         >
-                          <option value="family">Family</option>
                           <option value="self">Self-only</option>
-                          <option value="both-self">Both self-only (split household)</option>
+                          <option value="family">Family</option>
                         </select>
                       </div>
                     )}

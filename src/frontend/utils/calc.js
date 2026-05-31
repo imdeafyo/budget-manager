@@ -541,21 +541,19 @@ export function forecastGrowthAccounts(accounts, years, opts) {
       desired[a.id] = base * Math.pow(1 + incr, y - 1);
     }
 
-    // 2. Group by pool key. Pool key = pool + owner (for per-person pools)
-    //    or just pool (for household pools).
+    // 2. Group by pool key. Pool key = pool + owner.
     //
-    //    HSA is special: the limit structure depends on coverage. Under
-    //    self-only coverage, EACH person has their OWN HSA limit, so HSA
-    //    accounts must be keyed per-owner (hsa::p1, hsa::p2) — otherwise two
-    //    people's self-only contributions get wrongly capped against a single
-    //    limit. Under family coverage there is ONE shared household limit, so
-    //    all HSA accounts share the "hsa" key. ("both-self" means each spouse
-    //    has a separate self-only plan → per-person, same as "self".)
-    const hsaIsPerPerson = hsaCoverage === "self" || hsaCoverage === "both-self";
+    //    HSA limits are ALWAYS per-person — there is no shared "household HSA
+    //    limit" the way a family HDHP gets framed in marketing. The family
+    //    contribution maximum is a ceiling that ONE accountholder may hold;
+    //    each spouse on a self-only plan gets their own self-only maximum.
+    //    Either way the limit attaches to the person, not a shared pool. So
+    //    HSA accounts are keyed per-owner (hsa::p1, hsa::p2, hsa::joint) just
+    //    like every other capped pool. The per-person dollar limit (self vs
+    //    family) is read from each account's `hsaCoverage` field at cap time.
     const poolKey = (a) => {
       const pool = accountTypeToPool[a.type];
       if (!pool) return null;
-      if (pool === "hsa") return hsaIsPerPerson ? `hsa::${a.owner}` : "hsa";
       return `${pool}::${a.owner}`;
     };
 
@@ -572,10 +570,15 @@ export function forecastGrowthAccounts(accounts, years, opts) {
     const finalContrib = { ...desired };
     for (const [k, group] of Object.entries(poolGroups)) {
       const age = ageOf(group.accounts[0].owner === "joint" ? "joint" : group.owner, calendarYear);
-      // Per-person HSA pools use the SINGLE self-only limit (each person their
-      // own), even when coverage is "both-self" (which doubles the limit for a
-      // shared-pool view). Family coverage keeps the shared household limit.
-      const hsaCoverageForGroup = group.pool === "hsa" && hsaIsPerPerson ? "self" : undefined;
+      // HSA limit is per-person and depends on each account's coverage.
+      // Accounts in the same per-owner HSA group share one person, so they
+      // share coverage — take the first account's setting (the UI keeps
+      // same-owner HSA accounts in sync). "family" → the family maximum that
+      // one person may hold; "self" → the self-only maximum. Default family
+      // when unset, matching getPoolLimit's own default.
+      const hsaCoverageForGroup = group.pool === "hsa"
+        ? (group.accounts[0].hsaCoverage === "self" ? "self" : "family")
+        : undefined;
       const limit = limitFor(group.pool, calendarYear, age, hsaCoverageForGroup);
       const total = group.accounts.reduce((s, a) => s + desired[a.id], 0);
       if (!isFinite(limit) || total <= limit) continue;
@@ -855,11 +858,12 @@ export function poolHeadroom(opts) {
     return { atRisk: false, pool: null, limit: Infinity, current: 0, projected: 0 };
   }
 
-  // Group accounts in the same pool by the same key forecastGrowthAccounts uses.
-  // hsa is household-keyed; everything else is per-owner.
+  // Group accounts in the same pool by the same key forecastGrowthAccounts
+  // uses. All capped pools — including HSA — are per-owner. HSA limits are
+  // per-person regardless of coverage; coverage only picks the dollar
+  // ceiling (self vs family), read from the destination account.
   const sharesPool = (a) => {
     if (accountTypeToPool[a.type] !== pool) return false;
-    if (pool === "hsa") return true;
     return a.owner === destAccount.owner;
   };
 
@@ -868,7 +872,10 @@ export function poolHeadroom(opts) {
     .reduce((s, a) => s + (Number(effectiveContribFor(a)) || 0), 0);
 
   const age = typeof ageOf === "function" ? ageOf(destAccount.owner === "joint" ? "joint" : destAccount.owner) : null;
-  const limit = getPoolLimit(pool, baseYear, age, hsaCoverage);
+  const coverageForPool = pool === "hsa"
+    ? (destAccount.hsaCoverage === "self" ? "self" : "family")
+    : hsaCoverage;
+  const limit = getPoolLimit(pool, baseYear, age, coverageForPool);
   const projected = current + (Number(freedAnnual) || 0);
   const atRisk = isFinite(limit) && projected > limit;
   return { atRisk, pool, limit, current, projected };

@@ -536,6 +536,29 @@ export default function useAppState() {
             if (!Array.isArray(d.forecast.accounts) || d.forecast.accounts.length === 0) {
               merged.accounts = prev?.accounts || defaultForecastAccounts();
             }
+            /* HSA coverage migration: coverage moved from a single
+               household-level forecast.hsaCoverage field to a per-account
+               field on each HSA account (so each spouse can be on a
+               different plan). Backfill any HSA account missing the field
+               from the legacy global value, normalizing the old spellings
+               ("self-only"/"self"/"both-self" → "self", "family" → "family").
+               Default to "self" when nothing is set — HSA limits are
+               per-person and self-only is the safer under-estimate. */
+            {
+              const acctList = Array.isArray(merged.accounts) ? merged.accounts : [];
+              const isHSAType = t => t === "hsa_cash" || t === "hsa_invested" || t === "hsa";
+              const legacy = d.forecast.hsaCoverage ?? prev?.hsaCoverage;
+              const normalizedLegacy = legacy === "family" ? "family"
+                : (legacy === "self" || legacy === "self-only" || legacy === "both-self") ? "self"
+                : null;
+              if (acctList.some(a => isHSAType(a.type) && (a.hsaCoverage !== "self" && a.hsaCoverage !== "family"))) {
+                merged.accounts = acctList.map(a =>
+                  (isHSAType(a.type) && a.hsaCoverage !== "self" && a.hsaCoverage !== "family")
+                    ? { ...a, hsaCoverage: normalizedLegacy || "self" }
+                    : a
+                );
+              }
+            }
             /* endingItems (Phase X-A): if saved value is missing or not
                an array, fall back to []. Saves predating Phase X-A
                simply won't have this field — the shallow spread above

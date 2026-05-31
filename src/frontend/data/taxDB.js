@@ -373,8 +373,8 @@ export function defaultForecastAccounts() {
     mk("acc_p2_401k_pretax", "p2", "401k_pretax"),
     mk("acc_p2_401k_roth",   "p2", "401k_roth"),
     mk("acc_p2_401k_match",  "p2", "401k_match", { annualReturn: 7 }),
-    mk("acc_hsa_cash",       "joint", "hsa_cash",     { annualReturn: 0.5 }),
-    mk("acc_hsa_invested",   "joint", "hsa_invested", { annualReturn: 7 }),
+    mk("acc_hsa_cash",       "joint", "hsa_cash",     { annualReturn: 0.5, hsaCoverage: "self" }),
+    mk("acc_hsa_invested",   "joint", "hsa_invested", { annualReturn: 7, hsaCoverage: "self" }),
     mk("acc_cash_joint",     "joint", "taxable",      { annualReturn: 4 }),
   ];
 }
