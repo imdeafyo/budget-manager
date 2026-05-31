@@ -273,6 +273,72 @@ describe("aggregateSubLoanBalances", () => {
   });
 });
 
+describe("aggregateSubLoanBalances — lump-sum paydowns", () => {
+  // Two 0% loans: A=3000@500/mo (6mo), B=6000@500/mo (12mo). Combined
+  // natural curve runs 12 months. A $4000 lump at the combined curve
+  // should drop the total by $4000 from that month on and retire the
+  // debt sooner.
+  const baseYM = "2025-01";
+  const subLoans = [
+    { id: "a", label: "A", balance: 3000, annualRate: 0, payments: [500], extraMonthly: 0 },
+    { id: "b", label: "B", balance: 6000, annualRate: 0, payments: [500], extraMonthly: 0 },
+  ];
+
+  it("default behavior unchanged when no lumps supplied", () => {
+    const res = resolveSubLoanGroup(subLoans, { enabled: false }, baseYM);
+    const a = aggregateSubLoanBalances(res);
+    const b = aggregateSubLoanBalances(res, {});
+    const c = aggregateSubLoanBalances(res, { lumpSums: [] });
+    expect(a.perMonth[3].total).toBeCloseTo(b.perMonth[3].total, 6);
+    expect(a.perMonth[3].total).toBeCloseTo(c.perMonth[3].total, 6);
+    expect(a.payoffMonth).toBe(c.payoffMonth);
+  });
+
+  it("a lump reduces the combined total from its month onward", () => {
+    const res = resolveSubLoanGroup(subLoans, { enabled: false }, baseYM);
+    const natural = aggregateSubLoanBalances(res);
+    // Lump of 1000 at perMonth index 2.
+    const withLump = aggregateSubLoanBalances(res, { lumpSums: [{ monthIndex: 2, amount: 1000 }] });
+    // Before the lump month: identical.
+    expect(withLump.perMonth[1].total).toBeCloseTo(natural.perMonth[1].total, 6);
+    // At/after the lump month: 1000 lower (floored at 0).
+    expect(withLump.perMonth[2].total).toBeCloseTo(Math.max(0, natural.perMonth[2].total - 1000), 6);
+    expect(withLump.perMonth[5].total).toBeCloseTo(Math.max(0, natural.perMonth[5].total - 1000), 6);
+  });
+
+  it("a large lump zeroes the debt and reports payoffMonth", () => {
+    const res = resolveSubLoanGroup(subLoans, { enabled: false }, baseYM);
+    // At month index 0 the combined natural balance is 8000; a 9000 lump
+    // wipes it out immediately.
+    const withLump = aggregateSubLoanBalances(res, { lumpSums: [{ monthIndex: 0, amount: 9000 }] });
+    expect(withLump.perMonth[0].total).toBeCloseTo(0, 6);
+    expect(withLump.payoffMonth).toBe(0);
+    // Every subsequent month stays at zero.
+    for (const row of withLump.perMonth) expect(row.total).toBeCloseTo(0, 6);
+  });
+
+  it("multiple lumps accumulate", () => {
+    const res = resolveSubLoanGroup(subLoans, { enabled: false }, baseYM);
+    const natural = aggregateSubLoanBalances(res);
+    const withLumps = aggregateSubLoanBalances(res, {
+      lumpSums: [{ monthIndex: 1, amount: 500 }, { monthIndex: 3, amount: 1500 }],
+    });
+    // After month 3 both lumps are in effect: 2000 below natural.
+    expect(withLumps.perMonth[4].total).toBeCloseTo(Math.max(0, natural.perMonth[4].total - 2000), 6);
+    // At month 1: only first lump in effect.
+    expect(withLumps.perMonth[1].total).toBeCloseTo(Math.max(0, natural.perMonth[1].total - 500), 6);
+  });
+
+  it("zero/negative lump amounts are ignored", () => {
+    const res = resolveSubLoanGroup(subLoans, { enabled: false }, baseYM);
+    const natural = aggregateSubLoanBalances(res);
+    const withJunk = aggregateSubLoanBalances(res, {
+      lumpSums: [{ monthIndex: 2, amount: 0 }, { monthIndex: 3, amount: -500 }],
+    });
+    expect(withJunk.perMonth[5].total).toBeCloseTo(natural.perMonth[5].total, 6);
+  });
+});
+
 describe("combinedPaymentAtMonth", () => {
   const baseYM = "2025-01";
   const subLoans = [

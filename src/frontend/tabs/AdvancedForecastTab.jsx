@@ -979,14 +979,43 @@ export default function AdvancedForecastTab({
        combined amortization. The per-month combined balance comes from
        aggregateSubLoanBalances; we sample it at each year boundary. */
     const subLoanObligations = endingItems.filter(ei => ei && ei.mode === "loan" && Array.isArray(ei.subLoans) && ei.subLoans.length > 0);
+    const [byStrSL, bmStrSL] = baseYearMonth.split("-");
+    const bYSL = Number(byStrSL), bMSL = Number(bmStrSL);
     for (const ei of subLoanObligations) {
       const resolved = resolveSubLoanGroup(ei.subLoans, ei.graduation || { enabled: false }, baseYearMonth);
       if (!resolved || resolved.anyError) continue;
-      const agg = aggregateSubLoanBalances(resolved);
+
+      /* Lump-sum paydowns from one-time events linked to THIS obligation
+         (same linkedEndingId match + engine-index math the single-loan
+         path uses). aggregateSubLoanBalances applies these to the combined
+         balance so a mortgage-payoff event actually drops the debt curve
+         instead of only draining cash. Engine index: 0 = base month, k =
+         after k monthly steps; perMonth[i] is the balance AFTER month i+1,
+         so a lump at engine index mi maps to perMonth index mi-1, and a
+         lump at the base month (mi=0) reduces the year-0 left edge too. */
+      const lumps = [];
+      for (const ev of oneTimeEvents) {
+        if (!ev || ev.linkedEndingId !== ei.id) continue;
+        const m = /^(\d{4})-(\d{1,2})/.exec(ev.date || "");
+        if (!m) continue;
+        const evY = Number(m[1]), evM = Number(m[2]);
+        let mi = (evY - bYSL) * 12 + (evM - bMSL);
+        if (mi < 0) mi = 0;
+        if (mi > horizonMonths) continue;
+        const amt = Math.abs(Number(ev.amount) || 0);
+        if (amt > 0) lumps.push({ monthIndex: mi, amount: amt });
+      }
+      // perMonth is keyed "after month i" (index i = engine month i+1), so
+      // shift each lump's engine index down by one for the aggregator.
+      const aggLumps = lumps.map(l => ({ monthIndex: Math.max(0, l.monthIndex - 1), amount: l.amount }));
+      const lumpAtBase = lumps.reduce((s, l) => s + (l.monthIndex <= 0 ? l.amount : 0), 0);
+
+      const agg = aggregateSubLoanBalances(resolved, { lumpSums: aggLumps });
       // perMonth[i] = balance after month i. Year y end = month y*12.
       // Year 0 = sum of starting balances (perMonth[0] is after 1 month, so
-      // use the sub-loan starting balances directly for the left edge).
-      const y0Total = ei.subLoans.reduce((s, sl) => s + (Number(sl.balance) || 0), 0);
+      // use the sub-loan starting balances directly for the left edge),
+      // minus any lump that lands at the base month.
+      const y0Total = Math.max(0, ei.subLoans.reduce((s, sl) => s + (Number(sl.balance) || 0), 0) - lumpAtBase);
       for (let y = 0; y <= yMax; y++) {
         let bal;
         if (y === 0) bal = y0Total;
@@ -997,7 +1026,15 @@ export default function AdvancedForecastTab({
         result.byYear[y].perLoan[ei.id] = bal;
         result.byYear[y].total += bal;
       }
-      if (resolved.groupEndsOn) result.payoffById[ei.id] = resolved.groupEndsOn;
+      /* Payoff date: prefer the lump-adjusted payoff when a lump retires the
+         debt early; otherwise fall back to the natural group payoff. agg
+         payoffMonth is a perMonth index (after that many months), so the
+         absolute month count is payoffMonth+1 from base. */
+      if (lumps.length > 0 && agg.payoffMonth !== null && agg.payoffMonth !== undefined) {
+        result.payoffById[ei.id] = addMonths(baseYearMonth, agg.payoffMonth + 1);
+      } else if (resolved.groupEndsOn) {
+        result.payoffById[ei.id] = resolved.groupEndsOn;
+      }
     }
 
     return result;

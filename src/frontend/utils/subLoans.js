@@ -361,25 +361,67 @@ export function resolveSubLoanGroup(subLoans, graduation, baseYearMonth, opts = 
 /* Aggregate combined remaining balance across all sub-loans at the end of
    each month, for charting a debt-paydown curve.
    Returns { perMonth: [{ monthIndex, total, byLoan: {id: bal} }],
-             months } over the longest-living sub-loan. A sub-loan that has
-   paid off contributes 0 from its payoff month onward. */
-export function aggregateSubLoanBalances(resolved) {
+             months, payoffMonth } over the longest-living sub-loan. A
+   sub-loan that has paid off contributes 0 from its payoff month onward.
+
+   opts.lumpSums — [{ monthIndex, amount }] one-time paydowns (amount > 0)
+   against the COMBINED principal, e.g. a mortgage-payoff one-time event
+   linked to this obligation. Each lump retires that many dollars of the
+   combined balance from its month onward; the curve drops by the lump and
+   stays lower for the rest of the projection (a "shorten"-style paydown on
+   the combined balance — the realistic outcome of a lump payoff).
+
+   Why apply on the combined curve rather than re-amortizing a tranche:
+   the lump is entered as a single dollar figure with no chosen target
+   sub-loan, so the honest, conservative model is "it retires that much
+   combined principal." This makes the Debt Remaining curve and the graph
+   reflect the payment instead of silently ignoring it. Per-tranche
+   targeting (which loan the lump hits, and the resulting interest savings
+   on that specific rate) is a follow-up; what matters here is that the
+   debt no longer pretends the lump never happened.
+
+   The lump is applied to the combined `total`. byLoan balances are left as
+   their natural per-loan amortization (we don't attribute the lump to a
+   specific sub-loan), so for a lump-paid obligation `total` is the source
+   of truth and the sum of byLoan may exceed it — callers charting the
+   combined curve should read `total`. payoffMonth is the first month the
+   lump-adjusted combined balance reaches zero (null if it never does
+   within the horizon). */
+export function aggregateSubLoanBalances(resolved, opts = {}) {
   const ok = resolved.results.filter((r) => r.ok && Array.isArray(r.schedule));
   const months = resolved.groupMonths || 0;
+
+  // Cumulative lump paid down by month index (each lump applies from its
+  // month onward). Negative/zero amounts ignored; out-of-range clamped in.
+  const lumps = Array.isArray(opts.lumpSums) ? opts.lumpSums : [];
+  const cumLumpAt = (m) => {
+    let s = 0;
+    for (const ls of lumps) {
+      if (!ls) continue;
+      const amt = Number(ls.amount) || 0;
+      const mi = Math.max(0, Number(ls.monthIndex) || 0);
+      if (amt > 0 && mi <= m) s += amt;
+    }
+    return s;
+  };
+
   const perMonth = [];
+  let payoffMonth = null;
   for (let i = 0; i < months; i++) {
     const byLoan = {};
-    let total = 0;
+    let naturalTotal = 0;
     for (const r of ok) {
       // remaining after month i; if i beyond this loan's schedule, 0.
       const row = r.schedule[i];
       const remaining = row ? Math.max(0, row.remaining) : 0;
       byLoan[r.id] = remaining;
-      total += remaining;
+      naturalTotal += remaining;
     }
+    const total = Math.max(0, naturalTotal - cumLumpAt(i));
+    if (total <= 0 && payoffMonth === null) payoffMonth = i;
     perMonth.push({ monthIndex: i, total, byLoan });
   }
-  return { perMonth, months };
+  return { perMonth, months, payoffMonth };
 }
 
 /* Combined required monthly payment across sub-loans for a given month
