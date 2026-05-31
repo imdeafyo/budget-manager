@@ -359,7 +359,7 @@ export function eventDateToYearMonth(dateStr) {
 
    This runs BEFORE resolveEndingEvents in the tab, so the override flows
    through the normal resolution path with no special-casing downstream. */
-export function applyPayoffLinks(endingItems, oneTimeEvents) {
+export function applyPayoffLinks(endingItems, oneTimeEvents, computedPayoffById = null) {
   if (!Array.isArray(endingItems) || endingItems.length === 0) return endingItems || [];
   if (!Array.isArray(oneTimeEvents) || oneTimeEvents.length === 0) return endingItems;
 
@@ -383,10 +383,32 @@ export function applyPayoffLinks(endingItems, oneTimeEvents) {
     if (!ei || typeof ei !== "object") return ei;
     const ov = overrides[ei.id];
     if (!ov) return ei;
+
+    /* Loan-mode obligation with a computed payoff date supplied:
+       the lump-sum paydown is handled by the debt engine
+       (debtPrincipalByMonth) which already accounts for the principal
+       reduction and recomputes when the loan retires. We keep the
+       obligation in LOAN mode and set endsOn to that COMPUTED payoff
+       month, so the freed-cash resolver and the debt curve agree on
+       when the loan ends. We do NOT force date mode here — that was the
+       old behavior that left a loan stuck showing "Date" after linking.
+       A partial paydown therefore correctly ends the loan later than the
+       event date; a full payoff ends it at (or near) the event date. */
+    if (ei.mode === "loan" && computedPayoffById && computedPayoffById[ei.id]) {
+      return {
+        ...ei,
+        endsOn: computedPayoffById[ei.id],
+        _payoffLinkedFrom: ov.eventId,
+      };
+    }
+
+    /* Date-mode obligation (or loan-mode without a computed payoff):
+       the event date wins and the obligation behaves as a fixed-date
+       ending at the event's month. */
     return {
       ...ei,
       endsOn: ov.endsOn,
-      mode: "date",            // override wins over loan-mode recomputation
+      mode: "date",
       _payoffLinkedFrom: ov.eventId,
     };
   });
@@ -665,6 +687,285 @@ export function rollForwardBalance(balance, annualRatePct, monthlyPayment, asOfY
     bal = next;
   }
   return { ok: true, rolledBalance: bal, monthsRolled: i, paidOffDuringRoll: paidOff };
+}
+
+/* Outstanding principal of a loan-mode obligation, month by month,
+   with lump-sum paydowns applied.
+   ===============================================================
+   This is the engine behind the Advanced tab's "Debt Remaining" column
+   for loan-mode ending obligations (NOT the standalone Loans-tab
+   scratchpad). It walks standard amortization from `startBalance` at the
+   obligation's monthly payment, applying any lump-sum payments at their
+   month, and returns the principal owed at every month index 0..N.
+
+   Lump sums (e.g. from one-time payoff events) reduce principal directly.
+   How the schedule reacts is controlled by `recastMode`:
+
+     "shorten" (default) — keep the same monthly payment; the loan simply
+                           amortizes to zero sooner, saving interest. This
+                           is the realistic mortgage-prepayment behavior.
+     "lower"             — keep the original payoff month; the monthly
+                           payment is recomputed downward after each lump
+                           sum so the (now smaller) balance still retires
+                           on the original schedule. Models a formal recast.
+
+   Index convention matches the forecast loop / the rest of this module:
+   index 0 is the base month (starting principal, before any payment),
+   index k is the balance after k monthly steps. Lump sums are keyed by
+   the SAME absolute month index the forecast loop uses, so a payoff event
+   resolved to monthIndex M pays down principal between step M-1 and M
+   (i.e. it lands "at" month M, before that month's interest accrues — a
+   prepayment, the lender-favorable-to-borrower timing).
+
+   Args:
+     params = {
+       startBalance,        // principal at base month (already rolled
+                            //   forward to base if the loan predates it)
+       annualRatePct,       // e.g. 6.5
+       monthlyPayment,      // the obligation's summed linked monthly $
+       horizonMonths,       // how many months to project (inclusive of 0)
+       lumpSums,            // [{ monthIndex, amount }] — amount > 0 pays
+                            //   DOWN principal. monthIndex is absolute
+                            //   (loop convention). Multiple allowed; they
+                            //   stack. Sorted internally.
+       recastMode,          // "shorten" | "lower"  (default "shorten")
+       originalPayoffMonth, // required for "lower": the month index the
+                            //   loan would retire WITHOUT paydowns, used
+                            //   as the recast target. Ignored for "shorten".
+     }
+
+   Returns:
+     {
+       ok: true,
+       balanceByMonth: number[],   // length horizonMonths+1, principal at
+                                   //   each index (0 once paid off)
+       payoffMonth: number|null,   // first index where balance hits 0
+                                   //   (null if still owing at horizon)
+       totalInterest: number,      // interest paid across the horizon
+       lumpSumTotal: number,       // sum of applied paydowns
+       paymentByMonth: number[],   // monthly payment in force each month
+                                   //   (constant in "shorten"; steps down
+                                   //   after each lump in "lower")
+     }
+     { ok: false, reason }         // bad inputs / negative amortization
+
+   Notes:
+     - A lump sum >= current balance fully retires the loan that month;
+       remaining months are 0. Excess is NOT carried to other loans here
+       (the caller decides what an over-payment means).
+     - Negative-amortization (payment doesn't cover interest) on the
+       starting balance returns ok:false — the same guard monthsToPayoff
+       uses — UNLESS lump sums bring it back into amortizing territory,
+       which the per-month walk handles naturally.
+     - "lower" recast recomputes payment via monthsToPayoff's closed form
+       so the recast is exact, not iterative. */
+export function debtPrincipalByMonth(params) {
+  const {
+    startBalance,
+    annualRatePct,
+    monthlyPayment,
+    horizonMonths,
+    lumpSums = [],
+    recastMode = "shorten",
+    originalPayoffMonth = null,
+  } = params || {};
+
+  const P0 = Number(startBalance);
+  const rPct = Number(annualRatePct);
+  const N = Number(horizonMonths);
+
+  if (!isFinite(P0) || P0 < 0) return { ok: false, reason: "invalid-balance" };
+  if (!isFinite(rPct) || rPct < 0) return { ok: false, reason: "invalid-rate" };
+  if (!isFinite(N) || N < 0) return { ok: false, reason: "invalid-horizon" };
+
+  const r = (rPct / 100) / 12;
+
+  // Group lump sums by month index (stacking same-month entries).
+  const lumpByMonth = new Map();
+  for (const ls of (Array.isArray(lumpSums) ? lumpSums : [])) {
+    if (!ls || typeof ls !== "object") continue;
+    const mi = Math.round(Number(ls.monthIndex));
+    const amt = Number(ls.amount);
+    if (!isFinite(mi) || mi < 0) continue;
+    if (!isFinite(amt) || amt <= 0) continue;
+    lumpByMonth.set(mi, (lumpByMonth.get(mi) || 0) + amt);
+  }
+
+  let payment = Number(monthlyPayment);
+  if (!isFinite(payment) || payment < 0) return { ok: false, reason: "invalid-payment" };
+
+  /* Recompute the level payment that retires `bal` by `targetMonth`,
+     starting from `fromMonth`. Closed-form annuity payment. Used by the
+     "lower" recast after each lump sum. Returns the original payment if
+     the target is unreachable/degenerate (defensive — never raises it). */
+  const recastPayment = (bal, fromMonth, targetMonth) => {
+    const monthsLeft = targetMonth - fromMonth;
+    if (monthsLeft <= 0 || bal <= 0) return payment;
+    if (r === 0) return bal / monthsLeft;
+    const factor = Math.pow(1 + r, monthsLeft);
+    const newPay = (bal * r * factor) / (factor - 1);
+    return isFinite(newPay) && newPay > 0 ? newPay : payment;
+  };
+
+  const balanceByMonth = new Array(N + 1).fill(0);
+  const paymentByMonth = new Array(N + 1).fill(0);
+  let bal = P0;
+  let totalInterest = 0;
+  let lumpSumTotal = 0;
+  let payoffMonth = (P0 <= 0) ? 0 : null;
+
+  // Apply any lump sum keyed to month 0 before recording the starting point.
+  if (lumpByMonth.has(0) && bal > 0) {
+    const pay = Math.min(lumpByMonth.get(0), bal);
+    bal -= pay;
+    lumpSumTotal += pay;
+    if (bal <= 0) { bal = 0; payoffMonth = 0; }
+    else if (recastMode === "lower" && originalPayoffMonth != null) {
+      payment = recastPayment(bal, 0, originalPayoffMonth);
+    }
+  }
+  balanceByMonth[0] = bal;
+  paymentByMonth[0] = bal > 0 ? payment : 0;
+
+  for (let m = 1; m <= N; m++) {
+    if (bal <= 0) {
+      balanceByMonth[m] = 0;
+      paymentByMonth[m] = 0;
+      continue;
+    }
+
+    // Lump sum lands at the start of month m (prepayment, pre-interest).
+    if (lumpByMonth.has(m)) {
+      const pay = Math.min(lumpByMonth.get(m), bal);
+      bal -= pay;
+      lumpSumTotal += pay;
+      if (bal <= 0) {
+        bal = 0;
+        balanceByMonth[m] = 0;
+        paymentByMonth[m] = 0;
+        if (payoffMonth === null) payoffMonth = m;
+        continue;
+      }
+      if (recastMode === "lower" && originalPayoffMonth != null) {
+        payment = recastPayment(bal, m, originalPayoffMonth);
+      }
+    }
+
+    const interest = bal * r;
+    paymentByMonth[m] = payment;
+    let next = bal + interest - payment;
+
+    if (next <= 0.005) {
+      // Final partial payment — interest still accrues on the last stub.
+      // The 0.005 epsilon catches loans that retire exactly on schedule
+      // where float drift would otherwise leave a sub-cent balance and
+      // report payoffMonth = null forever.
+      totalInterest += interest;
+      bal = 0;
+      balanceByMonth[m] = 0;
+      if (payoffMonth === null) payoffMonth = m;
+      continue;
+    }
+
+    // Neg-am guard: only an error if NO lump sum will ever rescue it.
+    // We don't fail the whole call here — we cap interest accrual and let
+    // the balance grow, surfacing the problem as "never pays off"
+    // (payoffMonth stays null). Callers already warn on that.
+    totalInterest += interest;
+    bal = next;
+    balanceByMonth[m] = bal;
+  }
+
+  return {
+    ok: true,
+    balanceByMonth,
+    payoffMonth,
+    totalInterest,
+    lumpSumTotal,
+    paymentByMonth,
+  };
+}
+
+/* Aggregate loan-mode obligation debt across the horizon, applying
+   linked one-time payoff events as lump-sum paydowns.
+   ===============================================================
+   Pure orchestration over debtPrincipalByMonth so the Advanced tab (and
+   tests) get a single entry point. The tab supplies resolved monthly
+   amounts and rolled balances via callbacks, keeping this decoupled from
+   budget-item resolution.
+
+   Args:
+     loanObligations  — ending items with mode === "loan" (caller filters)
+     opts = {
+       monthlyFor(ei)        -> summed monthly $ across linked refs, or
+                                null/<=0 if unresolved (obligation skipped)
+       startBalanceFor(ei)   -> principal rolled forward to base, or <=0
+                                to skip (already paid off / no balance)
+       lumpSumsFor(ei)       -> [{ monthIndex, amount }] paydowns for this
+                                obligation (from linked payoff events)
+       baseYearMonth         -> "YYYY-MM"
+       horizonMonths         -> integer
+     }
+
+   Returns:
+     {
+       byYear: { [year]: { total, perLoan: { [id]: bal } } },  // year 0..H/12
+       payoffById: { [id]: "YYYY-MM" },  // computed post-paydown payoff month
+     }
+
+   Each obligation's recastMode ("shorten" default | "lower") is honored;
+   for "lower" the original (no-paydown) payoff month is computed first to
+   serve as the recast target. */
+export function aggregateObligationDebt(loanObligations, opts) {
+  const { monthlyFor, startBalanceFor, lumpSumsFor, baseYearMonth, horizonMonths } = opts || {};
+  const yMax = Math.floor((Number(horizonMonths) || 0) / 12);
+  const byYear = {};
+  const payoffById = {};
+  for (let y = 0; y <= yMax; y++) byYear[y] = { total: 0, perLoan: {} };
+  if (!Array.isArray(loanObligations)) return { byYear, payoffById };
+
+  for (const ei of loanObligations) {
+    if (!ei || ei.mode !== "loan") continue;
+    if (Array.isArray(ei.subLoans) && ei.subLoans.length > 0) continue;
+
+    const monthly = monthlyFor ? monthlyFor(ei) : null;
+    if (monthly == null || !isFinite(monthly) || monthly <= 0) continue;
+
+    const startBalance = startBalanceFor ? startBalanceFor(ei) : Number(ei.balance) || 0;
+    if (!isFinite(startBalance) || startBalance <= 0) continue;
+
+    const lumpSums = (lumpSumsFor ? lumpSumsFor(ei) : []) || [];
+
+    let originalPayoffMonth = null;
+    if ((ei.recastMode || "shorten") === "lower") {
+      const baseRun = debtPrincipalByMonth({
+        startBalance, annualRatePct: ei.annualRate, monthlyPayment: monthly, horizonMonths,
+      });
+      if (baseRun.ok) originalPayoffMonth = baseRun.payoffMonth;
+    }
+
+    const run = debtPrincipalByMonth({
+      startBalance,
+      annualRatePct: ei.annualRate,
+      monthlyPayment: monthly,
+      horizonMonths,
+      lumpSums,
+      recastMode: ei.recastMode || "shorten",
+      originalPayoffMonth,
+    });
+    if (!run.ok) continue;
+
+    for (let y = 0; y <= yMax; y++) {
+      const bal = run.balanceByMonth[y * 12] || 0;
+      byYear[y].perLoan[ei.id] = bal;
+      byYear[y].total += bal;
+    }
+    if (run.payoffMonth != null) {
+      const ym = addMonths(baseYearMonth, run.payoffMonth);
+      if (ym) payoffById[ei.id] = ym;
+    }
+  }
+  return { byYear, payoffById };
 }
 
 /* Aggregate routed linked-item monthly amounts by sub-loan and slot.

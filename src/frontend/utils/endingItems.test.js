@@ -15,6 +15,8 @@ import {
   resolveItemRef,
   monthsSinceAsOf,
   rollForwardBalance,
+  debtPrincipalByMonth,
+  aggregateObligationDebt,
   routedTotalsBySubLoan,
   reducesFire,
   fireSpendingReductionByYear,
@@ -874,6 +876,193 @@ describe("monthsSinceAsOf", () => {
     expect(monthsSinceAsOf("not-a-date", "2026-05")).toBeNull();
     expect(monthsSinceAsOf("2026-05", "garbage")).toBeNull();
     expect(monthsSinceAsOf("2026-05", null)).toBeNull();
+  });
+});
+
+describe("debtPrincipalByMonth", () => {
+  // Exact 30yr payment for $400k @ 6.5% so the loan retires right at 360.
+  const P = 400000, rate = 6.5;
+  const r = (rate / 100) / 12;
+  const exactPay = P * r * Math.pow(1 + r, 360) / (Math.pow(1 + r, 360) - 1);
+
+  it("amortizes a standard mortgage to (near) zero at term", () => {
+    const out = debtPrincipalByMonth({ startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360 });
+    expect(out.ok).toBe(true);
+    expect(out.balanceByMonth[0]).toBe(P);
+    // Year-1 balance lands near $395.5k for these terms.
+    expect(out.balanceByMonth[12]).toBeGreaterThan(394000);
+    expect(out.balanceByMonth[12]).toBeLessThan(397000);
+    expect(out.payoffMonth).toBeGreaterThanOrEqual(359);
+    expect(out.payoffMonth).toBeLessThanOrEqual(360);
+    expect(out.balanceByMonth[360]).toBe(0);
+  });
+
+  it("zero-rate loan is straight-line principal", () => {
+    const out = debtPrincipalByMonth({ startBalance: 12000, annualRatePct: 0, monthlyPayment: 1000, horizonMonths: 24 });
+    expect(out.balanceByMonth[6]).toBeCloseTo(6000, 5);
+    expect(out.payoffMonth).toBe(12);
+    expect(out.totalInterest).toBe(0);
+  });
+
+  it("a lump sum drops principal at its month (prepayment, pre-interest)", () => {
+    const out = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [{ monthIndex: 60, amount: 100000 }],
+    });
+    const drop = out.balanceByMonth[59] - out.balanceByMonth[60];
+    // ~$100k of paydown plus the normal monthly amortization for that month.
+    expect(drop).toBeGreaterThan(100000);
+    expect(drop).toBeLessThan(101500);
+    expect(out.lumpSumTotal).toBe(100000);
+  });
+
+  it("shorten mode: same payment, earlier payoff, less interest", () => {
+    const base = debtPrincipalByMonth({ startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360 });
+    const paid = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [{ monthIndex: 60, amount: 100000 }], recastMode: "shorten",
+    });
+    expect(paid.payoffMonth).toBeLessThan(base.payoffMonth);
+    expect(paid.totalInterest).toBeLessThan(base.totalInterest);
+    // Payment unchanged in shorten mode.
+    expect(paid.paymentByMonth[61]).toBeCloseTo(exactPay, 2);
+  });
+
+  it("lower mode: same payoff month, smaller payment after recast", () => {
+    const base = debtPrincipalByMonth({ startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360 });
+    const recast = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [{ monthIndex: 60, amount: 100000 }], recastMode: "lower", originalPayoffMonth: base.payoffMonth,
+    });
+    // Payoff stays on the original schedule (within a month of rounding).
+    expect(Math.abs(recast.payoffMonth - base.payoffMonth)).toBeLessThanOrEqual(1);
+    // Payment steps down.
+    expect(recast.paymentByMonth[61]).toBeLessThan(exactPay);
+  });
+
+  it("a lump sum >= balance fully retires the loan that month", () => {
+    const out = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [{ monthIndex: 100, amount: 9_999_999 }],
+    });
+    expect(out.payoffMonth).toBe(100);
+    expect(out.balanceByMonth[100]).toBe(0);
+    expect(out.balanceByMonth[101]).toBe(0);
+    // Over-payment is capped at the actual balance, not the typed amount.
+    expect(out.lumpSumTotal).toBeLessThan(P);
+  });
+
+  it("stacks multiple lump sums", () => {
+    const out = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [
+        { monthIndex: 36, amount: 50000 },
+        { monthIndex: 72, amount: 50000 },
+        { monthIndex: 108, amount: 50000 },
+      ],
+    });
+    expect(out.lumpSumTotal).toBe(150000);
+    expect(out.payoffMonth).toBeLessThan(360);
+  });
+
+  it("month-0 lump sum reduces the starting principal", () => {
+    const out = debtPrincipalByMonth({
+      startBalance: P, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 360,
+      lumpSums: [{ monthIndex: 0, amount: 50000 }],
+    });
+    expect(out.balanceByMonth[0]).toBe(P - 50000);
+  });
+
+  it("zero starting balance is immediately paid off", () => {
+    const out = debtPrincipalByMonth({ startBalance: 0, annualRatePct: rate, monthlyPayment: exactPay, horizonMonths: 60 });
+    expect(out.payoffMonth).toBe(0);
+    expect(out.balanceByMonth.every(b => b === 0)).toBe(true);
+  });
+
+  it("rejects invalid inputs", () => {
+    expect(debtPrincipalByMonth({ startBalance: -1, annualRatePct: 5, monthlyPayment: 100, horizonMonths: 12 }).ok).toBe(false);
+    expect(debtPrincipalByMonth({ startBalance: 1000, annualRatePct: -1, monthlyPayment: 100, horizonMonths: 12 }).ok).toBe(false);
+    expect(debtPrincipalByMonth({ startBalance: 1000, annualRatePct: 5, monthlyPayment: -5, horizonMonths: 12 }).ok).toBe(false);
+    expect(debtPrincipalByMonth(null).ok).toBe(false);
+  });
+
+  it("a never-amortizing payment leaves payoffMonth null without crashing", () => {
+    // Payment below monthly interest → balance grows; we don't throw,
+    // we just never reach zero.
+    const out = debtPrincipalByMonth({ startBalance: P, annualRatePct: rate, monthlyPayment: 100, horizonMonths: 120 });
+    expect(out.ok).toBe(true);
+    expect(out.payoffMonth).toBeNull();
+    expect(out.balanceByMonth[120]).toBeGreaterThan(P);
+  });
+});
+
+describe("aggregateObligationDebt", () => {
+  const baseYM = "2026-01";
+  const mkLoan = (id, balance, rate, extra = {}) => ({
+    id, mode: "loan", annualRate: rate, balance, ...extra,
+  });
+
+  it("sums per-loan balances into the total at each year", () => {
+    const loans = [mkLoan("a", 100000, 5), mkLoan("b", 50000, 4)];
+    const out = aggregateObligationDebt(loans, {
+      baseYearMonth: baseYM, horizonMonths: 120,
+      monthlyFor: (ei) => (ei.id === "a" ? 1500 : 800),
+      startBalanceFor: (ei) => Number(ei.balance),
+      lumpSumsFor: () => [],
+    });
+    // Year 0 total = sum of starting balances.
+    expect(out.byYear[0].total).toBeCloseTo(150000, 0);
+    expect(out.byYear[0].perLoan.a).toBeCloseTo(100000, 0);
+    expect(out.byYear[0].perLoan.b).toBeCloseTo(50000, 0);
+    // Balances decline over time.
+    expect(out.byYear[5].total).toBeLessThan(out.byYear[0].total);
+  });
+
+  it("a linked lump sum lowers the total and records an earlier payoff", () => {
+    const loans = [mkLoan("a", 200000, 6)];
+    const noLump = aggregateObligationDebt(loans, {
+      baseYearMonth: baseYM, horizonMonths: 360,
+      monthlyFor: () => 1500, startBalanceFor: (ei) => ei.balance, lumpSumsFor: () => [],
+    });
+    const withLump = aggregateObligationDebt(loans, {
+      baseYearMonth: baseYM, horizonMonths: 360,
+      monthlyFor: () => 1500, startBalanceFor: (ei) => ei.balance,
+      lumpSumsFor: () => [{ monthIndex: 36, amount: 50000 }],
+    });
+    expect(withLump.byYear[5].total).toBeLessThan(noLump.byYear[5].total);
+    // Payoff recorded as a YYYY-MM string, earlier with the paydown.
+    expect(typeof withLump.payoffById.a).toBe("string");
+    expect(withLump.payoffById.a < noLump.payoffById.a).toBe(true);
+  });
+
+  it("skips obligations with unresolved monthly or zero balance", () => {
+    const loans = [mkLoan("a", 100000, 5), mkLoan("b", 0, 5), mkLoan("c", 100000, 5)];
+    const out = aggregateObligationDebt(loans, {
+      baseYearMonth: baseYM, horizonMonths: 120,
+      monthlyFor: (ei) => (ei.id === "c" ? null : 1200), // c unresolved
+      startBalanceFor: (ei) => Number(ei.balance),
+      lumpSumsFor: () => [],
+    });
+    expect(out.byYear[0].perLoan.a).toBeGreaterThan(0);
+    expect(out.byYear[0].perLoan.b).toBeUndefined(); // zero balance skipped
+    expect(out.byYear[0].perLoan.c).toBeUndefined(); // unresolved monthly skipped
+  });
+
+  it("ignores sub-loan obligations (handled elsewhere)", () => {
+    const loans = [mkLoan("a", 100000, 5, { subLoans: [{ id: "s1" }] })];
+    const out = aggregateObligationDebt(loans, {
+      baseYearMonth: baseYM, horizonMonths: 120,
+      monthlyFor: () => 1200, startBalanceFor: (ei) => ei.balance, lumpSumsFor: () => [],
+    });
+    expect(out.byYear[0].perLoan.a).toBeUndefined();
+    expect(out.byYear[0].total).toBe(0);
+  });
+
+  it("handles empty input", () => {
+    const out = aggregateObligationDebt([], { baseYearMonth: baseYM, horizonMonths: 120, monthlyFor: () => 0, startBalanceFor: () => 0, lumpSumsFor: () => [] });
+    expect(out.byYear[0].total).toBe(0);
+    expect(out.payoffById).toEqual({});
+    expect(aggregateObligationDebt(null, {}).byYear).toBeDefined();
   });
 });
 

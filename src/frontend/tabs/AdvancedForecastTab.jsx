@@ -4,9 +4,9 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk, rollAccountForward } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, applyPayoffLinks, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, applyPayoffLinks, aggregateObligationDebt, findItemRefConflicts, resolveItemRef, rollForwardBalance, debtPrincipalByMonth, addMonths, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
-import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
+import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear, eventMonthIndex } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
 import { firstHsaAccountByOwner as computeFirstHsaByOwner, resolveHsaContribution, hsaShareSumByOwner, isHsaType } from "../utils/hsaAllocation.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
@@ -890,29 +890,90 @@ export default function AdvancedForecastTab({
      This memo intentionally depends on the live `exp`/`sav` arrays —
      editing a budget line's monthly amount or period updates the
      forecast in real time without the user re-saving the ending item. */
-  const resolvedEnding = useMemo(() => {
-    const horizonMonths = (Number(horizon) || 0) * 12;
-    /* Apply early-payoff links first: a one-time event with linkedEndingId
-       overrides its linked obligation's end date to the event's month, so
-       the freed monthly payment starts right after the early payoff. The
-       event itself still drains its account in resolveOneTimeEvents — this
-       only moves the obligation's date. */
-    const linkedItems = applyPayoffLinks(endingItems, oneTimeEvents);
-    return resolveEndingEvents(linkedItems, monthlyAmountFor, baseYearMonth, horizonMonths);
-    // monthlyAmountFor closes over exp/sav, so list those.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endingItems, oneTimeEvents, exp, sav, baseYearMonth, horizon]);
-
   /* Resolve one-time events. resolveOneTimeEvents wants baseYearMonth as
      { year, month } (numeric), distinct from endingItems' "YYYY-MM" string
      shape. Recompute on event/horizon change — events depend only on their
-     own date + the account list + horizon, not on budget content. */
+     own date + the account list + horizon, not on budget content.
+     (Declared before resolvedEnding because the debt aggregation and the
+     payoff-link override both consume it.) */
   const resolvedOneTime = useMemo(() => {
     const horizonMonths = (Number(horizon) || 0) * 12;
     const [yStr, mStr] = baseYearMonth.split("-");
     const baseYM = { year: Number(yStr), month: Number(mStr) };
     return resolveOneTimeEvents(oneTimeEvents, accounts, baseYM, horizonMonths);
   }, [oneTimeEvents, accounts, baseYearMonth, horizon]);
+
+  /* Real "Debt Remaining" from loan-mode ENDING OBLIGATIONS — the debts
+     in the actual plan, NOT the standalone Loans-tab scratchpad
+     (forecast.loans), which stays hypothetical. Lump-sum paydowns come
+     from one-time events linked to each obligation (linkedEndingId): each
+     becomes a paydown of |amount| at the event's resolved month index
+     (read off resolvedOneTime by id so the month math never diverges).
+     Returns { byYear, payoffById }; payoffById feeds the freed-cash
+     timing below so the debt curve and the freed payment agree on when a
+     loan retires. */
+  const obligationDebtByYear = useMemo(() => {
+    const horizonMonths = (Number(horizon) || 0) * 12;
+    const resolvedById = new Map(resolvedOneTime.events.map(e => [e.id, e]));
+    const loanObligations = endingItems.filter(ei => ei && ei.mode === "loan");
+    return aggregateObligationDebt(loanObligations, {
+      baseYearMonth,
+      horizonMonths,
+      monthlyFor: (ei) => {
+        const refs = getItemRefs(ei);
+        if (refs.length === 0) return null;
+        let monthly = 0;
+        for (const ref of refs) {
+          const m = monthlyAmountFor(ref);
+          if (m == null || !isFinite(m) || m <= 0) return null;
+          monthly += m;
+        }
+        return monthly;
+      },
+      startBalanceFor: (ei) => {
+        let startBalance = Number(ei.balance) || 0;
+        const refs = getItemRefs(ei);
+        let monthly = 0;
+        for (const ref of refs) { const m = monthlyAmountFor(ref); if (m != null && isFinite(m)) monthly += m; }
+        if (ei.balanceAsOf && baseYearMonth) {
+          const roll = rollForwardBalance(ei.balance, ei.annualRate, monthly, ei.balanceAsOf, baseYearMonth);
+          if (roll.ok) startBalance = roll.rolledBalance;
+        }
+        return startBalance;
+      },
+      lumpSumsFor: (ei) => {
+        const lumps = [];
+        for (const ev of oneTimeEvents) {
+          if (!ev || ev.linkedEndingId !== ei.id) continue;
+          const resolved = resolvedById.get(ev.id);
+          const mi = resolved ? resolved.monthIndex : eventMonthIndex(ev.date, baseYear, 1);
+          if (mi == null || mi < 0 || mi > horizonMonths) continue;
+          const amt = Math.abs(Number(ev.amount) || 0);
+          if (amt > 0) lumps.push({ monthIndex: mi, amount: amt });
+        }
+        return lumps;
+      },
+    });
+    // monthlyAmountFor closes over exp/sav.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endingItems, oneTimeEvents, resolvedOneTime.events, exp, sav, baseYearMonth, baseYear, horizon]);
+
+  /* Ending obligations resolved to freed-cash events. Early-payoff links
+     (one-time event with linkedEndingId) are applied first: for a
+     loan-mode obligation the lump sum is handled by the debt engine and
+     the obligation's end date is set to the COMPUTED post-paydown payoff
+     (obligationDebtByYear.payoffById) so the freed payment and the debt
+     curve agree; for a date-mode obligation the event date wins. Live
+     because monthlyAmountFor closes over the budget — editing a line's
+     monthly updates the forecast without re-saving. */
+  const resolvedEnding = useMemo(() => {
+    const horizonMonths = (Number(horizon) || 0) * 12;
+    const linkedItems = applyPayoffLinks(endingItems, oneTimeEvents, obligationDebtByYear.payoffById);
+    return resolveEndingEvents(linkedItems, monthlyAmountFor, baseYearMonth, horizonMonths);
+    // monthlyAmountFor closes over exp/sav, so list those.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endingItems, oneTimeEvents, obligationDebtByYear.payoffById, exp, sav, baseYearMonth, horizon]);
+
 
   /* Resolve loans. Mirrors the one-time-events shape — { loans, orphans,
      inPast, outOfHorizon }. Recompute on loan/horizon change; loan
@@ -971,6 +1032,28 @@ export default function AdvancedForecastTab({
     }
     return out;
   }, [resolvedLoans.loans, debtAggregate, horizon]);
+
+  /* Real "Debt Remaining" from loan-mode ENDING OBLIGATIONS.
+     ===============================================================
+     This is the source of truth for the year-by-year "Debt Remaining"
+     column and the debt total — NOT the standalone Loans-tab scratchpad
+     (forecast.loans), which is hypothetical planning only.
+
+     For each loan-mode obligation we:
+       1. roll its stated balance forward to baseYearMonth (same as the
+          row render does),
+       2. collect lump-sum paydowns from any one-time events linked to it
+          (linkedEndingId) — each linked event becomes a paydown of
+          |amount| at the event's resolved month index, matching the rest
+          of the system's month math exactly (we read monthIndex off the
+          resolved event by id so there's no divergence),
+       3. run debtPrincipalByMonth to get the month-by-month principal,
+          honoring the obligation's recastMode ("shorten" default),
+       4. snapshot the balance at each year end.
+
+     Aggregated across all loan-mode obligations into the same shape
+     debtByYear used ({ [year]: { total, perLoan } }) so the column +
+     chart consume it unchanged. */
 
   /* Detect duplicate itemRef assignments (one-ending-per-item invariant).
      UI prevents creating duplicates via dropdown disabling; this is a
@@ -3260,6 +3343,32 @@ export default function AdvancedForecastTab({
                         {loanStaleMonths >= 3 && <span> · refresh suggested</span>}
                       </div>
                     )}
+                    {/* Lump-sum recast behavior. Only meaningful for loan
+                        mode, where a linked payoff event pays down principal.
+                        "shorten" keeps the payment and ends the loan sooner;
+                        "lower" keeps the original payoff date and drops the
+                        payment. Default shorten (the realistic prepayment). */}
+                    {ei.mode === "loan" && !hasSubLoans && (
+                      <div style={{ marginTop: 8 }}>
+                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                          On lump-sum paydown
+                          <span title="When a one-time payoff event pays down this loan's principal: 'Shorten term' keeps your monthly payment the same and pays the loan off earlier (saves interest). 'Lower payment' keeps the original payoff date and reduces the monthly payment instead." style={{ marginLeft: 5, cursor: "help", color: "var(--tx3,#aaa)" }}>ⓘ</span>
+                        </label>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {[["shorten", "Shorten term"], ["lower", "Lower payment"]].map(([val, lbl]) => {
+                            const active = (ei.recastMode || "shorten") === val;
+                            return (
+                              <button
+                                key={val}
+                                onClick={() => updateEndingItem(ei.id, { recastMode: val })}
+                                title={val === "shorten" ? "Keep the payment; the loan ends sooner." : "Keep the payoff date; the payment drops."}
+                                style={{ flex: 1, padding: "4px 8px", fontSize: 11, fontWeight: 600, border: "none", borderRadius: 5, background: active ? "#556FB5" : "var(--input-bg,#f5f5f5)", color: active ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}
+                              >{lbl}</button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     {/* Computed-endsOn display for loan mode */}
                     {ei.mode === "loan" && hasSubLoans && (
                       <div style={{ marginTop: 6, fontSize: 11, color: "var(--tx3,#888)", borderTop: "1px solid var(--bdr,#eee)", paddingTop: 5 }}>
@@ -3940,7 +4049,12 @@ export default function AdvancedForecastTab({
         /* Build column descriptors. Each: { id, label, color, italic,
            cell(row) -> JSX/string, cellStyle(row) -> style }. Year is NOT
            here — it's rendered as a fixed first column. */
-        const hasLoans = resolvedLoans.loans.length > 0;
+        /* "Debt Remaining" reflects real loan-mode ending OBLIGATIONS
+           (the debts in your actual plan), driven by obligationDebtByYear
+           — which honors lump-sum paydowns from linked payoff events. The
+           standalone Loans-tab scratchpad (forecast.loans) is hypothetical
+           and intentionally does NOT feed this column. */
+        const hasDebt = Object.values(obligationDebtByYear.byYear).some(y => (y?.total || 0) > 0);
         const colDefs = {};
         const baseColIds = [];
 
@@ -3951,15 +4065,15 @@ export default function AdvancedForecastTab({
         };
         baseColIds.push("total");
 
-        if (hasLoans) {
+        if (hasDebt) {
           colDefs.debt = {
             id: "debt", label: "Debt Remaining", color: "#C0392B",
             cell: (row) => {
-              const d = debtByYear[row.year]?.total || 0;
+              const d = obligationDebtByYear.byYear[row.year]?.total || 0;
               return d > 0 ? fmt(Math.round(d)) : "—";
             },
             cellStyle: (row) => {
-              const d = debtByYear[row.year]?.total || 0;
+              const d = obligationDebtByYear.byYear[row.year]?.total || 0;
               return { padding: 6, textAlign: "right", color: d > 0 ? "#C0392B" : "var(--tx3,#bbb)", fontWeight: d > 0 ? 600 : 400, fontSize: 11 };
             },
           };
