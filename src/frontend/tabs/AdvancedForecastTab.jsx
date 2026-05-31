@@ -533,6 +533,14 @@ export default function AdvancedForecastTab({
      redirected into a designated forecast account from that point on.
      See utils/endingItems.js for the data model. */
   const endingItems = Array.isArray(forecast?.endingItems) ? forecast.endingItems : [];
+  /* Declared up here (not next to its mutators below) because the
+     loan-endsOn auto-recompute effect references it in its body AND its
+     dependency array. A dependency array is evaluated during render,
+     before later `const` declarations execute — declaring oneTimeEvents
+     below the effect would put it in the temporal dead zone and crash the
+     whole tab on render ("Cannot access ... before initialization").
+     Sibling of endingItems anyway — both are plain forecast reads. */
+  const oneTimeEvents = Array.isArray(forecast?.oneTimeEvents) ? forecast.oneTimeEvents : [];
   /* baseYearMonth is the projection's "today" — anchored to the current
      month, not January-of-current-year. Loan amortization output like
      "Pays off: 2028-05 (24 mo)" needs to be honestly 24 months from
@@ -726,9 +734,9 @@ export default function AdvancedForecastTab({
   /* === One-time Events ===
      Dated lump-sum events on a single account. Independent from
      ending items — these are one-shot balance adjustments, not
-     recurring redirects of freed cash flow. See utils/oneTimeEvents.js. */
-  const oneTimeEvents = Array.isArray(forecast?.oneTimeEvents) ? forecast.oneTimeEvents : [];
-
+     recurring redirects of freed cash flow. See utils/oneTimeEvents.js.
+     (The `oneTimeEvents` const itself is declared higher up, next to
+     endingItems, to keep it out of the TDZ for the loan-recompute effect.) */
   const updateOneTimeEvent = (id, patch) => {
     setForecast(prev => {
       const cur = Array.isArray(prev?.oneTimeEvents) ? prev.oneTimeEvents : [];
