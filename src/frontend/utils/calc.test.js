@@ -1845,3 +1845,65 @@ describe("HSA first-class field — pre-tax parity (Session 1)", () => {
     expect(evalF("") / 52).toBe(0);
   });
 });
+
+describe("forecastGrowthAccounts — HSA pool is per-person under self-only coverage", () => {
+  const mk = (id, owner, type, contrib) => ({
+    id, name: id, owner, type, startBalance: 0, annualReturn: 0,
+    contribAmount: contrib, annualIncrease: 0, capAtLimit: true,
+  });
+  // Two people, each their own self-only HSA at the 2026 self limit.
+  const selfLimit = getPoolLimit("hsa", 2026, 35, "self"); // single-person
+  const optsSelf = {
+    baseYear: 2026, inflationPct: 0, p1BirthYear: 1990, p2BirthYear: 1992,
+    hsaCoverage: "self", getPoolLimit, accountTypeToPool: ACCOUNT_TYPE_TO_POOL,
+  };
+
+  it("does NOT cap two people's self-only HSA against a single shared limit", () => {
+    const accounts = [
+      mk("k", "p1", "hsa_cash", selfLimit),
+      mk("c", "p2", "hsa_cash", selfLimit),
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, optsSelf);
+    // Each person sits exactly at their own limit → no cap, no warning.
+    expect(r.poolWarnings.length).toBe(0);
+    expect(r.accountSeries.k[1].contribution).toBeCloseTo(selfLimit, 2);
+    expect(r.accountSeries.c[1].contribution).toBeCloseTo(selfLimit, 2);
+  });
+
+  it("still caps ONE person who exceeds their own self-only limit", () => {
+    const accounts = [
+      mk("k", "p1", "hsa_cash", selfLimit + 2000), // p1 over
+      mk("c", "p2", "hsa_cash", selfLimit),         // p2 at limit
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, optsSelf);
+    // Only p1's pool warns; p2 is fine.
+    expect(r.poolWarnings.some(w => w.owner === "p1")).toBe(true);
+    expect(r.poolWarnings.some(w => w.owner === "p2")).toBe(false);
+    expect(r.accountSeries.k[1].contribution).toBeCloseTo(selfLimit, 2);
+    expect(r.accountSeries.c[1].contribution).toBeCloseTo(selfLimit, 2);
+  });
+
+  it("caps one person's cash+invested against THAT person's limit (shared within person)", () => {
+    const accounts = [
+      mk("c1", "p2", "hsa_cash", selfLimit * 0.6),
+      mk("c2", "p2", "hsa_invested", selfLimit * 0.6), // p2 total 120% of limit
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, optsSelf);
+    const total = r.accountSeries.c1[1].contribution + r.accountSeries.c2[1].contribution;
+    expect(total).toBeCloseTo(selfLimit, 2); // capped to the single-person limit
+    expect(r.poolWarnings.length).toBe(1);
+  });
+
+  it("family coverage keeps ONE shared household pool", () => {
+    const familyLimit = getPoolLimit("hsa", 2026, 35, "family");
+    const optsFamily = { ...optsSelf, hsaCoverage: "family" };
+    const accounts = [
+      mk("k", "p1", "hsa_cash", familyLimit * 0.7),
+      mk("c", "p2", "hsa_cash", familyLimit * 0.7), // combined 140% of family
+    ];
+    const r = forecastGrowthAccounts(accounts, 1, optsFamily);
+    const total = r.accountSeries.k[1].contribution + r.accountSeries.c[1].contribution;
+    expect(total).toBeCloseTo(familyLimit, 2); // shared cap
+    expect(r.poolWarnings.length).toBe(1);
+  });
+});

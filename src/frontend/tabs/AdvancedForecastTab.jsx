@@ -1525,7 +1525,13 @@ export default function AdvancedForecastTab({
       }
       return null;
     })();
-    const limit = getPoolLimit(pool, baseYear, ageNow, hsaCoverage);
+    // Per-person HSA (self / both-self coverage): each person has their own
+    // self-only limit, so the displayed pool limit is the single self amount —
+    // consistent with the per-person pool capping in forecastGrowthAccounts.
+    // Family coverage uses the shared household limit.
+    const hsaPerPerson = hsaCoverage === "self" || hsaCoverage === "both-self";
+    const hsaCoverageForLimit = pool === "hsa" && hsaPerPerson ? "self" : hsaCoverage;
+    const limit = getPoolLimit(pool, baseYear, ageNow, hsaCoverageForLimit);
     const eff = effectiveContribFor(a);
     const incr = Number(a.annualIncrease) || 0;
     const yearsToHit = yearsToHitPoolLimit(eff, incr, limit);
@@ -2083,7 +2089,16 @@ export default function AdvancedForecastTab({
                             // Blank clears the share (back to default mode for
                             // this account); a number stores the percent.
                             const src = (raw ?? v ?? "").toString().trim();
-                            updateAccount(a.id, { hsaShare: src === "" ? undefined : evalF(v) });
+                            if (src === "") {
+                              updateAccount(a.id, { hsaShare: undefined });
+                            } else {
+                              // A share only takes effect in auto mode (it
+                              // directs how the Income-derived HSA total is
+                              // split). If the account was on a manual amount,
+                              // flip it to auto so the share is actually used —
+                              // otherwise setting a share appears to do nothing.
+                              updateAccount(a.id, { hsaShare: evalF(v), contribOverride: false });
+                            }
                           }}
                           onBlurResolve
                           prefix="%"
