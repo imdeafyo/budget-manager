@@ -226,11 +226,25 @@ describe("applyPayoffLinks", () => {
     expect(out[0]._payoffLinkedFrom).toBe("e1");
   });
 
-  it("forces mode to 'date' so loan-mode recomputation can't fight the override", () => {
+  it("loan-mode without a computed payoff stays loan-mode (does not collapse to the event date)", () => {
+    // Regression: a lump-sum event linked to a loan-mode obligation must NOT
+    // end the loan at the event date when no computed payoff is supplied.
+    // Doing so froze the FIRE target down as if the whole loan were paid off
+    // from a partial lump. The loan keeps its natural amortized schedule;
+    // only the link marker is stamped.
     const items = [mkEi("ei_1", "2040-01", { mode: "loan", balance: 300000, annualRate: 6 })];
     const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ei_1")]);
-    expect(out[0].mode).toBe("date");
-    expect(out[0].endsOn).toBe("2035-02");
+    expect(out[0].mode).toBe("loan");
+    expect(out[0].endsOn).toBe("2040-01"); // unchanged
+    expect(out[0]._payoffLinkedFrom).toBe("e1");
+  });
+
+  it("loan-mode WITH a computed payoff uses the computed payoff month, staying loan-mode", () => {
+    const items = [mkEi("ei_1", "2040-01", { mode: "loan", balance: 300000, annualRate: 6 })];
+    const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ei_1")], { ei_1: "2050-09" });
+    expect(out[0].mode).toBe("loan");
+    expect(out[0].endsOn).toBe("2050-09"); // real post-paydown payoff, not the event date
+    expect(out[0]._payoffLinkedFrom).toBe("e1");
   });
 
   it("does not mutate the input items (pure)", () => {

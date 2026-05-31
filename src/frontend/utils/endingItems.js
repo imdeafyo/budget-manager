@@ -402,9 +402,23 @@ export function applyPayoffLinks(endingItems, oneTimeEvents, computedPayoffById 
       };
     }
 
-    /* Date-mode obligation (or loan-mode without a computed payoff):
-       the event date wins and the obligation behaves as a fixed-date
-       ending at the event's month. */
+    /* Loan-mode obligation WITHOUT a computed payoff date (e.g. the debt
+       engine couldn't resolve it — a sub-loan group with an amortization
+       error, a missing/zero payment, etc). We must NOT fall through to the
+       date-mode branch below: doing so would end the loan at the lump
+       event's date and free the full payment / collapse the FIRE target as
+       if the entire loan were paid off, when in reality a partial lump on a
+       large loan barely moves the payoff. Leave the loan untouched so it
+       ends on its natural amortized schedule; only stamp the link for
+       UI/debug. The lump still drains its account via the one-time event;
+       it just can't be PROVEN to retire the loan, so we don't claim it
+       does. */
+    if (ei.mode === "loan") {
+      return { ...ei, _payoffLinkedFrom: ov.eventId };
+    }
+
+    /* Date-mode obligation: the event date wins and the obligation behaves
+       as a fixed-date ending at the event's month. */
     return {
       ...ei,
       endsOn: ov.endsOn,
