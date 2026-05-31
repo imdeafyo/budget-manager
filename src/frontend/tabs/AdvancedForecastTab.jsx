@@ -3730,9 +3730,19 @@ export default function AdvancedForecastTab({
                           textAlign: "right",
                           /* Red for outflows (negative), green for inflows
                              (positive), neutral for empty/zero. Makes the
-                             sign obvious at a glance. */
-                          color: ev.amount < 0 ? "#C0392B" : ev.amount > 0 ? "#1E8449" : inputStyle.color,
-                          fontWeight: ev.amount !== 0 ? 600 : 400,
+                             sign obvious at a glance.
+                             WebkitTextFillColor is required: on WebKit/Blink
+                             (Safari/Chrome), number inputs honor
+                             -webkit-text-fill-color over `color`, so OS
+                             dark-mode form styling was winning and forcing
+                             white text. Setting both makes the color stick. */
+                          ...(() => {
+                            const n = Number(ev.amount);
+                            const c = !Number.isFinite(n) || n === 0
+                              ? inputStyle.color
+                              : n < 0 ? "#C0392B" : "#1E8449";
+                            return { color: c, WebkitTextFillColor: c, fontWeight: Number.isFinite(n) && n !== 0 ? 600 : 400 };
+                          })(),
                         }}
                       />
                     </div>
