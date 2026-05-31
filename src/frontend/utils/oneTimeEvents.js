@@ -26,6 +26,17 @@
        amount: number,             // signed; negative = outflow
        accountId: "<account id>",  // destination/source account
        label: string,              // user-facing description
+       linkedEndingId?: string,    // optional: early-payoff link to an
+                                   //   ending obligation. When set, this
+                                   //   event's date overrides that
+                                   //   obligation's end date (the freed
+                                   //   monthly payment starts the month
+                                   //   after this event). The OVERRIDE is
+                                   //   applied by applyPayoffLinks in
+                                   //   endingItems.js BEFORE resolution;
+                                   //   this resolver ignores the field —
+                                   //   the event still just drains
+                                   //   `amount` from `accountId` on `date`.
      }
 
    Resolved (passed to forecast math):

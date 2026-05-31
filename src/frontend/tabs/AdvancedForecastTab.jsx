@@ -4,7 +4,7 @@ import { Card, NI } from "../components/ui.jsx";
 import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, calcMatch, cashBudgetContribution, poolHeadroom, toWk, rollAccountForward } from "../utils/calc.js";
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
-import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
+import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, applyPayoffLinks, findItemRefConflicts, resolveItemRef, rollForwardBalance, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
@@ -872,10 +872,16 @@ export default function AdvancedForecastTab({
      forecast in real time without the user re-saving the ending item. */
   const resolvedEnding = useMemo(() => {
     const horizonMonths = (Number(horizon) || 0) * 12;
-    return resolveEndingEvents(endingItems, monthlyAmountFor, baseYearMonth, horizonMonths);
+    /* Apply early-payoff links first: a one-time event with linkedEndingId
+       overrides its linked obligation's end date to the event's month, so
+       the freed monthly payment starts right after the early payoff. The
+       event itself still drains its account in resolveOneTimeEvents — this
+       only moves the obligation's date. */
+    const linkedItems = applyPayoffLinks(endingItems, oneTimeEvents);
+    return resolveEndingEvents(linkedItems, monthlyAmountFor, baseYearMonth, horizonMonths);
     // monthlyAmountFor closes over exp/sav, so list those.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endingItems, exp, sav, baseYearMonth, horizon]);
+  }, [endingItems, oneTimeEvents, exp, sav, baseYearMonth, horizon]);
 
   /* Resolve one-time events. resolveOneTimeEvents wants baseYearMonth as
      { year, month } (numeric), distinct from endingItems' "YYYY-MM" string
@@ -3463,6 +3469,7 @@ export default function AdvancedForecastTab({
                   <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Label</th>
                   <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Amount</th>
                   <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Account</th>
+                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }} title="Optionally link this event to an ending obligation. When linked, this event's date becomes that obligation's end date — the freed monthly payment starts right after the payoff. Set the date once here; the obligation follows.">Pays off</th>
                   <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Status</th>
                   <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}></th>
                 </tr>
@@ -3545,6 +3552,45 @@ export default function AdvancedForecastTab({
                             <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
                           ))}
                         </select>
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        {/* Early-payoff link. Lists user-facing ("ends")
+                            obligations, labeled by their linked budget
+                            item(s). Selecting one overrides that
+                            obligation's end date to this event's date —
+                            handled by applyPayoffLinks before resolution.
+                            Obligations already linked by a DIFFERENT event
+                            are disabled to steer toward one-payoff-per-
+                            obligation (applyPayoffLinks still resolves any
+                            collision by earliest date, defensively). */}
+                        {(() => {
+                          const endsObligations = endingItems.filter(ei => ei && (ei.effect ?? "ends") === "ends");
+                          if (endsObligations.length === 0) {
+                            return <span style={{ fontSize: 11, color: "var(--tx3,#bbb)", fontStyle: "italic" }}>none yet</span>;
+                          }
+                          const labelFor = (ei) => {
+                            const refs = getItemRefs(ei);
+                            const names = refs.map(r => r.name).filter(Boolean);
+                            return names.length ? names.join(" + ") : "(unlinked obligation)";
+                          };
+                          const claimedByOther = (eiId) =>
+                            oneTimeEvents.some(o => o.id !== ev.id && o.linkedEndingId === eiId);
+                          return (
+                            <select
+                              value={ev.linkedEndingId || ""}
+                              onChange={(e) => updateOneTimeEvent(ev.id, { linkedEndingId: e.target.value || undefined })}
+                              title="Link to an ending obligation to set its end date from this event's date."
+                              style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 150 }}
+                            >
+                              <option value="">— none —</option>
+                              {endsObligations.map(ei => (
+                                <option key={ei.id} value={ei.id} disabled={claimedByOther(ei.id)}>
+                                  {labelFor(ei)}{claimedByOther(ei.id) ? " (linked)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          );
+                        })()}
                       </td>
                       <td style={{ padding: 6, textAlign: "center", fontSize: 11, color: statusColor, fontWeight: 600 }}>
                         {status}

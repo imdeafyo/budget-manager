@@ -7,6 +7,8 @@ import {
   computeLoanEndsOn,
   yearMonthToIndex,
   baseRelativeToLoopMonth,
+  eventDateToYearMonth,
+  applyPayoffLinks,
   resolveEndingEvents,
   eventsByAccount,
   findItemRefConflicts,
@@ -176,6 +178,106 @@ describe("baseRelativeToLoopMonth", () => {
   });
 });
 
+describe("eventDateToYearMonth", () => {
+  it("strips the day from a full date", () => {
+    expect(eventDateToYearMonth("2035-02-01")).toBe("2035-02");
+  });
+  it("zero-pads single-digit months", () => {
+    expect(eventDateToYearMonth("2035-2-1")).toBe("2035-02");
+  });
+  it("accepts a YYYY-MM input unchanged", () => {
+    expect(eventDateToYearMonth("2035-02")).toBe("2035-02");
+  });
+  it("returns null on malformed input", () => {
+    expect(eventDateToYearMonth("garbage")).toBeNull();
+    expect(eventDateToYearMonth("2035-13-01")).toBeNull();
+    expect(eventDateToYearMonth(null)).toBeNull();
+    expect(eventDateToYearMonth(12345)).toBeNull();
+  });
+});
+
+describe("applyPayoffLinks", () => {
+  const mkEi = (id, endsOn, extra = {}) => ({
+    id,
+    itemRefs: [{ section: "exp", idx: 0, name: "Mortgage" }],
+    destAccountId: "acc_cash",
+    effect: "ends",
+    mode: "date",
+    endsOn,
+    ...extra,
+  });
+  const mkEv = (id, date, linkedEndingId, extra = {}) => ({
+    id, date, amount: -500000, accountId: "acc_cash", label: "payoff", linkedEndingId, ...extra,
+  });
+
+  it("returns the items untouched when no events link them", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", undefined)]);
+    expect(out).toBe(items); // same reference — no override applied
+  });
+
+  it("overrides the linked obligation's endsOn to the event's month", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const events = [mkEv("e1", "2035-02-01", "ei_1")];
+    const out = applyPayoffLinks(items, events);
+    expect(out[0].endsOn).toBe("2035-02");
+    expect(out[0]._payoffLinkedFrom).toBe("e1");
+  });
+
+  it("forces mode to 'date' so loan-mode recomputation can't fight the override", () => {
+    const items = [mkEi("ei_1", "2040-01", { mode: "loan", balance: 300000, annualRate: 6 })];
+    const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ei_1")]);
+    expect(out[0].mode).toBe("date");
+    expect(out[0].endsOn).toBe("2035-02");
+  });
+
+  it("does not mutate the input items (pure)", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const before = JSON.stringify(items);
+    applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ei_1")]);
+    expect(JSON.stringify(items)).toBe(before);
+  });
+
+  it("leaves unlinked obligations alone", () => {
+    const items = [mkEi("ei_1", "2040-01"), mkEi("ei_2", "2045-06")];
+    const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ei_1")]);
+    expect(out[0].endsOn).toBe("2035-02");
+    expect(out[1].endsOn).toBe("2045-06"); // untouched
+    expect(out[1]._payoffLinkedFrom).toBeUndefined();
+  });
+
+  it("ignores a link to a nonexistent obligation", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const out = applyPayoffLinks(items, [mkEv("e1", "2035-02-01", "ghost")]);
+    expect(out[0].endsOn).toBe("2040-01");
+  });
+
+  it("ignores a link whose event date is unparseable", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const out = applyPayoffLinks(items, [mkEv("e1", "garbage", "ei_1")]);
+    expect(out[0].endsOn).toBe("2040-01");
+  });
+
+  it("earlier event date wins when two events link the same obligation", () => {
+    const items = [mkEi("ei_1", "2040-01")];
+    const events = [
+      mkEv("e_late", "2037-06-01", "ei_1"),
+      mkEv("e_early", "2035-02-01", "ei_1"),
+    ];
+    const out = applyPayoffLinks(items, events);
+    expect(out[0].endsOn).toBe("2035-02");
+    expect(out[0]._payoffLinkedFrom).toBe("e_early");
+  });
+
+  it("handles empty / non-array inputs gracefully", () => {
+    expect(applyPayoffLinks([], [mkEv("e1", "2035-02-01", "ei_1")])).toEqual([]);
+    const items = [mkEi("ei_1", "2040-01")];
+    expect(applyPayoffLinks(items, [])).toBe(items);
+    expect(applyPayoffLinks(items, null)).toBe(items);
+    expect(applyPayoffLinks(null, [])).toEqual([]);
+  });
+});
+
 describe("resolveEndingEvents", () => {
   const horizonMonths = 240; // 20 years
   const baseYM = "2026-01";
@@ -249,6 +351,21 @@ describe("resolveEndingEvents", () => {
     expect(r.events[0].monthIndex).toBe(43);
     // Loop year that month falls in: ceil(43/12) = 4 → calendar 2030.
     expect(Math.ceil(r.events[0].monthIndex / 12)).toBe(4);
+  });
+
+  it("early-payoff link moves freed cash earlier than the obligation's own date (integration)", () => {
+    /* Obligation naturally ends 2040-01. A linked payoff event dated
+       2035-02 should make the freed payment start right after Feb 2035,
+       not 2040. applyPayoffLinks rewrites endsOn, then resolveEndingEvents
+       fires at the new month. 2035-02 → freed at 2035-03 = loop month
+       (2035-2026-1)*12 + 3 = 99. */
+    const item = mkItem({ endsOn: "2040-01" });
+    const events = [{ id: "e1", date: "2035-02-01", amount: -500000, accountId: "acc_cash_joint", label: "payoff", linkedEndingId: "ei_1" }];
+    const linked = applyPayoffLinks([item], events);
+    const r = resolveEndingEvents(linked, () => 2000, baseYM, horizonMonths);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].monthIndex).toBe(99);
+    expect(Math.ceil(r.events[0].monthIndex / 12)).toBe(9); // calendar 2035
   });
 
   it("drops items past horizon and reports them in outOfHorizon", () => {

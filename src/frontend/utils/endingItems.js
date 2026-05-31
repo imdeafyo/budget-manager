@@ -317,6 +317,81 @@ export function baseRelativeToLoopMonth(baseRelIdx, baseYearMonth) {
   return baseRelIdx + (mB - 12);
 }
 
+/* Convert a one-time event date ("YYYY-MM-DD" or "YYYY-MM") to the
+   "YYYY-MM" shape ending obligations use for `endsOn`. Returns null on
+   malformed input. Day component is discarded — obligations are
+   month-precise. */
+export function eventDateToYearMonth(dateStr) {
+  if (typeof dateStr !== "string") return null;
+  const m = dateStr.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (!isFinite(year) || !isFinite(month) || month < 1 || month > 12) return null;
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/* Apply early-payoff links from one-time events onto ending obligations.
+   ---------------------------------------------------------------
+   A one-time event may carry `linkedEndingId` pointing at an ending
+   obligation. Semantics ("event date wins while linked"):
+
+     - The event itself still drains its own (manually-entered) `amount`
+       from its own `accountId` on its own `date` — this function does
+       NOT touch the events, only the obligations.
+     - The linked obligation's effective end date is OVERRIDDEN to the
+       event's month. The obligation's stored `endsOn`/`mode` are ignored
+       while a link is active, so the freed monthly payment starts the
+       month after the early payoff rather than the original schedule.
+
+   Returns a NEW ending-items array (originals untouched — pure). Linked
+   obligations get `endsOn` set to the event's YYYY-MM and `mode` forced
+   to "date" so loan-mode recomputation can't fight the override. An
+   `_payoffLinkedFrom` field (the event id) is stamped for UI/debug; it's
+   inert in the resolver.
+
+   Conflict handling: if two events link the same obligation, the EARLIER
+   event date wins (you can't pay the same thing off twice; the first
+   payoff is the one that frees the cash). Events with a missing/unparseable
+   date, or pointing at an obligation that doesn't exist, are ignored here
+   — they're surfaced elsewhere (the event still drains its account; a
+   dangling link just means no override happens).
+
+   This runs BEFORE resolveEndingEvents in the tab, so the override flows
+   through the normal resolution path with no special-casing downstream. */
+export function applyPayoffLinks(endingItems, oneTimeEvents) {
+  if (!Array.isArray(endingItems) || endingItems.length === 0) return endingItems || [];
+  if (!Array.isArray(oneTimeEvents) || oneTimeEvents.length === 0) return endingItems;
+
+  // Build endingId -> earliest overriding YYYY-MM (+ source event id).
+  const overrides = {};
+  for (const ev of oneTimeEvents) {
+    if (!ev || typeof ev !== "object") continue;
+    const linkedId = ev.linkedEndingId;
+    if (!linkedId) continue;
+    const ym = eventDateToYearMonth(ev.date);
+    if (!ym) continue;
+    const prev = overrides[linkedId];
+    // Earlier date wins on conflict (string compare works for YYYY-MM).
+    if (!prev || ym < prev.endsOn) {
+      overrides[linkedId] = { endsOn: ym, eventId: ev.id };
+    }
+  }
+  if (Object.keys(overrides).length === 0) return endingItems;
+
+  return endingItems.map(ei => {
+    if (!ei || typeof ei !== "object") return ei;
+    const ov = overrides[ei.id];
+    if (!ov) return ei;
+    return {
+      ...ei,
+      endsOn: ov.endsOn,
+      mode: "date",            // override wins over loan-mode recomputation
+      _payoffLinkedFrom: ov.eventId,
+    };
+  });
+}
+
 /* Resolve a list of ending items to a flat array of monthly events
    that the forecast math layer can apply.
    ---------------------------------------------------------------
