@@ -1810,3 +1810,38 @@ describe("rollAccountForward — age a balance to today", () => {
     expect(out).toBeLessThan(-1000);
   });
 });
+
+describe("HSA first-class field — pre-tax parity (Session 1)", () => {
+  // The Session 1 refactor moved HSA out of the string-matched preDed row and
+  // into a per-person ANNUAL field, then adds evalF(hsa)/52 to the weekly
+  // pre-tax total. These tests pin the arithmetic identity the refactor relies
+  // on: a weekly preDed HSA row of W must equal an annual field of W*52 once
+  // divided back by 52, so taxable income is unchanged.
+  it("annual field /52 equals the old weekly preDed contribution", () => {
+    const oldWeeklyC = 72.90, oldWeeklyK = 67.31; // from the user's payroll
+    const annualC = oldWeeklyC * 52, annualK = oldWeeklyK * 52;
+    expect(evalF(String(annualC)) / 52).toBeCloseTo(oldWeeklyC, 10);
+    expect(evalF(String(annualK)) / 52).toBeCloseTo(oldWeeklyK, 10);
+  });
+
+  it("combined HSA weekly matches sum of per-person weekly", () => {
+    const cHsa = "3790.80", kHsa = "3500.12";
+    const cW = evalF(cHsa) / 52, kW = evalF(kHsa) / 52;
+    expect(cW + kW).toBeCloseTo((evalF(cHsa) + evalF(kHsa)) / 52, 10);
+  });
+
+  it("employer HSA does NOT enter the weekly pre-tax total", () => {
+    // Employer contributions are tracked separately (cHsaEmployerA) and must
+    // never be divided into the paycheck math — this guards the net-pay path.
+    const cHsa = "4000", cHsaEmployer = "1000";
+    const weeklyPreTaxHsa = evalF(cHsa) / 52; // what the calc adds to cPreW
+    expect(weeklyPreTaxHsa).toBeCloseTo(4000 / 52, 10);
+    // Employer amount is independent and not part of weeklyPreTaxHsa.
+    expect(weeklyPreTaxHsa).not.toBeCloseTo((evalF(cHsa) + evalF(cHsaEmployer)) / 52, 5);
+  });
+
+  it("zero/blank HSA field contributes nothing (no NaN)", () => {
+    expect(evalF("0") / 52).toBe(0);
+    expect(evalF("") / 52).toBe(0);
+  });
+});

@@ -1,7 +1,7 @@
 import { Card, NI, PI, EditTxt } from "../components/ui.jsx";
 import { evalF, fmt } from "../utils/calc.js";
 
-export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, cIraTrad = "0", setCIraTrad, cIraRoth = "0", setCIraRoth, kIraTrad = "0", setKIraTrad, kIraRoth = "0", setKIraRoth, tax, upTax, preDed, setPreDed, postDed, setPostDed, C }) {
+export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, cSal, setCS, kSal, setKS, cEaip, setCE, kEaip, setKE, fil, setFil, c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro, cIraTrad = "0", setCIraTrad, cIraRoth = "0", setCIraRoth, kIraTrad = "0", setKIraTrad, kIraRoth = "0", setKIraRoth, cHsa = "0", setCHsa, kHsa = "0", setKHsa, cHsaEmployer = "0", setCHsaEmployer, kHsaEmployer = "0", setKHsaEmployer, tax, upTax, preDed, setPreDed, postDed, setPostDed, C }) {
 
   const DedEditor = ({ items, setItems, label }) => (
     <Card>
@@ -108,6 +108,35 @@ export default function IncomeTab({ mob, p1Name, setP1Name, p2Name, setP2Name, c
             </div>
             <div style={{ marginTop: 6, fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>
               Used by Forecast → Advanced to auto-fill IRA account contributions. IRS limit is shared across Traditional + Roth per person ($7,000/yr in 2026, $8,000 with age-50 catch-up).
+            </div>
+          </div>
+        </Card>
+
+        {/* ── HSA Contributions ──
+            First-class per-person ANNUAL field (was previously a string-matched
+            "HSA" row in Pre-Tax Deductions). Employee contributions are pre-tax
+            payroll — they reduce taxable income AND net pay, and the Budget tab
+            divides by 52 to show the weekly figure in Pre-Tax Savings.
+            Employer contributions are free money: they do NOT reduce net pay or
+            taxable income; they only feed the Advanced forecast balance growth
+            (wired in a later session). 2026 HSA limits: $4,400 self-only /
+            $8,750 family per household pool; +$1,000 catch-up at 55+. */}
+        <Card><h3 style={{ margin: "0 0 16px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>HSA Contributions <span style={{ fontSize: 11, fontWeight: 500, color: "#999" }}>(annual $)</span></h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#1ABC9C" }}>Employee (pre-tax payroll)</span></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name}</label><NI value={cHsa} onChange={setCHsa} prefix="$" /></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name}</label><NI value={kHsa} onChange={setKHsa} prefix="$" /></div>
+            <div style={{ gridColumn: "1/-1", borderBottom: "1px solid #eee", paddingBottom: 4, marginTop: 8 }}><span style={{ fontSize: 12, fontWeight: 700, color: "#16A085" }}>Employer contribution</span></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p1Name}</label><NI value={cHsaEmployer} onChange={setCHsaEmployer} prefix="$" /></div>
+            <div><label style={{ fontSize: 11, fontWeight: 700, color: "#999" }}>{p2Name}</label><NI value={kHsaEmployer} onChange={setKHsaEmployer} prefix="$" /></div>
+          </div>
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "var(--input-bg, #f8f8f8)", borderRadius: 8, fontSize: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div><span style={{ color: "#999" }}>{p1Name} total:</span> <strong>{fmt(evalF(cHsa) + evalF(cHsaEmployer))}</strong>/yr</div>
+              <div><span style={{ color: "#999" }}>{p2Name} total:</span> <strong>{fmt(evalF(kHsa) + evalF(kHsaEmployer))}</strong>/yr</div>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>
+              Employee contributions are pre-tax — they lower your taxable income and show as weekly amounts in the Budget tab's Pre-Tax Savings. Employer contributions are free money and don't reduce your paycheck. 2026 limit: $4,400 self-only / $8,750 family (household pool), +$1,000 at age 55+.
             </div>
           </div>
         </Card>

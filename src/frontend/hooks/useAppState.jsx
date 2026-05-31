@@ -201,6 +201,14 @@ export default function useAppState() {
   // account types so users don't have to type the same number twice.
   const [cIraTrad, setCIraTrad] = useState("0"); const [cIraRoth, setCIraRoth] = useState("0");
   const [kIraTrad, setKIraTrad] = useState("0"); const [kIraRoth, setKIraRoth] = useState("0");
+  // HSA is now a first-class per-person ANNUAL field (was a string-matched
+  // "hsa" row in preDed). Employee contributions reduce taxable income + net
+  // pay (pre-tax payroll, /52 to weekly in the calc). Employer contributions
+  // are free money — they do NOT reduce net pay or taxable income; they only
+  // feed the Advanced forecast balance (Session 2). Annual $ to mirror the IRA
+  // card per user request; BudgetTab divides by 52 for the weekly display.
+  const [cHsa, setCHsa] = useState("0"); const [kHsa, setKHsa] = useState("0");
+  const [cHsaEmployer, setCHsaEmployer] = useState("0"); const [kHsaEmployer, setKHsaEmployer] = useState("0");
   const [exp, setExp] = useState(DEF_EXP);
   const [sav, setSav] = useState(DEF_SAV);
   const [cats, setCats] = useState(DEF_CATS);
@@ -505,7 +513,7 @@ export default function useAppState() {
           legacySnapshotsField: d.snapshots !== undefined,
           reqId: res.reqId,
         });
-        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,outlierSettings:setOutlierSettings,diagnostics:setDiagnostics };
+        const m = { cSal:setCS,kSal:setKS,fil:setFil,cEaip:setCE,kEaip:setKE,preDed:setPreDed,postDed:setPostDed,c4pre:setC4pre,c4ro:setC4ro,k4pre:setK4pre,k4ro:setK4ro,cIraTrad:setCIraTrad,cIraRoth:setCIraRoth,kIraTrad:setKIraTrad,kIraRoth:setKIraRoth,cHsa:setCHsa,kHsa:setKHsa,cHsaEmployer:setCHsaEmployer,kHsaEmployer:setKHsaEmployer,exp:setExp,sav:setSav,cats:setCats,savCats:setSavCats,transferCats:setTransferCats,incomeCats:setIncomeCats,tax:setTax,sortBy:setSortBy,sortDir:setSortDir,hlThresh:setHlThresh,hlPeriod:setHlPeriod,appTitle:setAppTitle,customIcon:setCustomIcon,customTaxDB:setCustomTaxDB,milestones:setMilestones,p1Name:setP1Name,p2Name:setP2Name,transactionColumns:setTransactionColumns,importProfiles:setImportProfiles,categoryAliases:setCategoryAliases,transactionRules:setTransactionRules,rowCapWarn:setRowCapWarn,rowCapThreshold:setRowCapThreshold,hiddenColumns:setHiddenColumns,defaultTxPageSize:setDefaultTxPageSize,transferToleranceAmount:setTransferToleranceAmount,transferToleranceDays:setTransferToleranceDays,transferConfidenceThreshold:setTransferConfidenceThreshold,treatRefundsAsNetting:setTreatRefundsAsNetting,dupScanDayWindow:setDupScanDayWindow,dupScanAmountTolerance:setDupScanAmountTolerance,dupScanDescriptionMode:setDupScanDescriptionMode,dupScanFirstWordCount:setDupScanFirstWordCount,outlierSettings:setOutlierSettings,diagnostics:setDiagnostics };
         /* Skip-undefined: a saved state may have a key set explicitly to
            `undefined` from an earlier serialization quirk. Calling
            `setForecast(undefined)` would wipe the defaults; same risk for
@@ -683,7 +691,7 @@ export default function useAppState() {
       log.error("state.load.throw", { message: String(e?.message || e), reqId: e?.reqId });
     }
   })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast]);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,outlierSettings,diagnostics,forecast]);
   /* Auto-save with hash-based no-op guard.
      - Gated on `loaded` (silent-wipe fix from earlier session — don't push
        defaults if the load hasn't completed).
@@ -856,8 +864,8 @@ export default function useAppState() {
   /* ── Tax calculations ── */
   const C = useMemo(() => {
     const cs = evalF(cSal), ks = evalF(kSal), cw = cs / 52, kw = ks / 52;
-    const cPreW = preDed.reduce((s, d) => s + evalF(d.c), 0);
-    const kPreW = preDed.reduce((s, d) => s + evalF(d.k), 0);
+    const cPreW = preDed.reduce((s, d) => s + evalF(d.c), 0) + evalF(cHsa) / 52;
+    const kPreW = preDed.reduce((s, d) => s + evalF(d.k), 0) + evalF(kHsa) / 52;
     const cLim = tax.k401Lim + (tax.c401Catch || 0), kLim = tax.k401Lim + (tax.k401Catch || 0);
     const cCatchPre = (tax.c401CatchPreTax !== false) ? (tax.c401Catch || 0) : 0;
     const cCatchRo = (tax.c401CatchPreTax === false) ? (tax.c401Catch || 0) : 0;
@@ -933,8 +941,12 @@ export default function useAppState() {
     const kEaipTax = kEaipFed + kEaipSS + kEaipMc + kEaipSt + kEaipFL;
     const cEaipNet = cEaipGross - cEaipTax, kEaipNet = kEaipGross - kEaipTax;
     const eaipNet = cEaipNet + kEaipNet;
-    return { cs, ks, cw, kw, cPreW, kPreW, c4w, k4w, c4preW, k4preW, c4roW, k4roW, cIraTradW, cIraRothW, kIraTradW, kIraRothW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cPostDedW, kPostDedW, cPostSavW, kPostSavW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
-  }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip, cIraTrad, cIraRoth, kIraTrad, kIraRoth]);
+    // HSA exposed for BudgetTab display (weekly, derived from annual/52) and
+    // for the Pre-Tax Savings total. Employer values pass through for the
+    // "+ $X/yr employer" display note; they do NOT affect net pay.
+    const cHsaW = evalF(cHsa) / 52, kHsaW = evalF(kHsa) / 52;
+    return { cs, ks, cw, kw, cPreW, kPreW, cHsaW, kHsaW, cHsaEmployerA: evalF(cHsaEmployer), kHsaEmployerA: evalF(kHsaEmployer), c4w, k4w, c4preW, k4preW, c4roW, k4roW, cIraTradW, cIraRothW, kIraTradW, kIraRothW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cPostDedW, kPostDedW, cPostSavW, kPostSavW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
+  }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip, cIraTrad, cIraRoth, kIraTrad, kIraRoth, cHsa, kHsa, cHsaEmployer, kHsaEmployer]);
 
   const moC = v => v * 48 / 12, y4 = v => v * 48, y5 = v => v * 52;
   const hlW = evalF(hlThresh);
@@ -1125,6 +1137,10 @@ export default function useAppState() {
       if (fs.cIraRoth !== undefined) setCIraRoth(fs.cIraRoth);
       if (fs.kIraTrad !== undefined) setKIraTrad(fs.kIraTrad);
       if (fs.kIraRoth !== undefined) setKIraRoth(fs.kIraRoth);
+      if (fs.cHsa !== undefined) setCHsa(fs.cHsa);
+      if (fs.kHsa !== undefined) setKHsa(fs.kHsa);
+      if (fs.cHsaEmployer !== undefined) setCHsaEmployer(fs.cHsaEmployer);
+      if (fs.kHsaEmployer !== undefined) setKHsaEmployer(fs.kHsaEmployer);
       if (fs.exp) setExp(ensureIds(fs.exp)); if (fs.sav) setSav(ensureIds(fs.sav));
       if (fs.cats) setCats(fs.cats);
       if (fs.savCats) setSavCats(fs.savCats);
@@ -1159,6 +1175,10 @@ export default function useAppState() {
     if (ls.cIraRoth !== undefined) setCIraRoth(ls.cIraRoth);
     if (ls.kIraTrad !== undefined) setKIraTrad(ls.kIraTrad);
     if (ls.kIraRoth !== undefined) setKIraRoth(ls.kIraRoth);
+    if (ls.cHsa !== undefined) setCHsa(ls.cHsa);
+    if (ls.kHsa !== undefined) setKHsa(ls.kHsa);
+    if (ls.cHsaEmployer !== undefined) setCHsaEmployer(ls.cHsaEmployer);
+    if (ls.kHsaEmployer !== undefined) setKHsaEmployer(ls.kHsaEmployer);
     if (ls.exp) setExp(ensureIds(ls.exp)); if (ls.sav) setSav(ensureIds(ls.sav));
     if (ls.cats) setCats(ls.cats); if (ls.savCats) setSavCats(ls.savCats); if (ls.transferCats) setTransferCats(ls.transferCats); if (ls.incomeCats) setIncomeCats(ls.incomeCats);
     if (ls.tax) setTax(ls.tax);
@@ -1298,6 +1318,7 @@ export default function useAppState() {
     c4pre, setC4pre, c4ro, setC4ro, k4pre, setK4pre, k4ro, setK4ro,
     cIraTrad, setCIraTrad, cIraRoth, setCIraRoth,
     kIraTrad, setKIraTrad, kIraRoth, setKIraRoth,
+    cHsa, setCHsa, kHsa, setKHsa, cHsaEmployer, setCHsaEmployer, kHsaEmployer, setKHsaEmployer,
     // budget items
     exp, setExp, sav, setSav,
     cats, setCats, savCats, setSavCats, transferCats, setTransferCats, incomeCats, setIncomeCats, newCat, setNewCat,

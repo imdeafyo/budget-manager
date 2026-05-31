@@ -162,7 +162,7 @@ taxDB = taxDB.replace(
 // 2c. Generic DEF_PRE
 taxDB = taxDB.replace(
   /export const DEF_PRE = \[.*?\];/,
-  'export const DEF_PRE = [{n:"Medical",c:"0",k:"0"},{n:"Dental",c:"0",k:"0"},{n:"Vision",c:"0",k:"0"},{n:"HSA",c:"0",k:"0"}];'
+  'export const DEF_PRE = [{n:"Medical",c:"0",k:"0"},{n:"Dental",c:"0",k:"0"},{n:"Vision",c:"0",k:"0"}];'
 );
 
 // 2d. Generic state defaults
