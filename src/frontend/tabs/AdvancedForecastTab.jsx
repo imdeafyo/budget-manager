@@ -1481,10 +1481,15 @@ export default function AdvancedForecastTab({
      word and obligations shouldn't second-guess it. */
   const fireReduction = useMemo(() => {
     const yrs = Math.max(0, Math.floor(Number(horizon) || 0));
-    return fireSpendingReductionByYear(endingItems, monthlyAmountFor, baseYearMonth, yrs);
+    /* Apply payoff links first so a loan-mode obligation paid down by a
+       one-time event uses its COMPUTED post-paydown payoff date — the
+       FIRE target then steps down when the loan actually retires, not on
+       the original schedule. Same mechanism as resolvedEnding. */
+    const linkedItems = applyPayoffLinks(endingItems, oneTimeEvents, obligationDebtByYear.payoffById);
+    return fireSpendingReductionByYear(linkedItems, monthlyAmountFor, baseYearMonth, yrs);
     // monthlyAmountFor closes over exp/sav.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endingItems, exp, sav, baseYearMonth, horizon]);
+  }, [endingItems, oneTimeEvents, obligationDebtByYear.payoffById, exp, sav, baseYearMonth, horizon]);
 
   /* Today's-$ FIRE target for a given integer projection year, after
      subtracting obligations ended by that year. Reuses computeFireTarget
@@ -2516,6 +2521,16 @@ export default function AdvancedForecastTab({
                   ? computeLoanEndsOn(rolledLoanBalance, ei.annualRate, liveMonthly, baseYearMonth)
                   : { ok: false, reason: "paid-off-pre-base" };
               }
+              /* Paydown-aware payoff: if a one-time event is linked to this
+                 obligation (paying down principal), obligationDebtByYear has
+                 already computed the real post-paydown payoff date. Surface
+                 that instead of the naive computeLoanEndsOn result, which
+                 ignores lump sums. hasLinkedPaydown gates the "(after
+                 paydown)" note so unpaid loans read exactly as before. */
+              const hasLinkedPaydown = oneTimeEvents.some(
+                ev => ev && ev.linkedEndingId === ei.id && Math.abs(Number(ev.amount) || 0) > 0
+              );
+              const paydownPayoff = obligationDebtByYear.payoffById[ei.id] || null;
               const loanStaleMonths = ei.balanceAsOf
                 ? (monthsSinceAsOf(ei.balanceAsOf, baseYearMonth) || 0)
                 : 0;
@@ -3466,7 +3481,11 @@ export default function AdvancedForecastTab({
                     )}
                     {ei.mode === "loan" && !hasSubLoans && (
                       <div style={{ marginTop: 4, fontSize: 11, color: "var(--tx3,#888)" }}>
-                        {loanResult?.ok ? (
+                        {hasLinkedPaydown && paydownPayoff ? (
+                          <>Pays off: <strong style={{ color: "#27AE60" }}>{paydownPayoff}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>(after paydown)</span></>
+                        ) : hasLinkedPaydown && !paydownPayoff ? (
+                          <>Pays off: <strong style={{ color: "var(--tx3,#aaa)" }}>beyond horizon</strong> <span style={{ color: "var(--tx3,#aaa)" }}>(after paydown)</span></>
+                        ) : loanResult?.ok ? (
                           <>Pays off: <strong style={{ color: "var(--card-color,#222)" }}>{loanResult.endsOn}</strong> <span style={{ color: "var(--tx3,#aaa)" }}>({loanResult.months} mo)</span></>
                         ) : loanResult?.reason === "zero-payment" ? (
                           <span style={{ color: "#E8573A" }}>Need a non-zero monthly payment</span>
