@@ -285,6 +285,38 @@ export function yearMonthToIndex(yearMonth, baseYearMonth) {
   return (yA - yB) * 12 + (mA - mB);
 }
 
+/* Convert a base-relative month index (the output of yearMonthToIndex,
+   where index 0 == the base month) to the ABSOLUTE simulated month
+   index that the forecast loop in calc.js uses.
+
+   The loop's convention is:
+
+       absMonth = (y - 1) * 12 + m + 1   // y = loop year ≥ 1, m = 0..11
+       calendarYear = baseYear + y
+
+   i.e. loop year 0 is the entire base calendar year (starting-balance
+   snapshot, no simulation) and simulated month 1 is January of
+   baseYear + 1. yearMonthToIndex, by contrast, measures months from the
+   base month itself, so for a base of "2026-01" it maps 2027-01 → 12,
+   while the loop expects that same month at absMonth 1.
+
+   The offset between the two is a constant `baseMonth - 12` for a given
+   base (derived: absMonth - baseRelIdx = baseMonth - 12, independent of
+   the target date). Applying it here keeps yearMonthToIndex usable as a
+   general "months between two YYYY-MM" primitive while the event
+   resolvers feed the loop correctly.
+
+   Without this conversion, ending obligations (and one-time events,
+   which had the analogous bug in oneTimeEvents.js) fired a full year
+   late — a mortgage ending 2030-06 freed its cash in 2031 instead of
+   2030. */
+export function baseRelativeToLoopMonth(baseRelIdx, baseYearMonth) {
+  if (baseRelIdx == null) return null;
+  const mB = Number(String(baseYearMonth).split("-")[1]);
+  if (!isFinite(mB)) return null;
+  return baseRelIdx + (mB - 12);
+}
+
 /* Resolve a list of ending items to a flat array of monthly events
    that the forecast math layer can apply.
    ---------------------------------------------------------------
@@ -380,9 +412,12 @@ export function resolveEndingEvents(endingItems, monthlyAmountFor, baseYearMonth
       continue;
     }
 
-    /* Freed cash starts flowing the month AFTER the last payment. */
-    let fireIdx = endsOnIdx + 1;
-    if (fireIdx < 1) fireIdx = 1; // never fire at index 0 (year-0 row is starting state)
+    /* Freed cash starts flowing the month AFTER the last payment.
+       Convert from base-relative (yearMonthToIndex) to the loop's
+       absolute month index before adding 1, so the freed cash lands in
+       the correct calendar year (see baseRelativeToLoopMonth). */
+    let fireIdx = baseRelativeToLoopMonth(endsOnIdx, baseYearMonth) + 1;
+    if (fireIdx < 1) fireIdx = 1; // never fire before year-1 (year-0 row is starting state)
 
     if (fireIdx > horizonMonths) {
       outOfHorizon.push(ei);
@@ -749,7 +784,9 @@ export function fireSpendingReductionByYear(endingItems, monthlyAmountFor, baseY
     const endsOnIdx = yearMonthToIndex(ei.endsOn, baseYearMonth);
     if (endsOnIdx == null) continue;
 
-    let fireIdx = endsOnIdx + 1;
+    // Same base-relative → loop-absolute conversion as resolveEndingEvents,
+    // so the FIRE-target reduction steps down in the right calendar year.
+    let fireIdx = baseRelativeToLoopMonth(endsOnIdx, baseYearMonth) + 1;
     if (fireIdx < 1) fireIdx = 1;
     if (fireIdx > horizonMonths) continue; // out of horizon: no step within chart
 

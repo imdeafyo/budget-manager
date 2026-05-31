@@ -66,28 +66,48 @@ export function parseEventDate(dateStr) {
   return { year, month, day };
 }
 
-/* Compute absolute month index (1-indexed) from a date string and
-   a baseYear+baseMonth.
+/* Compute the absolute simulated month index for a calendar date.
 
-   Year 0 of the forecast is the starting-balance snapshot — no
-   month simulation. Month 1 = first simulated month. So an event
-   in baseYear+baseMonth itself maps to monthIndex 0 and the math
-   layer should skip it (or treat it as having already happened
-   relative to the projection start).
+   This MUST match the convention the forecast loop uses in
+   forecastGrowthAccounts (calc.js):
 
-   Examples (baseYear=2026, baseMonth=1):
-     2026-01-XX → monthIndex 0  (drop / "already happened")
-     2026-02-XX → monthIndex 1
-     2027-01-XX → monthIndex 12
-     2028-06-XX → monthIndex 29
+       absMonth = (y - 1) * 12 + m + 1   // y = loop year, m = 0..11
+       calendarYear = baseYear + y
+
+   So loop year 0 is the ENTIRE base calendar year (the starting-
+   balance snapshot — no month simulation), and simulated month 1 is
+   *January of baseYear + 1*. An event in calendar (Y, M) therefore
+   maps to:
+
+       absMonth = (Y - baseYear - 1) * 12 + M
+
+   Anything in baseYear itself (or earlier) maps to <= 0 and the
+   resolver routes it to `inPast` (the year-0 snapshot already
+   reflects "today", so a base-year event has effectively already
+   happened relative to the projection start).
+
+   `baseMonth` is accepted for signature compatibility but does NOT
+   shift the year boundary: the loop simulates full Jan–Dec calendar
+   years from baseYear+1, with no sub-year alignment to the current
+   month. (The previous implementation measured months from baseYear
+   instead of baseYear+1, which fired every event a full year late —
+   a $500k payoff dated 2035-02 landed in 2036.)
+
+   Examples (baseYear=2026):
+     2026-01-XX → monthIndex -11  (base year → drop / inPast)
+     2026-06-XX → monthIndex  -6  (base year → drop / inPast)
+     2027-01-XX → monthIndex   1  (first simulated month)
+     2027-12-XX → monthIndex  12  (end of simulated year 1)
+     2035-02-XX → monthIndex  98  (fires in calendar 2035, year 9)
+     2028-06-XX → monthIndex  18
 
    Returns null if the date string is unparseable. */
 export function eventMonthIndex(dateStr, baseYear, baseMonth = 1) {
   const parsed = parseEventDate(dateStr);
   if (!parsed) return null;
-  const yearsForward = parsed.year - baseYear;
-  const monthsForward = yearsForward * 12 + (parsed.month - baseMonth);
-  return monthsForward;
+  // Year boundary is baseYear+1 (loop year 1). baseMonth intentionally
+  // does not enter the year offset — see the doc comment above.
+  return (parsed.year - baseYear - 1) * 12 + parsed.month;
 }
 
 /* Resolve a raw event list against accounts + horizon. Returns:

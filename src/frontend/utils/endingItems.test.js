@@ -6,6 +6,7 @@ import {
   addMonths,
   computeLoanEndsOn,
   yearMonthToIndex,
+  baseRelativeToLoopMonth,
   resolveEndingEvents,
   eventsByAccount,
   findItemRefConflicts,
@@ -139,6 +140,42 @@ describe("yearMonthToIndex", () => {
   });
 });
 
+describe("baseRelativeToLoopMonth", () => {
+  /* Converts a base-relative index (yearMonthToIndex output, 0 == base
+     month) to the forecast loop's absolute month index, where simulated
+     month 1 is January of baseYear+1. The shift is baseMonth - 12. */
+
+  it("Jan of baseYear+1 maps to loop month 1", () => {
+    // 2027-01 base-rel idx 12, base 2026-01 → 12 + (1-12) = 1
+    const idx = yearMonthToIndex("2027-01", "2026-01");
+    expect(baseRelativeToLoopMonth(idx, "2026-01")).toBe(1);
+  });
+
+  it("a base-year month maps to a non-positive loop month (dropped)", () => {
+    // 2026-06 base-rel idx 5 → 5 + (1-12) = -6
+    const idx = yearMonthToIndex("2026-06", "2026-01");
+    expect(baseRelativeToLoopMonth(idx, "2026-01")).toBe(-6);
+  });
+
+  it("a far payoff maps to the correct loop month / calendar year", () => {
+    // 2035-02 base-rel idx 109 → 109 + (1-12) = 98 → ceil(98/12)=9 → 2035
+    const idx = yearMonthToIndex("2035-02", "2026-01");
+    expect(baseRelativeToLoopMonth(idx, "2026-01")).toBe(98);
+    expect(Math.ceil(98 / 12)).toBe(9);
+  });
+
+  it("respects a non-January base month", () => {
+    // base 2026-06, 2027-03 base-rel idx 9 → 9 + (6-12) = 3
+    const idx = yearMonthToIndex("2027-03", "2026-06");
+    expect(baseRelativeToLoopMonth(idx, "2026-06")).toBe(3);
+  });
+
+  it("returns null on null index or malformed base", () => {
+    expect(baseRelativeToLoopMonth(null, "2026-01")).toBeNull();
+    expect(baseRelativeToLoopMonth(5, "bogus")).toBeNull();
+  });
+});
+
 describe("resolveEndingEvents", () => {
   const horizonMonths = 240; // 20 years
   const baseYM = "2026-01";
@@ -187,16 +224,31 @@ describe("resolveEndingEvents", () => {
   });
 
   it("emits +monthlyDelta event one month AFTER endsOn", () => {
-    /* endsOn = 2028-12 (month index 35 relative to 2026-01).
-       Fire index = 35 + 1 = 36 (i.e. 2029-01, the first month freed cash flows). */
+    /* endsOn = 2028-12. Converted to the loop's absolute month index, the
+       freed cash flows the following month = Jan 2029 = absMonth 25
+       (loop year 3). The forecast loop's year 1 is baseYear+1 (2027), so
+       2028-12 sits in year 2 and the freed cash starts year 3.
+       (Pre-fix this fired at month 36 — a full year late.) */
     const item = mkItem({ endsOn: "2028-12" });
     const r = resolveEndingEvents([item], () => 450, baseYM, horizonMonths);
     expect(r.events).toHaveLength(1);
     expect(r.events[0]).toMatchObject({
       accountId: "acc_cash_joint",
-      monthIndex: 36,
+      monthIndex: 25,
       monthlyDelta: 450,
     });
+  });
+
+  it("frees cash in the correct calendar year, not a year late (regression)", () => {
+    /* A mortgage ending June 2030 should free its cash starting July 2030.
+       Pre-fix this fired ~a year late (calendar 2031). With baseYear 2026,
+       July 2030 is loop month (2030-2026-1)*12 + 7 = 43. */
+    const item = mkItem({ endsOn: "2030-06" });
+    const r = resolveEndingEvents([item], () => 2000, baseYM, horizonMonths);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].monthIndex).toBe(43);
+    // Loop year that month falls in: ceil(43/12) = 4 → calendar 2030.
+    expect(Math.ceil(r.events[0].monthIndex / 12)).toBe(4);
   });
 
   it("drops items past horizon and reports them in outOfHorizon", () => {
@@ -215,12 +267,12 @@ describe("resolveEndingEvents", () => {
 
   it("sorts events by monthIndex", () => {
     const items = [
-      mkItem({ id: "ei_a", endsOn: "2030-06" }), // fires month 54
-      mkItem({ id: "ei_b", endsOn: "2027-01" }), // fires month 13
-      mkItem({ id: "ei_c", endsOn: "2028-03" }), // fires month 27
+      mkItem({ id: "ei_a", endsOn: "2030-06" }), // fires month 43
+      mkItem({ id: "ei_b", endsOn: "2027-01" }), // fires month 2
+      mkItem({ id: "ei_c", endsOn: "2028-03" }), // fires month 16
     ];
     const r = resolveEndingEvents(items, () => 100, baseYM, horizonMonths);
-    expect(r.events.map(e => e.monthIndex)).toEqual([13, 27, 54]);
+    expect(r.events.map(e => e.monthIndex)).toEqual([2, 16, 43]);
   });
 
   it("scaffolds 'starts' as a pair of negative+positive events", () => {
@@ -230,7 +282,7 @@ describe("resolveEndingEvents", () => {
     const months = r.events.map(e => ({ idx: e.monthIndex, d: e.monthlyDelta }));
     expect(months).toEqual([
       { idx: 1, d: -300 },
-      { idx: 36, d: 300 },
+      { idx: 25, d: 300 },
     ]);
   });
 
@@ -412,7 +464,7 @@ describe("resolveEndingEvents — multi-ref (Phase 14a)", () => {
     const r = resolveEndingEvents([item], monthlyFor, baseYM, horizonMonths);
     expect(r.events).toHaveLength(1);
     expect(r.events[0].monthlyDelta).toBe(2000);
-    expect(r.events[0].monthIndex).toBe(36); // 2028-12 → fire at 2029-01
+    expect(r.events[0].monthIndex).toBe(25); // 2028-12 → fire at 2029-01 (loop year 3)
     expect(r.events[0].accountId).toBe("acc_taxable");
     expect(r.orphaned).toEqual([]);
   });
@@ -486,7 +538,7 @@ describe("resolveEndingEvents — multi-ref (Phase 14a)", () => {
     const r = resolveEndingEvents([item], () => 450, baseYM, horizonMonths);
     expect(r.events).toHaveLength(1);
     expect(r.events[0].monthlyDelta).toBe(450);
-    expect(r.events[0].monthIndex).toBe(36);
+    expect(r.events[0].monthIndex).toBe(25);
   });
 
   it("monthlyAmountFor is invoked once per ref in itemRefs", () => {
@@ -533,7 +585,7 @@ describe("resolveEndingEvents — multi-ref (Phase 14a)", () => {
     const summary = r.events.map(e => ({ idx: e.monthIndex, d: e.monthlyDelta }));
     expect(summary).toEqual([
       { idx: 1, d: -500 },
-      { idx: 36, d: 500 },
+      { idx: 25, d: 500 },
     ]);
   });
 });
@@ -1007,7 +1059,8 @@ describe("fireSpendingReductionByYear", () => {
   });
 
   it("a $2000/mo expense ending 2028-12 reduces annual spend by $24k from year 3 on", () => {
-    // endsOn 2028-12 → idx = (2028-2026)*12 + (12-1) = 35; fireIdx = 36; ceil(36/12)=3
+    // endsOn 2028-12 → base-rel idx 35 → loop absMonth 24 → fireIdx 25 →
+    // ceil(25/12)=3. Freed cash flows from Jan 2029 (loop year 3).
     const r = fireSpendingReductionByYear([mkItem()], () => 2000, baseYM, years);
     expect(r.reductionByYear[0]).toBe(0);
     expect(r.reductionByYear[1]).toBe(0);
@@ -1055,7 +1108,7 @@ describe("fireSpendingReductionByYear", () => {
 
   it("stacks multiple obligations ending at different years", () => {
     const a = mkItem({ id: "ei_a", endsOn: "2028-12" }); // frees year 3
-    const b = mkItem({ id: "ei_b", endsOn: "2034-12" }); // idx=107, fire=108, ceil=9
+    const b = mkItem({ id: "ei_b", endsOn: "2034-12" }); // frees year 9
     const r = fireSpendingReductionByYear([a, b], () => 1000, baseYM, years);
     expect(r.reductionByYear[2]).toBe(0);
     expect(r.reductionByYear[3]).toBe(12000);   // only A
