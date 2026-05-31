@@ -914,7 +914,6 @@ export default function AdvancedForecastTab({
      loan retires. */
   const obligationDebtByYear = useMemo(() => {
     const horizonMonths = (Number(horizon) || 0) * 12;
-    const resolvedById = new Map(resolvedOneTime.events.map(e => [e.id, e]));
     const loanObligations = endingItems.filter(ei => ei && ei.mode === "loan");
     return aggregateObligationDebt(loanObligations, {
       baseYearMonth,
@@ -943,11 +942,23 @@ export default function AdvancedForecastTab({
       },
       lumpSumsFor: (ei) => {
         const lumps = [];
+        const [byStr, bmStr] = baseYearMonth.split("-");
+        const bY = Number(byStr), bM = Number(bmStr);
         for (const ev of oneTimeEvents) {
           if (!ev || ev.linkedEndingId !== ei.id) continue;
-          const resolved = resolvedById.get(ev.id);
-          const mi = resolved ? resolved.monthIndex : eventMonthIndex(ev.date, baseYear, 1);
-          if (mi == null || mi < 0 || mi > horizonMonths) continue;
+          /* debtPrincipalByMonth indexes months from the BASE MONTH
+             (index 0 = base, k = after k monthly steps), which is a
+             different convention from the forecast loop's resolved
+             monthIndex (1 = Jan of baseYear+1). Compute the engine index
+             straight from the event date so the two never diverge:
+                engineIdx = (Y - baseYear)*12 + (M - baseMonth)
+             A past/base-month event clamps to 0 (paid down immediately). */
+          const m = /^(\d{4})-(\d{1,2})/.exec(ev.date || "");
+          if (!m) continue;
+          const evY = Number(m[1]), evM = Number(m[2]);
+          let mi = (evY - bY) * 12 + (evM - bM);
+          if (mi < 0) mi = 0;
+          if (mi > horizonMonths) continue;
           const amt = Math.abs(Number(ev.amount) || 0);
           if (amt > 0) lumps.push({ monthIndex: mi, amount: amt });
         }
