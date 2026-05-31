@@ -5,7 +5,7 @@ import { fmt, fmtCompact, evalF, forecastGrowthAccounts, yearsToHitPoolLimit, ca
 import { actualAnnualContribution } from "../utils/forecastActuals.js";
 import { getPoolLimit, ACCOUNT_TYPE_TO_POOL, defaultForecastAccounts } from "../data/taxDB.js";
 import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, applyPayoffLinks, aggregateObligationDebt, findItemRefConflicts, resolveItemRef, rollForwardBalance, debtPrincipalByMonth, addMonths, monthsSinceAsOf, routedTotalsBySubLoan, reducesFire, fireSpendingReductionByYear } from "../utils/endingItems.js";
-import { resolveSubLoanGroup } from "../utils/subLoans.js";
+import { resolveSubLoanGroup, aggregateSubLoanBalances } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear, eventMonthIndex } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
 import { firstHsaAccountByOwner as computeFirstHsaByOwner, resolveHsaContribution, hsaShareSumByOwner, isHsaType } from "../utils/hsaAllocation.js";
@@ -914,8 +914,10 @@ export default function AdvancedForecastTab({
      loan retires. */
   const obligationDebtByYear = useMemo(() => {
     const horizonMonths = (Number(horizon) || 0) * 12;
-    const loanObligations = endingItems.filter(ei => ei && ei.mode === "loan");
-    return aggregateObligationDebt(loanObligations, {
+    const yMax = Number(horizon) || 0;
+    // Single-loan obligations (no sub-loans) via the pure aggregator.
+    const singleLoans = endingItems.filter(ei => ei && ei.mode === "loan" && !(Array.isArray(ei.subLoans) && ei.subLoans.length > 0));
+    const result = aggregateObligationDebt(singleLoans, {
       baseYearMonth,
       horizonMonths,
       monthlyFor: (ei) => {
@@ -965,6 +967,36 @@ export default function AdvancedForecastTab({
         return lumps;
       },
     });
+
+    /* Sub-loan obligations: the aggregator skips them (their balance is the
+       sum of their sub-loans). Fold each one in here using the same
+       sub-loan group resolution the row UI uses. Lump-sum paydowns against
+       sub-loan groups aren't modeled yet — these contribute their natural
+       combined amortization. The per-month combined balance comes from
+       aggregateSubLoanBalances; we sample it at each year boundary. */
+    const subLoanObligations = endingItems.filter(ei => ei && ei.mode === "loan" && Array.isArray(ei.subLoans) && ei.subLoans.length > 0);
+    for (const ei of subLoanObligations) {
+      const resolved = resolveSubLoanGroup(ei.subLoans, ei.graduation || { enabled: false }, baseYearMonth);
+      if (!resolved || resolved.anyError) continue;
+      const agg = aggregateSubLoanBalances(resolved);
+      // perMonth[i] = balance after month i. Year y end = month y*12.
+      // Year 0 = sum of starting balances (perMonth[0] is after 1 month, so
+      // use the sub-loan starting balances directly for the left edge).
+      const y0Total = ei.subLoans.reduce((s, sl) => s + (Number(sl.balance) || 0), 0);
+      for (let y = 0; y <= yMax; y++) {
+        let bal;
+        if (y === 0) bal = y0Total;
+        else {
+          const row = agg.perMonth[y * 12 - 1]; // month index y*12 → array idx y*12-1
+          bal = row ? row.total : 0;
+        }
+        result.byYear[y].perLoan[ei.id] = bal;
+        result.byYear[y].total += bal;
+      }
+      if (resolved.groupEndsOn) result.payoffById[ei.id] = resolved.groupEndsOn;
+    }
+
+    return result;
     // monthlyAmountFor closes over exp/sav.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endingItems, oneTimeEvents, resolvedOneTime.events, exp, sav, baseYearMonth, baseYear, horizon]);
