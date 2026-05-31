@@ -632,10 +632,22 @@ export default function AdvancedForecastTab({
      rolled-forward value (the common steady state). */
   useEffect(() => {
     if (!Array.isArray(endingItems) || endingItems.length === 0) return;
+    /* Obligations currently claimed by a payoff event: their end date is
+       owned by the linked event (applyPayoffLinks overrides it), so the
+       loan-mode auto-recompute must NOT fight it. Skipping them here keeps
+       the stored loan fields (balance/rate/mode) intact so that unlinking
+       cleanly restores the natural loan payoff date — no race with the
+       override, no stale frame. */
+    const payoffLinkedIds = new Set(
+      (Array.isArray(oneTimeEvents) ? oneTimeEvents : [])
+        .filter(ev => ev && ev.linkedEndingId)
+        .map(ev => ev.linkedEndingId)
+    );
     const updates = [];
     for (const ei of endingItems) {
       if (!ei || typeof ei !== "object") continue;
       if (ei.mode !== "loan") continue;
+      if (payoffLinkedIds.has(ei.id)) continue; // payoff event owns this date
       if (Array.isArray(ei.subLoans) && ei.subLoans.length > 0) continue; // sub-loan path handled elsewhere
       if (!baseYearMonth) continue;
 
@@ -678,7 +690,7 @@ export default function AdvancedForecastTab({
     });
     // monthlyAmountFor closes over exp/sav.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endingItems, exp, sav, baseYearMonth]);
+  }, [endingItems, oneTimeEvents, exp, sav, baseYearMonth]);
   const addEndingItem = () => {
     /* Default destination: the first taxable/cash account in the list,
        or any non-capped account, or the first account overall. The user
@@ -3461,152 +3473,126 @@ export default function AdvancedForecastTab({
             No one-time events configured. Click <strong>+ Add</strong> to model a planned cash event.
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "var(--input-bg,#f8f8f8)" }}>
-                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Date</th>
-                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Label</th>
-                  <th style={{ padding: 8, textAlign: "right", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Amount</th>
-                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)" }}>Account</th>
-                  <th style={{ padding: 8, textAlign: "left", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }} title="Optionally link this event to an ending obligation. When linked, this event's date becomes that obligation's end date — the freed monthly payment starts right after the payoff. Set the date once here; the obligation follows.">Pays off</th>
-                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}>Status</th>
-                  <th style={{ padding: 8, textAlign: "center", fontWeight: 700, color: "var(--tx3,#888)", borderBottom: "1px solid var(--bdr,#ddd)", whiteSpace: "nowrap" }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {oneTimeEvents.map(ev => {
-                  /* Per-row status — derived from the resolved arrays so the
-                     row reflects what the math layer will actually do with it. */
-                  const inEvents = resolvedOneTime.events.some(e => e.id === ev.id);
-                  const inOrphans = resolvedOneTime.orphans.find(e => e.id === ev.id);
-                  const inPast = resolvedOneTime.inPast.some(e => e.id === ev.id);
-                  const outHz = resolvedOneTime.outOfHorizon.some(e => e.id === ev.id);
-                  let status = "Active";
-                  let statusColor = "#27AE60";
-                  if (inOrphans) {
-                    status = inOrphans.reason === "bad-date" ? "Bad date" : "No account";
-                    statusColor = "#C0392B";
-                  } else if (inPast) {
-                    status = "In past";
-                    statusColor = "#888";
-                  } else if (outHz) {
-                    status = "Past horizon";
-                    statusColor = "#888";
-                  } else if (!inEvents) {
-                    /* Catch-all — shouldn't happen but defensive */
-                    status = "Inactive";
-                    statusColor = "#888";
-                  }
-                  return (
-                    <tr key={ev.id} style={{ borderBottom: "1px solid var(--bdr,#f0f0f0)" }}>
-                      <td style={{ padding: 6 }}>
-                        <input
-                          type="date"
-                          value={ev.date || ""}
-                          onChange={(e) => updateOneTimeEvent(ev.id, { date: e.target.value })}
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 140 }}
-                        />
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        <input
-                          type="text"
-                          value={ev.label || ""}
-                          onChange={(e) => updateOneTimeEvent(ev.id, { label: e.target.value })}
-                          placeholder="e.g. car down payment"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", minWidth: 140 }}
-                        />
-                      </td>
-                      <td style={{ padding: 6, textAlign: "right" }}>
-                        {/* Native numeric input, commits on every change.
-                            We deliberately don't use the shared NI here:
-                            NI only commits on blur, and mobile browsers
-                            (iOS Safari especially) don't always fire blur
-                            when the user dismisses the keyboard or taps a
-                            non-input area. That caused the entered amount
-                            to silently stay at 0 in state — "doesn't seem
-                            to change FIRE" symptom. inputMode="decimal"
-                            also gets the numeric keyboard on mobile. */}
-                        <input
-                          type="number"
-                          inputMode="decimal"
-                          step="any"
-                          value={ev.amount === 0 ? "" : ev.amount}
-                          onChange={(e) => {
-                            const raw = e.target.value;
-                            const n = raw === "" || raw === "-" ? 0 : Number(raw);
-                            updateOneTimeEvent(ev.id, { amount: Number.isFinite(n) ? n : 0 });
-                          }}
-                          placeholder="$ amount"
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: 130, textAlign: "right" }}
-                        />
-                      </td>
-                      <td style={{ padding: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {oneTimeEvents.map(ev => {
+              /* Per-row status — derived from the resolved arrays so the
+                 row reflects what the math layer will actually do with it. */
+              const inEvents = resolvedOneTime.events.some(e => e.id === ev.id);
+              const inOrphans = resolvedOneTime.orphans.find(e => e.id === ev.id);
+              const inPast = resolvedOneTime.inPast.some(e => e.id === ev.id);
+              const outHz = resolvedOneTime.outOfHorizon.some(e => e.id === ev.id);
+              let status = "Active";
+              let statusColor = "#27AE60";
+              if (inOrphans) {
+                status = inOrphans.reason === "bad-date" ? "Bad date" : "No account";
+                statusColor = "#C0392B";
+              } else if (inPast) {
+                status = "In past";
+                statusColor = "#888";
+              } else if (outHz) {
+                status = "Past horizon";
+                statusColor = "#888";
+              } else if (!inEvents) {
+                status = "Inactive";
+                statusColor = "#888";
+              }
+              const fieldLabel = { fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 3, display: "block" };
+              const inputStyle = { fontSize: 12, padding: "5px 7px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", width: "100%", boxSizing: "border-box" };
+              const endsObligations = endingItems.filter(ei => ei && (ei.effect ?? "ends") === "ends");
+              const labelForEi = (ei) => {
+                const refs = getItemRefs(ei);
+                const names = refs.map(r => r.name).filter(Boolean);
+                return names.length ? names.join(" + ") : "(unlinked obligation)";
+              };
+              const claimedByOther = (eiId) => oneTimeEvents.some(o => o.id !== ev.id && o.linkedEndingId === eiId);
+              return (
+                <div key={ev.id} style={{ border: "1px solid var(--bdr,#e6e6e6)", borderRadius: 8, padding: 10, background: "var(--input-bg,#fafafa)" }}>
+                  {/* Fields flow with flex-wrap: they sit side by side when
+                      there's width, and stack vertically when there isn't —
+                      no horizontal scroll. Each field has a minWidth so it
+                      wraps to the next line rather than shrinking illegibly. */}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
+                    <div style={{ flex: "1 1 120px", minWidth: 120 }}>
+                      <label style={fieldLabel}>Date</label>
+                      <input
+                        type="date"
+                        value={ev.date || ""}
+                        onChange={(e) => updateOneTimeEvent(ev.id, { date: e.target.value })}
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div style={{ flex: "2 1 160px", minWidth: 140 }}>
+                      <label style={fieldLabel}>Label</label>
+                      <input
+                        type="text"
+                        value={ev.label || ""}
+                        onChange={(e) => updateOneTimeEvent(ev.id, { label: e.target.value })}
+                        placeholder="e.g. car down payment"
+                        style={inputStyle}
+                      />
+                    </div>
+                    <div style={{ flex: "1 1 120px", minWidth: 110 }}>
+                      <label style={fieldLabel}>Amount</label>
+                      {/* Native numeric input commits on every change (NI's
+                          blur-only commit drops values on mobile). */}
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        value={ev.amount === 0 ? "" : ev.amount}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const n = raw === "" || raw === "-" ? 0 : Number(raw);
+                          updateOneTimeEvent(ev.id, { amount: Number.isFinite(n) ? n : 0 });
+                        }}
+                        placeholder="$ amount"
+                        style={{ ...inputStyle, textAlign: "right" }}
+                      />
+                    </div>
+                    <div style={{ flex: "1 1 140px", minWidth: 130 }}>
+                      <label style={fieldLabel}>Account</label>
+                      <select
+                        value={ev.accountId || ""}
+                        onChange={(e) => updateOneTimeEvent(ev.id, { accountId: e.target.value })}
+                        style={inputStyle}
+                      >
+                        <option value="">— pick —</option>
+                        {accounts.map(a => (
+                          <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ flex: "1 1 150px", minWidth: 140 }}>
+                      <label style={fieldLabel} title="Link to an ending obligation to set its end date from this event's date — the freed monthly payment starts right after the payoff.">Pays off</label>
+                      {endsObligations.length === 0 ? (
+                        <div style={{ fontSize: 11, color: "var(--tx3,#bbb)", fontStyle: "italic", padding: "6px 0" }}>no obligations yet</div>
+                      ) : (
                         <select
-                          value={ev.accountId || ""}
-                          onChange={(e) => updateOneTimeEvent(ev.id, { accountId: e.target.value })}
-                          style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 140 }}
+                          value={ev.linkedEndingId || ""}
+                          onChange={(e) => updateOneTimeEvent(ev.id, { linkedEndingId: e.target.value || undefined })}
+                          style={inputStyle}
                         >
-                          <option value="">— pick —</option>
-                          {accounts.map(a => (
-                            <option key={a.id} value={a.id}>{deriveAccountName(a, p1Name, p2Name)}</option>
+                          <option value="">— none —</option>
+                          {endsObligations.map(ei => (
+                            <option key={ei.id} value={ei.id} disabled={claimedByOther(ei.id)}>
+                              {labelForEi(ei)}{claimedByOther(ei.id) ? " (linked)" : ""}
+                            </option>
                           ))}
                         </select>
-                      </td>
-                      <td style={{ padding: 6 }}>
-                        {/* Early-payoff link. Lists user-facing ("ends")
-                            obligations, labeled by their linked budget
-                            item(s). Selecting one overrides that
-                            obligation's end date to this event's date —
-                            handled by applyPayoffLinks before resolution.
-                            Obligations already linked by a DIFFERENT event
-                            are disabled to steer toward one-payoff-per-
-                            obligation (applyPayoffLinks still resolves any
-                            collision by earliest date, defensively). */}
-                        {(() => {
-                          const endsObligations = endingItems.filter(ei => ei && (ei.effect ?? "ends") === "ends");
-                          if (endsObligations.length === 0) {
-                            return <span style={{ fontSize: 11, color: "var(--tx3,#bbb)", fontStyle: "italic" }}>none yet</span>;
-                          }
-                          const labelFor = (ei) => {
-                            const refs = getItemRefs(ei);
-                            const names = refs.map(r => r.name).filter(Boolean);
-                            return names.length ? names.join(" + ") : "(unlinked obligation)";
-                          };
-                          const claimedByOther = (eiId) =>
-                            oneTimeEvents.some(o => o.id !== ev.id && o.linkedEndingId === eiId);
-                          return (
-                            <select
-                              value={ev.linkedEndingId || ""}
-                              onChange={(e) => updateOneTimeEvent(ev.id, { linkedEndingId: e.target.value || undefined })}
-                              title="Link to an ending obligation to set its end date from this event's date."
-                              style={{ fontSize: 12, padding: "4px 6px", border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fff)", color: "var(--card-color,#222)", minWidth: 150 }}
-                            >
-                              <option value="">— none —</option>
-                              {endsObligations.map(ei => (
-                                <option key={ei.id} value={ei.id} disabled={claimedByOther(ei.id)}>
-                                  {labelFor(ei)}{claimedByOther(ei.id) ? " (linked)" : ""}
-                                </option>
-                              ))}
-                            </select>
-                          );
-                        })()}
-                      </td>
-                      <td style={{ padding: 6, textAlign: "center", fontSize: 11, color: statusColor, fontWeight: 600 }}>
-                        {status}
-                      </td>
-                      <td style={{ padding: 6, textAlign: "center" }}>
-                        <button
-                          onClick={() => removeOneTimeEvent(ev.id)}
-                          title="Delete event"
-                          style={{ padding: "2px 8px", fontSize: 12, fontWeight: 700, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--input-bg,#fafafa)", color: "#C0392B", cursor: "pointer" }}
-                        >×</button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      )}
+                    </div>
+                    <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 10, paddingBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, whiteSpace: "nowrap" }}>{status}</span>
+                      <button
+                        onClick={() => removeOneTimeEvent(ev.id)}
+                        title="Delete event"
+                        style={{ padding: "4px 10px", fontSize: 13, fontWeight: 700, border: "1px solid var(--bdr,#ddd)", borderRadius: 4, background: "var(--card-bg,#fff)", color: "#C0392B", cursor: "pointer" }}
+                      >×</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
         {/* Underwater warning — placed at the SOURCE of the problem (the
