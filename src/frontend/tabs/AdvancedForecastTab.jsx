@@ -3725,7 +3725,15 @@ export default function AdvancedForecastTab({
                           updateOneTimeEvent(ev.id, { amount: Number.isFinite(n) ? n : 0 });
                         }}
                         placeholder="$ amount"
-                        style={{ ...inputStyle, textAlign: "right" }}
+                        style={{
+                          ...inputStyle,
+                          textAlign: "right",
+                          /* Red for outflows (negative), green for inflows
+                             (positive), neutral for empty/zero. Makes the
+                             sign obvious at a glance. */
+                          color: ev.amount < 0 ? "#C0392B" : ev.amount > 0 ? "#1E8449" : inputStyle.color,
+                          fontWeight: ev.amount !== 0 ? 600 : 400,
+                        }}
                       />
                     </div>
                     <div style={{ flex: "1 1 140px", minWidth: 130 }}>
