@@ -94,3 +94,99 @@ describe("resolveHsaContribution — double-count fix", () => {
     expect(resolveHsaContribution(joint[1], 8000, fm)).toBe(0);
   });
 });
+
+import { hasShare, ownerUsesShareMode, hsaShareSumByOwner } from "./hsaAllocation.js";
+
+describe("hasShare", () => {
+  it("treats blank/null/undefined/NaN as unset", () => {
+    expect(hasShare("")).toBe(false);
+    expect(hasShare(null)).toBe(false);
+    expect(hasShare(undefined)).toBe(false);
+    expect(hasShare("abc")).toBe(false);
+  });
+  it("treats finite numbers (incl. 0) as set", () => {
+    expect(hasShare(0)).toBe(true);
+    expect(hasShare(60)).toBe(true);
+    expect(hasShare("40")).toBe(true);
+  });
+});
+
+describe("ownerUsesShareMode", () => {
+  it("false when no HSA account for owner has a share", () => {
+    const accts = [{ id: "a", owner: "p1", type: "hsa_cash" }, { id: "b", owner: "p1", type: "hsa_invested" }];
+    expect(ownerUsesShareMode(accts, "p1")).toBe(false);
+  });
+  it("true when any HSA account for owner has a share", () => {
+    const accts = [{ id: "a", owner: "p1", type: "hsa_cash", hsaShare: 70 }, { id: "b", owner: "p1", type: "hsa_invested" }];
+    expect(ownerUsesShareMode(accts, "p1")).toBe(true);
+  });
+  it("scoped per owner", () => {
+    const accts = [{ id: "a", owner: "p1", type: "hsa_cash", hsaShare: 50 }, { id: "b", owner: "p2", type: "hsa_cash" }];
+    expect(ownerUsesShareMode(accts, "p2")).toBe(false);
+  });
+});
+
+describe("resolveHsaContribution — percent split mode", () => {
+  const accounts = [
+    { id: "cash", owner: "p1", type: "hsa_cash", hsaShare: 60 },
+    { id: "inv", owner: "p1", type: "hsa_invested", hsaShare: 40 },
+  ];
+  const firstMap = firstHsaAccountByOwner(accounts);
+
+  it("allocates ownerTotal × share% per account", () => {
+    expect(resolveHsaContribution(accounts[0], 5000, firstMap, accounts)).toBe(3000);
+    expect(resolveHsaContribution(accounts[1], 5000, firstMap, accounts)).toBe(2000);
+  });
+  it("split sums to the owner total when shares sum to 100", () => {
+    const a = resolveHsaContribution(accounts[0], 5000, firstMap, accounts);
+    const b = resolveHsaContribution(accounts[1], 5000, firstMap, accounts);
+    expect(a + b).toBe(5000);
+  });
+  it("a sibling with no share set gets 0 in share mode", () => {
+    const mixed = [
+      { id: "cash", owner: "p1", type: "hsa_cash", hsaShare: 100 },
+      { id: "inv", owner: "p1", type: "hsa_invested" }, // no share
+    ];
+    const fm = firstHsaAccountByOwner(mixed);
+    expect(resolveHsaContribution(mixed[0], 4000, fm, mixed)).toBe(4000);
+    expect(resolveHsaContribution(mixed[1], 4000, fm, mixed)).toBe(0);
+  });
+  it("under-sum leaves the remainder unallocated (literal, no rescale)", () => {
+    const under = [
+      { id: "cash", owner: "p1", type: "hsa_cash", hsaShare: 50 },
+      { id: "inv", owner: "p1", type: "hsa_invested", hsaShare: 30 },
+    ];
+    const fm = firstHsaAccountByOwner(under);
+    const a = resolveHsaContribution(under[0], 1000, fm, under);
+    const b = resolveHsaContribution(under[1], 1000, fm, under);
+    expect(a).toBe(500);
+    expect(b).toBe(300);
+    expect(a + b).toBe(800); // 20% ($200) unallocated, by design
+  });
+  it("falls back to legacy 100%-to-first when allAccounts omitted", () => {
+    // Back-compat: old call signature without the accounts arg.
+    expect(resolveHsaContribution(accounts[0], 5000, firstMap)).toBe(5000);
+    expect(resolveHsaContribution(accounts[1], 5000, firstMap)).toBe(0);
+  });
+  it("zero owner total still returns null even in share mode", () => {
+    expect(resolveHsaContribution(accounts[0], 0, firstMap, accounts)).toBeNull();
+  });
+});
+
+describe("hsaShareSumByOwner", () => {
+  it("sums shares per owner and counts contributing accounts", () => {
+    const accts = [
+      { id: "a", owner: "p1", type: "hsa_cash", hsaShare: 60 },
+      { id: "b", owner: "p1", type: "hsa_invested", hsaShare: 40 },
+      { id: "c", owner: "p2", type: "hsa_cash", hsaShare: 100 },
+    ];
+    expect(hsaShareSumByOwner(accts)).toEqual({ p1: { sum: 100, count: 2 }, p2: { sum: 100, count: 1 } });
+  });
+  it("ignores accounts without a share (legacy owners absent)", () => {
+    const accts = [
+      { id: "a", owner: "p1", type: "hsa_cash" },
+      { id: "b", owner: "p2", type: "hsa_cash", hsaShare: 90 },
+    ];
+    expect(hsaShareSumByOwner(accts)).toEqual({ p2: { sum: 90, count: 1 } });
+  });
+});

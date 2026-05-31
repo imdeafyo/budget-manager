@@ -8,7 +8,7 @@ import { newEndingItemId, getItemRefs, computeLoanEndsOn, resolveEndingEvents, f
 import { resolveSubLoanGroup } from "../utils/subLoans.js";
 import { newOneTimeEventId, resolveOneTimeEvents, monthIndexToChartYear } from "../utils/oneTimeEvents.js";
 import { resolveLoans, aggregateDebt } from "../utils/loans.js";
-import { firstHsaAccountByOwner as computeFirstHsaByOwner, resolveHsaContribution } from "../utils/hsaAllocation.js";
+import { firstHsaAccountByOwner as computeFirstHsaByOwner, resolveHsaContribution, hsaShareSumByOwner, isHsaType } from "../utils/hsaAllocation.js";
 import { computeFireTarget, extractMixFromProjection } from "../utils/fireTarget.js";
 
 /* ── Account type display metadata ──
@@ -1142,6 +1142,24 @@ export default function AdvancedForecastTab({
      accounts are bucketed under a "joint" key (legacy default behavior). */
   const firstHsaAccountByOwner = useMemo(() => computeFirstHsaByOwner(accounts), [accounts]);
 
+  /* Per-owner HSA split warnings: when an owner has set explicit shares on
+     their HSA accounts but those shares don't sum to ~100%, surface it. Only
+     owners actually using share mode (count > 0) are checked; legacy
+     100%-to-first owners are silent. Small float tolerance so 33.33×3 passes. */
+  const hsaShareWarnings = useMemo(() => {
+    const sums = hsaShareSumByOwner(accounts);
+    const ownerName = o => o === "joint" ? "Joint" : o === "p1" ? p1Name : p2Name;
+    const out = [];
+    for (const owner of Object.keys(sums)) {
+      const { sum, count } = sums[owner];
+      if (count === 0) continue;
+      if (Math.abs(sum - 100) > 0.5) {
+        out.push({ owner, name: ownerName(owner), sum, count });
+      }
+    }
+    return out;
+  }, [accounts, p1Name, p2Name]);
+
   const autoContribFor = (a) => {
     if (a.owner === "p1") {
       if (a.type === "401k_pretax") {
@@ -1163,7 +1181,7 @@ export default function AdvancedForecastTab({
       if (a.type === "ira_traditional") return cIraTradNum > 0 ? cIraTradNum : null;
       if (a.type === "ira_roth")        return cIraRothNum > 0 ? cIraRothNum : null;
       if (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa") {
-        return resolveHsaContribution(a, hsaAnnualByOwner.p1, firstHsaAccountByOwner);
+        return resolveHsaContribution(a, hsaAnnualByOwner.p1, firstHsaAccountByOwner, accounts);
       }
     }
     if (a.owner === "p2") {
@@ -1176,7 +1194,7 @@ export default function AdvancedForecastTab({
       if (a.type === "ira_traditional") return kIraTradNum > 0 ? kIraTradNum : null;
       if (a.type === "ira_roth")        return kIraRothNum > 0 ? kIraRothNum : null;
       if (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa") {
-        return resolveHsaContribution(a, hsaAnnualByOwner.p2, firstHsaAccountByOwner);
+        return resolveHsaContribution(a, hsaAnnualByOwner.p2, firstHsaAccountByOwner, accounts);
       }
     }
     /* Joint HSA accounts: lump everything into "cash" by default. The user
@@ -1212,7 +1230,7 @@ export default function AdvancedForecastTab({
     // Guard against zero so existing manual amounts aren't silently wiped.
     if (a.owner === "joint" && (a.type === "hsa_cash" || a.type === "hsa_invested" || a.type === "hsa")) {
       // Joint HSA: route the full household total to the first joint HSA account.
-      return resolveHsaContribution(a, hsaTotalAnnual, firstHsaAccountByOwner);
+      return resolveHsaContribution(a, hsaTotalAnnual, firstHsaAccountByOwner, accounts);
     }
     /* Cash account contribution source — four "budget" variants and three
        "actual" windows besides manual:
@@ -2043,6 +2061,35 @@ export default function AdvancedForecastTab({
                         </select>
                       </div>
                     )}
+                    {/* HSA split share — percent of this owner's total HSA
+                        (employee + employer) that lands in THIS account. Only
+                        meaningful when the account is auto-filled from the
+                        Income HSA fields. Leaving every HSA account's share
+                        blank keeps the default "100% to the first account"
+                        behavior; setting a share on any of an owner's HSA
+                        accounts switches that owner to explicit-split mode,
+                        where blank siblings get 0. The per-owner warning below
+                        the accounts table fires if the shares don't sum to
+                        100%. */}
+                    {isHSA && (
+                      <div>
+                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.5 }}
+                          title="Percent of this owner's total annual HSA (employee + employer) to put in this account. Leave blank on all of an owner's HSA accounts to send 100% to the first one. The shares for one owner should add up to 100%.">
+                          Split Share % <span style={{ textTransform: "none", fontWeight: 500, color: "var(--tx3,#aaa)" }}>(blank = auto)</span>
+                        </label>
+                        <NI
+                          value={a.hsaShare === undefined || a.hsaShare === null ? "" : String(a.hsaShare)}
+                          onChange={(v, raw) => {
+                            // Blank clears the share (back to default mode for
+                            // this account); a number stores the percent.
+                            const src = (raw ?? v ?? "").toString().trim();
+                            updateAccount(a.id, { hsaShare: src === "" ? undefined : evalF(v) });
+                          }}
+                          onBlurResolve
+                          prefix="%"
+                        />
+                      </div>
+                    )}
                     {/* Per-person match-lump toggle, only shown on 401k_match accounts */}
                     {isMatchAcct && (a.owner === "p1" || a.owner === "p2") && setTax && (
                       <div style={{ gridColumn: "1/-1", padding: "8px 10px", background: matchLumpForOwner ? "#E8F4F8" : "var(--input-bg,#f8f8f8)", border: matchLumpForOwner ? "1px solid #B3D9E0" : "1px solid var(--bdr,#eee)", borderRadius: 6 }}>
@@ -2139,6 +2186,19 @@ export default function AdvancedForecastTab({
             </div>
           );
         })()}
+        {hsaShareWarnings.length > 0 && (
+          <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(232,87,58,0.08)", border: "1px solid rgba(232,87,58,0.35)", borderRadius: 8, fontSize: 12, color: "var(--tx2,#555)" }}>
+            <strong style={{ color: "#E8573A" }}>⚠ HSA split doesn't add up to 100%</strong>
+            <div style={{ marginTop: 4 }}>
+              {hsaShareWarnings.map(w => (
+                <div key={w.owner}>{w.name}'s HSA shares total {Math.round(w.sum * 10) / 10}% across {w.count} account{w.count === 1 ? "" : "s"}. {w.sum < 100 ? `${Math.round((100 - w.sum) * 10) / 10}% of the HSA total won't be allocated to any account.` : `That's ${Math.round((w.sum - 100) * 10) / 10}% more than the HSA total — accounts will be over-funded.`}</div>
+              ))}
+            </div>
+            <div style={{ marginTop: 6, fontSize: 10, color: "var(--tx3,#888)", fontStyle: "italic" }}>
+              Set each HSA account's Split Share % so an owner's shares sum to 100%, or clear them all to send 100% to the first account.
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* ── Ending Obligations (Phase X-A) ──
