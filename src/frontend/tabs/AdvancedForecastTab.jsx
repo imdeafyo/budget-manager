@@ -981,9 +981,55 @@ export default function AdvancedForecastTab({
     const subLoanObligations = endingItems.filter(ei => ei && ei.mode === "loan" && Array.isArray(ei.subLoans) && ei.subLoans.length > 0);
     const [byStrSL, bmStrSL] = baseYearMonth.split("-");
     const bYSL = Number(byStrSL), bMSL = Number(bmStrSL);
+    /* Collected so the UI can warn instead of silently dropping a loan.
+       Each entry: { obligationId, obligationLabel, subLoanLabel, reason }.
+       A reason of "all-failed" means the whole obligation produced no
+       projectable tranche (its debt curve would be flat/absent). */
+    const subLoanWarnings = [];
+    const reasonText = {
+      "zero-balance": "balance is zero or negative",
+      "no-payment": "no monthly payment entered",
+      "negative-amortization": "payment doesn't cover the interest (balance never falls)",
+      "paid-off-pre-base": "already paid off before the forecast start",
+      "negative-rate": "interest rate is negative",
+      "horizon-exceeded": "doesn't pay off within the forecast horizon",
+    };
     for (const ei of subLoanObligations) {
       const resolved = resolveSubLoanGroup(ei.subLoans, ei.graduation || { enabled: false }, baseYearMonth);
-      if (!resolved || resolved.anyError) continue;
+      if (!resolved) continue;
+
+      /* Don't bail the whole obligation when ONE sub-loan errors — that
+         silently hides the valid tranches' debt from the curve. Keep the
+         good ones (aggregateSubLoanBalances already filters to ok:true)
+         and surface each failure as a warning. Only when EVERY tranche
+         failed is there nothing to project. */
+      const okSubLoans = resolved.results.filter(r => r && r.ok);
+      const failedSubLoans = resolved.results.filter(r => r && !r.ok);
+      const eiLabel = (() => {
+        const refs = getItemRefs(ei);
+        const names = refs.map(r => r.name).filter(Boolean);
+        return names.length ? names.join(" + ") : "(unlinked obligation)";
+      })();
+      for (const f of failedSubLoans) {
+        subLoanWarnings.push({
+          obligationId: ei.id,
+          obligationLabel: eiLabel,
+          subLoanLabel: f.label || "(unnamed)",
+          reason: reasonText[f.reason] || f.reason || "could not be projected",
+        });
+      }
+      if (okSubLoans.length === 0) {
+        // Nothing projectable; flag the whole obligation and skip the curve.
+        if (failedSubLoans.length === 0) {
+          subLoanWarnings.push({
+            obligationId: ei.id,
+            obligationLabel: eiLabel,
+            subLoanLabel: null,
+            reason: "no sub-loans could be projected",
+          });
+        }
+        continue;
+      }
 
       /* Lump-sum paydowns from one-time events linked to THIS obligation
          (same linkedEndingId match + engine-index math the single-loan
@@ -1008,14 +1054,18 @@ export default function AdvancedForecastTab({
       // perMonth is keyed "after month i" (index i = engine month i+1), so
       // shift each lump's engine index down by one for the aggregator.
       const aggLumps = lumps.map(l => ({ monthIndex: Math.max(0, l.monthIndex - 1), amount: l.amount }));
+      // Year-0 left edge: only the VALID tranches' starting balances (a
+      // failed tranche contributes nothing to the projected curve), minus
+      // any lump landing at the base month.
+      const okIds = new Set(okSubLoans.map(r => r.id));
       const lumpAtBase = lumps.reduce((s, l) => s + (l.monthIndex <= 0 ? l.amount : 0), 0);
 
       const agg = aggregateSubLoanBalances(resolved, { lumpSums: aggLumps });
       // perMonth[i] = balance after month i. Year y end = month y*12.
-      // Year 0 = sum of starting balances (perMonth[0] is after 1 month, so
-      // use the sub-loan starting balances directly for the left edge),
-      // minus any lump that lands at the base month.
-      const y0Total = Math.max(0, ei.subLoans.reduce((s, sl) => s + (Number(sl.balance) || 0), 0) - lumpAtBase);
+      // Year 0 = sum of valid sub-loan starting balances (perMonth[0] is
+      // after 1 month, so use starting balances directly for the left
+      // edge), minus any lump that lands at the base month.
+      const y0Total = Math.max(0, ei.subLoans.reduce((s, sl) => s + (okIds.has(sl.id) ? (Number(sl.balance) || 0) : 0), 0) - lumpAtBase);
       for (let y = 0; y <= yMax; y++) {
         let bal;
         if (y === 0) bal = y0Total;
@@ -1036,6 +1086,7 @@ export default function AdvancedForecastTab({
         result.payoffById[ei.id] = resolved.groupEndsOn;
       }
     }
+    result.subLoanWarnings = subLoanWarnings;
 
     return result;
     // monthlyAmountFor closes over exp/sav.
@@ -2466,6 +2517,31 @@ export default function AdvancedForecastTab({
           <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#92400E", background: "rgba(243,156,18,0.12)", border: "1px solid rgba(243,156,18,0.35)", borderRadius: 6 }}>
             ⚠ {endingItemConflicts.length} budget item{endingItemConflicts.length === 1 ? " is" : "s are"} referenced by multiple ending obligations.
             Only one obligation per budget line is supported — please remove duplicates below.
+          </div>
+        )}
+
+        {/* Sub-loan projection warnings — a sub-loan that can't amortize
+            (no payment, payment below interest, zero balance, etc.) used to
+            silently vanish from the debt curve, and if it was the only
+            tranche it took the whole obligation with it. We now project the
+            valid tranches and flag the broken ones here so a misconfigured
+            sub-loan can't quietly disappear from the forecast. */}
+        {obligationDebtByYear.subLoanWarnings && obligationDebtByYear.subLoanWarnings.length > 0 && (
+          <div style={{ padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#6B2C1F", background: "#FBEAE7", border: "1px solid #E8B5A8", borderRadius: 6 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              ⚠ {obligationDebtByYear.subLoanWarnings.length} sub-loan{obligationDebtByYear.subLoanWarnings.length === 1 ? "" : "s"} couldn't be projected
+            </div>
+            <div style={{ fontSize: 11, marginBottom: 8, color: "#8A4A3F" }}>
+              These tranches are left out of the debt curve. Any valid tranches in the same obligation still project — fix the entries below so the forecast reflects the full balance.
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11 }}>
+              {obligationDebtByYear.subLoanWarnings.map((w, i) => (
+                <li key={`${w.obligationId}-${i}`} style={{ marginBottom: 2 }}>
+                  <strong>{w.obligationLabel}</strong>
+                  {w.subLoanLabel ? <> — sub-loan “{w.subLoanLabel}”</> : null}: {w.reason}.
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
