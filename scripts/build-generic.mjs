@@ -265,22 +265,32 @@ const saveHelperCode = `
 `;
 
 // ── Marker-based injection ──
-// App.jsx carries stable /* @generic:* */ marker comments at each injection
-// point. We replace the marker with the generated code. Markers don't drift
-// when props/refs get renamed, unlike the old string-literal anchors (a rename
-// of headerRef→iconRef silently dropped the save handler and shipped a 💾
-// button calling an undefined variable). Every marker is asserted present up
-// front so a missing one fails the CI build loudly instead of shipping broken.
+// App.jsx carries stable marker comments at each injection point. We replace
+// the *entire* marker (including its surrounding JSX braces for the in-JSX
+// ones) with the generated code. Markers don't drift when props/refs get
+// renamed, unlike the old string-literal anchors (a rename of
+// headerRef→iconRef silently dropped the save handler and shipped a 💾 button
+// calling an undefined variable).
+//
+// IMPORTANT: keys must be the FULL literal as it appears in App.jsx. The JSX
+// markers are written `{/* @generic:x */}` — the braces ARE the JSX-expression
+// wrapper, so the replacement must consume them too. Replacing only the inner
+// `/* ... */` would leave the braces behind and produce `{{...}}`, a syntax
+// error. The helpers marker is a plain JS block comment in the component body
+// (no braces), so its replacement is brace-free.
 
 const MARKERS = {
+  // JS comment in component body — inject handler definitions.
   "/* @generic:helpers */": saveHelperCode,
-  "/* @generic:save-btn */":
+  // JSX comment inside the existing theme-button <div> — inject a bare element.
+  "{/* @generic:save-btn */}":
     `<button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>`,
-  "/* @generic:clear-btn */":
+  // JSX comment at tab-block level — inject a full {cond && <div>…</div>} block.
+  "{/* @generic:clear-btn */}":
     `{S.tab === "taxes" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", textAlign: "center" }}>
           <button onClick={handleClearAll} style={{ background: "#dc3545", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>🗑 Clear All Data</button>
         </div>}`,
-  "/* @generic:json-btns */":
+  "{/* @generic:json-btns */}":
     `{S.tab === "charts" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           <button onClick={handleExportJSON} style={{ background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>📤 Export JSON</button>
           <button onClick={handleImportJSON} style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>📥 Import JSON</button>
@@ -299,13 +309,21 @@ for (const [marker, code] of Object.entries(MARKERS)) {
   app = app.replace(marker, code);
 }
 
-// Safety net: no generic handler should be referenced without being defined.
+// Safety net 1: no generic handler should be referenced without being defined.
 for (const fn of ["handleSaveHTML", "handleClearAll", "handleExportJSON", "handleImportJSON"]) {
   const defined = app.includes(`const ${fn} =`);
   const used = app.includes(`onClick={${fn}}`);
   if (used && !defined) {
     throw new Error(`build-generic: ${fn} is used but never defined — injection markers out of sync.`);
   }
+}
+
+// Safety net 2: no marker (or stray double-brace from a bad replace) survives.
+if (app.includes("@generic:")) {
+  throw new Error("build-generic: an @generic marker survived replacement — keys out of sync with App.jsx.");
+}
+if (app.includes("{{S.tab")) {
+  throw new Error("build-generic: produced `{{S.tab` (double-brace) — a marker key omitted its JSX braces.");
 }
 
 write(appFile, app);
