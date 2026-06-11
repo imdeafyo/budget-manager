@@ -67,6 +67,7 @@ class ErrorBoundary extends Component {
 function App() {
   const S = useAppState();
   const iconRef = useRef(null);
+  /* @generic:helpers */ // build-generic.mjs injects save/clear/export handlers here
 
   // Tab badge: count of transactions with no category. Mirrors the in-tab
   // counter on the Transactions toolbar (`!t.category`) so both readouts
@@ -119,6 +120,7 @@ function App() {
               <button onClick={() => S.setDarkMode("light")} style={{ padding: "5px 10px", background: !S.dk && !S.waf ? "#E8573A" : "rgba(255,255,255,0.1)", color: !S.dk && !S.waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>☀️</button>
               <button onClick={() => S.setDarkMode("dark")} style={{ padding: "5px 10px", background: S.dk ? "#F2A93B" : "rgba(255,255,255,0.1)", color: S.dk ? "#1a1a1a" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌙</button>
               <button onClick={() => S.setDarkMode("waf")} style={{ padding: "5px 10px", background: S.waf ? "#c96b70" : "rgba(255,255,255,0.1)", color: S.waf ? "#fff" : "#888", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>🌸</button>
+              {/* @generic:save-btn */}
             </div>
           </div>
           <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #444", overflowX: "auto" }}>
@@ -164,6 +166,7 @@ function App() {
 
         {/* ═══ TAX RATES ═══ */}
         {S.tab === "taxes" && <TaxRatesTab mob={S.mob} tax={S.tax} upTax={S.upTax} upP1State={S.upP1State} upP2State={S.upP2State} setTax={S.setTax} p1Name={S.p1Name} p2Name={S.p2Name} fil={S.fil} C={S.C} allTaxDB={S.allTaxDB} loadTaxYear={S.loadTaxYear} showTaxPaste={S.showTaxPaste} setShowTaxPaste={S.setShowTaxPaste} taxPaste={S.taxPaste} setTaxPaste={S.setTaxPaste} addTaxYear={S.addTaxYear} fetchStatus={S.fetchStatus} setFetchStatus={S.setFetchStatus} />}
+        {/* @generic:clear-btn */}
 
         {/* ═══ INCOME ═══ */}
         {S.tab === "settings" && <IncomeTab mob={S.mob} p1Name={S.p1Name} setP1Name={S.setP1Name} p2Name={S.p2Name} setP2Name={S.setP2Name} cSal={S.cSal} setCS={S.setCS} kSal={S.kSal} setKS={S.setKS} cEaip={S.cEaip} setCE={S.setCE} kEaip={S.kEaip} setKE={S.setKE} fil={S.fil} setFil={S.setFil} c4pre={S.c4pre} setC4pre={S.setC4pre} c4ro={S.c4ro} setC4ro={S.setC4ro} k4pre={S.k4pre} setK4pre={S.setK4pre} k4ro={S.k4ro} setK4ro={S.setK4ro} cIraTrad={S.cIraTrad} setCIraTrad={S.setCIraTrad} cIraRoth={S.cIraRoth} setCIraRoth={S.setCIraRoth} kIraTrad={S.kIraTrad} setKIraTrad={S.setKIraTrad} kIraRoth={S.kIraRoth} setKIraRoth={S.setKIraRoth} cHsa={S.cHsa} setCHsa={S.setCHsa} kHsa={S.kHsa} setKHsa={S.setKHsa} cHsaEmployer={S.cHsaEmployer} setCHsaEmployer={S.setCHsaEmployer} kHsaEmployer={S.kHsaEmployer} setKHsaEmployer={S.setKHsaEmployer} tax={S.tax} upTax={S.upTax} preDed={S.preDed} setPreDed={S.setPreDed} postDed={S.postDed} setPostDed={S.setPostDed} C={S.C} />}
@@ -221,6 +224,7 @@ function App() {
 
         {/* ═══ CHARTS — Trends subtab (default) ═══ */}
         {S.tab === "charts" && S.chartsSubtab === "trends" && <ChartsTab mob={S.mob} C={S.C} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} milestones={S.milestones} setMilestones={S.setMilestones} cSal={S.cSal} kSal={S.kSal} cEaip={S.cEaip} kEaip={S.kEaip} fil={S.fil} preDed={S.preDed} postDed={S.postDed} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} exp={S.exp} sav={S.sav} cats={S.cats} savCats={S.savCats} transferCats={S.transferCats} transactions={S.transactions} ewk={S.ewk} savSorted={S.savSorted} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} totalSavPlusRemW={S.totalSavPlusRemW} savRateBase={S.savRateBase} setSavRateBase={S.setSavRateBase} includeEaip={S.includeEaip} setIncludeEaip={S.setIncludeEaip} chartWeeks={S.chartWeeks} setChartWeeks={S.setChartWeeks} chartTimeWindow={S.chartTimeWindow} setChartTimeWindow={S.setChartTimeWindow} catTot={S.catTot} typTot={S.typTot} PieTooltip={S.PieTooltip} dragWrapRender={S.dragWrapRender} chartOrder={S.chartOrder} necDisMode={S.necDisMode} setNecDisMode={S.setNecDisMode} catHistMode={S.catHistMode} setCatHistMode={S.setCatHistMode} itemHistMode={S.itemHistMode} setItemHistMode={S.setItemHistMode} catHistoryName={S.catHistoryName} setCatHistoryName={S.setCatHistoryName} itemHistoryName={S.itemHistoryName} setItemHistoryName={S.setItemHistoryName} st={S.st} restoreLiveState={S.restoreLiveState} />}
+        {/* @generic:json-btns */}
 
         {/* ═══ CHARTS — Forecast subtab (was top-level Forecast tab pre-restructure) ═══ */}
         {S.tab === "charts" && S.chartsSubtab === "forecast" && <ForecastTab mob={S.mob} C={S.C} tSavW={S.tSavW} remW={S.remW} tExpW={S.tExpW} totalSavPlusRemW={S.totalSavPlusRemW} includeEaip={S.includeEaip} transactions={S.transactions} cats={S.cats} savCats={S.savCats} transferCats={S.transferCats} incomeCats={S.incomeCats} preDed={S.preDed} hsaEmployerMatchAnnual={S.tax?.hsaEmployerMatch || 0} forecast={S.forecast} setForecast={S.setForecast} tax={S.tax} setTax={S.setTax} p1Name={S.p1Name} p2Name={S.p2Name} cSal={S.cSal} kSal={S.kSal} c4pre={S.c4pre} c4ro={S.c4ro} k4pre={S.k4pre} k4ro={S.k4ro} />}
