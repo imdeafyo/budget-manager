@@ -264,38 +264,49 @@ const saveHelperCode = `
   };
 `;
 
-// Insert after "const headerRef = useRef(null);"
-app = app.replace(
-  'const headerRef = useRef(null);',
-  'const headerRef = useRef(null);' + saveHelperCode
-);
+// ── Marker-based injection ──
+// App.jsx carries stable /* @generic:* */ marker comments at each injection
+// point. We replace the marker with the generated code. Markers don't drift
+// when props/refs get renamed, unlike the old string-literal anchors (a rename
+// of headerRef→iconRef silently dropped the save handler and shipped a 💾
+// button calling an undefined variable). Every marker is asserted present up
+// front so a missing one fails the CI build loudly instead of shipping broken.
 
-// 4b. Add 💾 button in the header (after the 🌸 theme button)
-app = app.replace(
-  `>🌸</button>\n            </div>`,
-  `>🌸</button>
-              <button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>
-            </div>`
-);
-
-// 4c. Add 🗑 Clear All button on Tax Rates page (after the TaxRatesTab />})
-app = app.replace(
-  `setFetchStatus={S.setFetchStatus} />}`,
-  `setFetchStatus={S.setFetchStatus} />}
-        {S.tab === "taxes" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", textAlign: "center" }}>
+const MARKERS = {
+  "/* @generic:helpers */": saveHelperCode,
+  "/* @generic:save-btn */":
+    `<button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>`,
+  "/* @generic:clear-btn */":
+    `{S.tab === "taxes" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", textAlign: "center" }}>
           <button onClick={handleClearAll} style={{ background: "#dc3545", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>🗑 Clear All Data</button>
-        </div>}`
-);
-
-// 4d. Add JSON export/import buttons on Charts tab (after the ChartsTab />})
-app = app.replace(
-  `restoreFullState={S.restoreFullState} />}`,
-  `restoreFullState={S.restoreFullState} />}
-        {S.tab === "charts" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+        </div>}`,
+  "/* @generic:json-btns */":
+    `{S.tab === "charts" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
           <button onClick={handleExportJSON} style={{ background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>📤 Export JSON</button>
           <button onClick={handleImportJSON} style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>📥 Import JSON</button>
-        </div>}`
-);
+        </div>}`,
+};
+
+// Assert all markers present before mutating anything.
+const missing = Object.keys(MARKERS).filter((m) => !app.includes(m));
+if (missing.length) {
+  throw new Error(
+    `build-generic: App.jsx is missing required injection marker(s): ${missing.join(", ")}. ` +
+      `Re-add the marker comment(s) in src/frontend/App.jsx.`
+  );
+}
+for (const [marker, code] of Object.entries(MARKERS)) {
+  app = app.replace(marker, code);
+}
+
+// Safety net: no generic handler should be referenced without being defined.
+for (const fn of ["handleSaveHTML", "handleClearAll", "handleExportJSON", "handleImportJSON"]) {
+  const defined = app.includes(`const ${fn} =`);
+  const used = app.includes(`onClick={${fn}}`);
+  if (used && !defined) {
+    throw new Error(`build-generic: ${fn} is used but never defined — injection markers out of sync.`);
+  }
+}
 
 write(appFile, app);
 
