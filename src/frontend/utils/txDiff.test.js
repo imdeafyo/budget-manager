@@ -86,3 +86,46 @@ describe("diffChangedTransactions", () => {
     expect(diffChangedTransactions([], next).map(t => t.id)).toEqual(["a"]);
   });
 });
+
+describe("rule sweep with overrideExisting (the 'all rows already categorized' case)", () => {
+  // Mirrors the real failure: every row had a category, so the default
+  // no-clobber sweep changed nothing. Override lets rules correct categories
+  // while leaving non-matching rows untouched.
+  const rule = {
+    id: "r1", enabled: true, match: "all",
+    conditions: [{ field: "description", operator: "contains", value: "AMAZON" }],
+    action: { type: "set_category", value: "Shopping" },
+  };
+
+  it("overwrites a wrong existing category on match, leaves non-matches alone", () => {
+    const prev = [
+      tx({ id: "a", description: "AMAZON.COM SEATTLE", category: "Uncategorized" }),
+      tx({ id: "b", description: "AMAZON MKTPLACE", category: "Shopping" }),
+      tx({ id: "c", description: "SHELL OIL", category: "Gas" }),
+    ];
+    const { transactions: next } = applyRulesToAll(prev, [rule], { overrideExisting: true });
+    expect(next.find(t => t.id === "a").category).toBe("Shopping"); // corrected
+    expect(next.find(t => t.id === "b").category).toBe("Shopping"); // unchanged value
+    expect(next.find(t => t.id === "c").category).toBe("Gas");      // untouched (no match)
+  });
+
+  it("diff reports only rows whose category actually changed", () => {
+    const prev = [
+      tx({ id: "a", description: "AMAZON.COM", category: "Uncategorized" }),
+      tx({ id: "b", description: "AMAZON.CO", category: "Shopping" }),
+      tx({ id: "c", description: "SHELL", category: "Gas" }),
+    ];
+    const { transactions: next } = applyRulesToAll(prev, [rule], { overrideExisting: true });
+    // Only 'a' changed value; 'b' re-set to same value; 'c' never matched.
+    expect(diffChangedTransactions(prev, next).map(t => t.id)).toEqual(["a"]);
+  });
+
+  it("default sweep (no override) changes nothing when all rows are categorized", () => {
+    const prev = [
+      tx({ id: "a", description: "AMAZON.COM", category: "Uncategorized" }),
+      tx({ id: "b", description: "SHELL", category: "Gas" }),
+    ];
+    const { transactions: next } = applyRulesToAll(prev, [rule]); // overrideExisting defaults false
+    expect(diffChangedTransactions(prev, next)).toEqual([]);
+  });
+});

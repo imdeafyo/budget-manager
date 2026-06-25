@@ -1097,11 +1097,14 @@ export default function TransactionsTab(props) {
           onSaveRule={(rule, applyToExisting) => {
             setTransactionRules(prev => [...prev, rule]);
             if (applyToExisting) {
-              // Sweep all transactions and apply the new rule only (don't clobber existing).
+              // Apply the new rule to all matching rows, overwriting any
+              // existing category (a new rule should be able to correct rows
+              // that were previously categorized differently). Non-matching
+              // rows are left alone.
               const skipId = pendingCategorize.tx.id; // already categorized manually above
               const next = transactions.map(t => {
                 if (t.id === skipId) return t;
-                const { tx: updated, matchedRuleIds } = applyRulesToTransaction(t, [rule]);
+                const { tx: updated, matchedRuleIds } = applyRulesToTransaction(t, [rule], { overrideExisting: true });
                 return matchedRuleIds.length ? updated : t;
               });
               (bulkUpdateTransactions || setTransactions)(next);

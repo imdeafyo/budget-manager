@@ -806,17 +806,28 @@ function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionC
     if (!rules.length || !setTransactions) return;
     const enabled = rules.filter(r => r.enabled);
     if (!enabled.length) { alert("No enabled rules to run."); return; }
-    const msg = `Apply ${enabled.length} enabled rule${enabled.length === 1 ? "" : "s"} across ${transactions.length.toLocaleString()} transactions? Manually-categorized rows won't be overwritten.`;
+    const msg = `Apply ${enabled.length} enabled rule${enabled.length === 1 ? "" : "s"} across ${transactions.length.toLocaleString()} transactions?\n\nRows whose conditions match a rule get that rule's category — overwriting a different existing category. Rows that match no rule are left unchanged.`;
     if (!confirm(msg)) return;
-    const { transactions: updated, stats } = applyRulesToAll(transactions, enabled);
+    // overrideExisting: a matching rule sets its category even when the row
+    // already has one (so rules can CORRECT categories, not just fill blanks).
+    // Non-matching rows are untouched.
+    const { transactions: updated, stats } = applyRulesToAll(transactions, enabled, { overrideExisting: true });
+    // Count rows whose category/custom actually changed, not just rows a rule
+    // "fired" on (a rule re-setting the same value isn't a real change).
+    const prevById = new Map(transactions.map(t => [t.id, t]));
+    const changedCount = updated.reduce((n, t) => {
+      const before = prevById.get(t.id);
+      return n + (before && JSON.stringify(before) !== JSON.stringify(t) ? 1 : 0);
+    }, 0);
     (bulkUpdateTransactions || setTransactions)(updated);
     log.info("rules.applyAll", {
       enabledRules: enabled.length,
       totalRules: rules.length,
       transactions: transactions.length,
       matched: stats.matched,
+      changed: changedCount,
     });
-    setSweepResult({ matched: stats.matched, total: transactions.length });
+    setSweepResult({ matched: changedCount, total: transactions.length });
     setTimeout(() => setSweepResult(null), 6000);
   };
 
@@ -830,7 +841,7 @@ function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionC
         </button>
         {sweepResult && (
           <span style={{ fontSize: 12, color: "#2ECC71", fontWeight: 600 }}>
-            ✓ {sweepResult.matched.toLocaleString()} of {sweepResult.total.toLocaleString()} rows matched
+            ✓ {sweepResult.matched.toLocaleString()} of {sweepResult.total.toLocaleString()} rows changed
           </span>
         )}
       </div>
