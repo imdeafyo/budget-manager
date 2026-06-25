@@ -298,6 +298,11 @@ export default function useAppState() {
      rowCapWarn / rowCapThreshold: user-configurable warning when tx count gets large
      hiddenColumns: ids of built-in or custom columns hidden from the table (toggle-able) */
   const [transactions, setTransactions] = useState([]);
+  // Always-current mirror of `transactions` so async helpers (bulk update,
+  // saves) can diff/read the live array without depending on a setState
+  // updater running synchronously. Same pattern as stRef for generic saves.
+  const transactionsRef = useRef(transactions);
+  useEffect(() => { transactionsRef.current = transactions; }, [transactions]);
   const [transactionColumns, setTransactionColumns] = useState([]);
   const [importProfiles, setImportProfiles] = useState([]);
   const [categoryAliases, setCategoryAliases] = useState({});
@@ -893,16 +898,12 @@ export default function useAppState() {
      (which holds transactions) so we only need to update local state. */
   const bulkUpdateTransactions = useCallback(async (next) => {
     if (!Array.isArray(next)) return;
-    let changed = [];
-    setTransactions(prev => {
-      // Diff inside the updater so we compare against the freshest state and
-      // avoid a stale-closure read of `transactions`.
-      changed = diffChangedTransactions(prev, next);
-      return next;
-    });
+    // Diff against the live ref BEFORE updating state — does not depend on the
+    // setState updater running synchronously (it isn't guaranteed to).
+    const changed = diffChangedTransactions(transactionsRef.current, next);
+    transactionsRef.current = next;
+    setTransactions(next);
     if (MODE === "deploy") {
-      // setTransactions' updater runs synchronously, so `changed` is populated
-      // by the time we get here.
       if (!changed.length) { log.info("tx.bulkUpdate", { count: 0 }); return; }
       try {
         const res = await apiFetch("/api/transactions", {
