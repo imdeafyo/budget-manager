@@ -55,6 +55,7 @@
    downstream UI can default to "keep the earliest, delete the rest." */
 
 import { isMarkedTransfer } from "./transfers.js";
+import { isExcludedDuplicate } from "./exclusions.js";
 
 /* ── Description normalization ──
    Lowercase, collapse whitespace, strip leading/trailing punctuation. Used
@@ -152,6 +153,8 @@ export function scanForDuplicates(transactions, opts = {}) {
   const rows = transactions.filter(tx => {
     if (!tx) return false;
     if (isMarkedTransfer(tx)) return false;
+    // Already-excluded duplicates shouldn't resurface in a fresh scan.
+    if (isExcludedDuplicate(tx)) return false;
     if (!tx.date) return false;
     if (typeof tx.amount !== "number" || !isFinite(tx.amount)) return false;
     return true;

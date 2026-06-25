@@ -44,7 +44,7 @@
 
 import { toWk } from "./calc.js";
 import { netCategorySpend, refundTotals } from "./refunds.js";
-import { isMarkedTransfer } from "./transfers.js";
+import { isExcludedFromTotals } from "./exclusions.js";
 import { categoryContribution } from "./splits.js";
 
 export const UNCATEGORIZED = "__uncategorized__"; // sentinel key for unmatched tx
@@ -261,7 +261,7 @@ export function actualsByCategory(transactions, opts = {}) {
   const uncategorized = { count: 0, total: 0 };
 
   for (const tx of transactions || []) {
-    if (!tx || isMarkedTransfer(tx)) continue;
+    if (!tx || isExcludedFromTotals(tx)) continue;
     const contrib = categoryContribution(tx);
     if (contrib.size === 0) {
       // No category at all — whole row is uncategorized.
@@ -324,7 +324,7 @@ export function sumIncome(transactions, opts = {}) {
 
   let total = 0;
   for (const tx of transactions) {
-    if (!tx || isMarkedTransfer(tx)) continue;
+    if (!tx || isExcludedFromTotals(tx)) continue;
     const contrib = categoryContribution(tx);
     for (const [cat, amt] of contrib) {
       if (!incomeCategorySet.has(cat)) continue;
@@ -387,7 +387,7 @@ export function compareBudgetToActual(opts) {
   // rows are dropped here too — they're money coming in, not spending.
   const inRange = filterByDateRange(transactions, fromIso, toIso).filter(tx => {
     if (!tx) return false;
-    if (isMarkedTransfer(tx)) return false;
+    if (isExcludedFromTotals(tx)) return false;
     // A row's primary category being a transfer-only category = skip
     if (tx.category && xferSet.has(tx.category)) return false;
     // Income categories are excluded from spending/savings comparison
@@ -550,7 +550,7 @@ export function monthlyBuckets(opts) {
   // Same top-level row filter as the bar chart: drop transfers + income rows.
   const scopedRows = (transactions || []).filter(tx => {
     if (!tx) return false;
-    if (isMarkedTransfer(tx)) return false;
+    if (isExcludedFromTotals(tx)) return false;
     if (tx.category && xferSet.has(tx.category)) return false;
     if (tx.category && incSet.has(tx.category)) return false;
     return true;

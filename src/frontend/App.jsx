@@ -267,6 +267,7 @@ function App() {
           dupScanDescriptionMode={S.dupScanDescriptionMode}
           dupScanFirstWordCount={S.dupScanFirstWordCount}
           dupScanCrossAccount={S.dupScanCrossAccount}
+          showExcludedDuplicates={S.showExcludedDuplicates}
           outlierSettings={S.outlierSettings}
           defaultTxPageSize={S.defaultTxPageSize}
           txLoaded={S.txLoaded}
@@ -314,6 +315,8 @@ function App() {
           setDupScanFirstWordCount={S.setDupScanFirstWordCount}
           dupScanCrossAccount={S.dupScanCrossAccount}
           setDupScanCrossAccount={S.setDupScanCrossAccount}
+          showExcludedDuplicates={S.showExcludedDuplicates}
+          setShowExcludedDuplicates={S.setShowExcludedDuplicates}
           outlierSettings={S.outlierSettings}
           setOutlierSettings={S.setOutlierSettings}
           diagnostics={S.diagnostics}

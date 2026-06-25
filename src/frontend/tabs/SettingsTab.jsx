@@ -91,6 +91,8 @@ export default function SettingsTab(props) {
     dupScanFirstWordCount = 2,
     dupScanCrossAccount = false,
     setDupScanCrossAccount,
+    showExcludedDuplicates = false,
+    setShowExcludedDuplicates,
     setDupScanFirstWordCount,
     outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
     setOutlierSettings,
@@ -148,6 +150,27 @@ export default function SettingsTab(props) {
       if (!t.custom_fields?._transfer_dismissed) return t;
       const cf = { ...t.custom_fields };
       delete cf._transfer_dismissed;
+      return { ...t, custom_fields: cf };
+    }));
+  };
+
+  /* ── Excluded duplicates ──
+     Rows the user excluded (rather than deleted) from the duplicate scan.
+     They're hidden from the Transactions list and dropped from all totals.
+     This count + the un-exclude button give a reversible escape hatch. */
+  const excludedDupCount = useMemo(
+    () => transactions.reduce((n, t) => n + (t.custom_fields?._is_duplicate ? 1 : 0), 0),
+    [transactions]
+  );
+
+  const unExcludeAllDuplicates = () => {
+    if (!excludedDupCount) return;
+    if (!confirm(`Restore ${excludedDupCount} excluded duplicate${excludedDupCount === 1 ? "" : "s"}?\n\nThey'll reappear in the Transactions list and count toward spending/budget totals again.`)) return;
+    const apply = bulkUpdateTransactions || setTransactions;
+    apply(transactions.map(t => {
+      if (!t.custom_fields?._is_duplicate) return t;
+      const cf = { ...t.custom_fields };
+      delete cf._is_duplicate;
       return { ...t, custom_fields: cf };
     }));
   };
@@ -472,6 +495,31 @@ export default function SettingsTab(props) {
               </span>
             </span>
           </label>
+        </div>
+
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--tx, #333)", cursor: "pointer" }}>
+            <input type="checkbox" checked={!!showExcludedDuplicates}
+              onChange={e => setShowExcludedDuplicates && setShowExcludedDuplicates(e.target.checked)}
+              style={{ marginTop: 3 }} />
+            <span>
+              <strong>Show excluded duplicates</strong>
+              <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)" }}>
+                When you "Exclude" rather than delete duplicates in the scan, those rows stay in your data but are
+                hidden from the Transactions list and removed from all spending, budget, and chart totals. Turn this
+                on to see them in the list again (they stay excluded from totals either way).
+                {excludedDupCount > 0
+                  ? ` You currently have ${excludedDupCount} excluded duplicate${excludedDupCount === 1 ? "" : "s"}.`
+                  : " You have no excluded duplicates right now."}
+              </span>
+            </span>
+          </label>
+          {excludedDupCount > 0 && (
+            <button onClick={unExcludeAllDuplicates}
+              style={{ marginTop: 10, marginLeft: 26, fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #f5f5f5)", color: "var(--tx, #333)", cursor: "pointer" }}>
+              Restore all {excludedDupCount} excluded duplicate{excludedDupCount === 1 ? "" : "s"}
+            </button>
+          )}
         </div>
       </CollapsibleCard>
 

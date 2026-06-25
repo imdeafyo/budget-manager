@@ -57,7 +57,7 @@
 
 import { isIncomeTx, incomeContribution } from "./income.js";
 import { netCategorySpend } from "./refunds.js";
-import { isMarkedTransfer } from "./transfers.js";
+import { isExcludedFromTotals } from "./exclusions.js";
 
 /* Build a yyyy-mm-dd ISO string for `daysBack` days before `todayIso`. */
 function shiftDays(todayIso, daysBack) {
@@ -169,7 +169,7 @@ export function actualAnnualContribution(opts) {
 
   // Drop transfer rows up front — neither side counts.
   const inWindow = filterToWindow(transactions, fromIso, todayIso)
-    .filter(tx => tx && !isMarkedTransfer(tx));
+    .filter(tx => tx && !isExcludedFromTotals(tx));
 
   if (inWindow.length === 0) return null;
 

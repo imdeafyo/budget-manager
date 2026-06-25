@@ -22,6 +22,7 @@ import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/b
 import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
 import { scanForDuplicates } from "../utils/duplicateScan.js";
+import { applyExclusions, isExcludedDuplicate, unmarkExcludedDuplicate } from "../utils/exclusions.js";
 import { detectOutliers } from "../utils/outliers.js";
 import ImportModal from "../components/ImportModal.jsx";
 import log from "../utils/log.js";
@@ -57,6 +58,7 @@ export default function TransactionsTab(props) {
     dupScanDescriptionMode = "exact",
     dupScanFirstWordCount = 2,
     dupScanCrossAccount = false,
+    showExcludedDuplicates = false,
     outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
     txLoaded,
   } = props;
@@ -210,7 +212,10 @@ export default function TransactionsTab(props) {
 
   // Sorted + filtered rows
   const visibleRows = useMemo(() => {
-    const filtered = applyFilters(transactions, {
+    const base = showExcludedDuplicates
+      ? transactions
+      : transactions.filter(t => !isExcludedDuplicate(t));
+    const filtered = applyFilters(base, {
       dateFrom, dateTo, search: debouncedSearch,
       categories: catSel.length ? catSel : undefined,
       accounts: acctSel.length ? acctSel : undefined,
@@ -221,7 +226,7 @@ export default function TransactionsTab(props) {
       ? filtered.filter(t => outliersMap.has(t.id))
       : filtered;
     return sortTransactions(narrowed, sortField, sortDir);
-  }, [transactions, dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir, outliersOnly, outliersMap]);
+  }, [transactions, showExcludedDuplicates, dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir, outliersOnly, outliersMap]);
 
   // Reset page on filter changes
   useEffect(() => { setPage(0); }, [dateFrom, dateTo, debouncedSearch, catSel, acctSel, amtMin, amtMax, sortField, sortDir, outliersOnly]);
@@ -770,6 +775,22 @@ export default function TransactionsTab(props) {
     setDupScanModal(null);
   };
 
+  const commitDupScanExclude = async () => {
+    if (!dupScanModal) return;
+    const ids = dupScanModal.selected;
+    if (!ids.size) { setDupScanModal(null); return; }
+    // Exclude (don't delete): flag the rows so they drop out of every total and
+    // hide from the list. Reversible via Settings → "Show excluded duplicates".
+    const next = applyExclusions(transactions, ids);
+    await bulkUpdateTransactions(next);
+    setDupScanModal(null);
+  };
+
+  const handleUnExclude = (tx) => {
+    if (!tx) return;
+    updateTransaction(unmarkExcludedDuplicate(tx));
+  };
+
   const handleUnpair = (tx) => {
     if (!tx) return;
     const partnerId = tx.custom_fields?._transfer_pair_id;
@@ -1017,6 +1038,7 @@ export default function TransactionsTab(props) {
                   onManualCategorize={handleManualCategorize}
                   onOpenSplitEditor={(t) => setSplitEditorTx(t)}
                   onUnpair={handleUnpair}
+                  onUnExclude={handleUnExclude}
                   forceExpandSplits={expandAllSplits}
                   outlierInfo={outliersMap.get(tx.id) || null}
                 />
@@ -1170,6 +1192,7 @@ export default function TransactionsTab(props) {
           onDismissGroup={dupScanDismissGroup}
           onClose={() => setDupScanModal(null)}
           onConfirm={commitDupScanDelete}
+          onExclude={commitDupScanExclude}
         />
       )}
 
@@ -1183,7 +1206,7 @@ export default function TransactionsTab(props) {
 }
 
 /* ── Individual row ── */
-function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, onUnpair, forceExpandSplits, outlierInfo }) {
+function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions, transferCatSet, updateTransaction, deleteTransactions, onManualCategorize, onOpenSplitEditor, onUnpair, onUnExclude, forceExpandSplits, outlierInfo }) {
   const [editing, setEditing] = useState(null); // field name currently being edited
   const [draft, setDraft] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -1193,13 +1216,15 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
   const isTransferHint   = TRANSFER_HINT_RX.test(tx.description || "");
   const isTransferCat    = transferCatSet && tx.category && transferCatSet.has(tx.category);
   const isTransferFlag   = !!tx.custom_fields?._is_transfer;
+  const isExcludedDup    = !!tx.custom_fields?._is_duplicate;
   const isPaired         = !!tx.custom_fields?._transfer_pair_id;
   const isTransfer       = isTransferHint || isTransferCat || isTransferFlag;
   // A row with splits isn't uncategorized even if tx.category is null — the
   // splits carry the allocations. Treat it as categorized.
   const isUncat = !tx.category && !txHasSplits;
 
-  const rowBg = isUncat ? "rgba(242, 169, 59, 0.06)"
+  const rowBg = isExcludedDup ? "rgba(230, 126, 34, 0.08)"
+              : isUncat ? "rgba(242, 169, 59, 0.06)"
               : isTransfer ? "rgba(120, 120, 120, 0.06)"
               : undefined;
 
@@ -1237,11 +1262,22 @@ function TxRow({ tx, visibleColumns, selected, toggleSelect, allCategoryOptions,
         </td>
         {visibleColumns.map(col => (
           <td key={col.id} style={{ ...td(), textAlign: col.type === "number" ? "right" : "left" }} onDoubleClick={() => startEdit(col.id)}>
+            {col.id === "description" && isExcludedDup && (
+              <span title="Excluded duplicate — hidden by default and removed from all totals. Click ↩ at the row's end to restore."
+                style={{ display: "inline-block", fontSize: 9, fontWeight: 700, color: "#E67E22", textTransform: "uppercase", letterSpacing: 0.5, padding: "1px 5px", border: "1px solid #E67E22", borderRadius: 4, marginRight: 6, verticalAlign: "middle" }}>
+                excluded
+              </span>
+            )}
             {renderCell(tx, col, editing, draft, setDraft, commitEdit, startEdit, allCategoryOptions, updateTransaction, onManualCategorize, outlierInfo)}
           </td>
         ))}
         <td style={td()}>
           <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+            {isExcludedDup && onUnExclude && (
+              <button title="Restore this excluded duplicate (counts in totals again)"
+                onClick={() => onUnExclude(tx)}
+                style={{ border: "none", background: "none", color: "#E67E22", cursor: "pointer", fontSize: 14, padding: "0 4px" }}>↩</button>
+            )}
             {isPaired && onUnpair && (
               <button title="Unpair transfer (will be excluded from future auto-detection)"
                 onClick={() => onUnpair(tx)}
@@ -1897,7 +1933,7 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
 
    Master action: "Delete N selected" deletes every ticked row across all
    groups. */
-function DupScanModal({ groups, selected, scannedCount, dayWindow, amountTolerance, descriptionMode, firstWordCount, onToggleRow, onSelectGroupRest, onDeselectGroup, onDismissGroup, onClose, onConfirm }) {
+function DupScanModal({ groups, selected, scannedCount, dayWindow, amountTolerance, descriptionMode, firstWordCount, onToggleRow, onSelectGroupRest, onDeselectGroup, onDismissGroup, onClose, onConfirm, onExclude }) {
   const totalGroups = groups.length;
   const totalSelected = selected.size;
 
@@ -1927,7 +1963,7 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
         <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 12, lineHeight: 1.5 }}>
           {totalGroups === 0
             ? "Nothing matches your current settings. Loosen the date window, amount tolerance, or description mode on the Settings tab to catch more candidates."
-            : "The earliest row in each group is marked as Original and is unchecked by default — the natural action is 'delete the duplicates, keep the original.' Adjust per-row, dismiss false-positive groups, then commit."}
+            : "The earliest row in each group is marked as Original and is unchecked by default. Tick the rows you consider duplicates, then either Exclude them (kept but hidden and removed from all totals — reversible from Settings) or Delete them permanently."}
         </div>
 
         {totalGroups > 0 && (
@@ -2000,13 +2036,21 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
           </>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
           <button onClick={onClose} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Close</button>
           {totalGroups > 0 && (
-            <button onClick={onConfirm} disabled={totalSelected === 0}
-              style={{ ...btn("#E8573A", "#fff"), opacity: totalSelected === 0 ? 0.5 : 1, cursor: totalSelected === 0 ? "not-allowed" : "pointer" }}>
-              🗑 Delete {totalSelected} selected
-            </button>
+            <>
+              <button onClick={onExclude} disabled={totalSelected === 0}
+                title="Keep these rows but flag them as excluded duplicates — hidden from the list and removed from all totals. Reversible from Settings."
+                style={{ ...btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)"), border: "1px solid #E67E22", color: "#E67E22", opacity: totalSelected === 0 ? 0.5 : 1, cursor: totalSelected === 0 ? "not-allowed" : "pointer" }}>
+                🚫 Exclude {totalSelected} selected
+              </button>
+              <button onClick={onConfirm} disabled={totalSelected === 0}
+                title="Permanently delete these rows. Cannot be undone."
+                style={{ ...btn("#E8573A", "#fff"), opacity: totalSelected === 0 ? 0.5 : 1, cursor: totalSelected === 0 ? "not-allowed" : "pointer" }}>
+                🗑 Delete {totalSelected} selected
+              </button>
+            </>
           )}
         </div>
       </div>
