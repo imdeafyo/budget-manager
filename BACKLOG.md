@@ -377,3 +377,64 @@ Lightest viable version if ever built:
 
 Deliberately parked, not rejected. A note-to-self / reminder already covers
 the need today. Revisit only if bug thoughts are actually getting lost.
+
+
+## Transactions / import & matching
+
+### Account aliasing (merge two account names into one)
+
+Surfaced while making the duplicate scan account-aware. The dup scan now
+treats accounts as distinct by default and only matches cross-account when
+the user opts in — that solved the immediate "same charge on Amex Platinum
++ Amex Platinum Additional" false-positive concern *for dedup only*.
+
+The deeper case it does NOT solve: when two account *names* in the data are
+really the same real-world account (e.g. an authorized-user card that imports
+under its own name, or the same account renamed by a bank export at some
+point), every account-scoped feature sees them as two:
+
+- **Account filter / grouping** on Transactions lists them separately.
+- **Budget-vs-actual** and any per-account rollups split the history.
+- **Transfer detection** `requireDifferentAccounts` could misfire — a
+  payment between two names that are actually one account looks like a
+  transfer when it isn't (or vice versa).
+- **Duplicate scan** same-account mode won't catch the re-import because the
+  names differ; the user has to flip on cross-account and wade past
+  coincidences.
+
+Proposed shape (true aliasing, app-wide — distinct from the dup-scan toggle):
+
+1. New `st.accountAliases`: a list of alias groups, each
+   `{ id, canonical: "Amex Platinum", members: ["Amex Platinum Additional", ...] }`.
+   Canonical is the display/storage name; members fold into it.
+2. A pure helper `utils/accountAliases.js` — `resolveAccount(name, aliasMap)`
+   returns the canonical name (or the input unchanged if unaliased). Companion
+   test file. Memoize the member→canonical map at the call sites.
+3. Apply `resolveAccount` at read time in the account-scoped consumers
+   (filter dropdown population, budgetCompare grouping, transfer
+   `requireDifferentAccounts` check, dup-scan `normalizeAccount`) rather than
+   rewriting stored rows — keeps it reversible and avoids a destructive
+   migration. Decision to revisit: read-time resolve vs. one-time rewrite of
+   the `account` field on commit. Read-time is safer; rewrite is simpler
+   downstream. Lean read-time.
+4. Settings UI: new card under "Imports & matching" — list alias groups, pick
+   a canonical name from existing account names, add/remove members. Guard
+   against an account being a member of two groups (one-canonical invariant,
+   same shape as the Ending-Obligation one-ref-per-item check).
+5. Generic build: pure state + read-time resolve, so it works there with no
+   server changes.
+
+Open questions before building:
+- Does `resolveAccount` run before or after rules? Rules can set/match on
+  account; if aliasing runs first, a rule written against the member name
+  stops matching. Probably resolve *after* rule matching, or document that
+  rules should target the canonical name.
+- Milestone restore: aliases live in `st`, so restoring an old milestone
+  could bring back a stale alias map. Same shim consideration as other
+  `st`-level settings — likely fine to let the live alias map win rather
+  than the milestone's, but confirm.
+
+Deliberately parked, not rejected. The dup-scan account-awareness covers the
+narrow dedup pain that prompted this; full aliasing is its own feature and
+only worth it if the separate-names problem actually bites in day-to-day use
+(filtering, rollups). Revisit if it does.
