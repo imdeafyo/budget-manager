@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  normalizeDesc, tokenize, descriptionsMatch, scanForDuplicates,
+  normalizeDesc, tokenize, descriptionsMatch, scanForDuplicates, normalizeAccount,
 } from "./duplicateScan.js";
 
 const tx = (id, date, amount, description, account = "checking", extra = {}) => ({
@@ -92,7 +92,7 @@ describe("scanForDuplicates — basic same-day dedup", () => {
   it("flags two rows with same date+amount+description", () => {
     const txs = [
       tx("1", "2026-04-01", -50, "Starbucks", "card_a"),
-      tx("2", "2026-04-01", -50, "Starbucks", "card_b"),
+      tx("2", "2026-04-01", -50, "Starbucks", "card_a"),
     ];
     const r = scanForDuplicates(txs);
     expect(r.groups).toHaveLength(1);
@@ -103,8 +103,8 @@ describe("scanForDuplicates — basic same-day dedup", () => {
   it("clusters triplicates into one group of 3", () => {
     const txs = [
       tx("1", "2026-04-01", -50, "Starbucks", "a"),
-      tx("2", "2026-04-01", -50, "Starbucks", "b"),
-      tx("3", "2026-04-01", -50, "Starbucks", "c"),
+      tx("2", "2026-04-01", -50, "Starbucks", "a"),
+      tx("3", "2026-04-01", -50, "Starbucks", "a"),
     ];
     const r = scanForDuplicates(txs);
     expect(r.groups).toHaveLength(1);
@@ -123,14 +123,15 @@ describe("scanForDuplicates — basic same-day dedup", () => {
 });
 
 describe("scanForDuplicates — cross-account matching", () => {
-  it("flags duplicates regardless of account", () => {
+  it("flags duplicates across accounts when crossAccount is enabled", () => {
     const txs = [
       tx("1", "2026-04-01", -25, "Lunch", "card_personal"),
       tx("2", "2026-04-01", -25, "Lunch", "card_business"),
     ];
-    const r = scanForDuplicates(txs);
+    const r = scanForDuplicates(txs, { crossAccount: true });
     expect(r.groups).toHaveLength(1);
     expect(r.groups[0].members.map(m => m.account)).toEqual(["card_personal", "card_business"]);
+    expect(r.groups[0].crossAccount).toBe(true);
   });
 });
 
@@ -298,8 +299,99 @@ describe("scanForDuplicates — combined criteria", () => {
       tx("a", "2026-03-15", -47.83, "WHOLEFDS", "amex_personal"),
       tx("b", "2026-03-16", -47.83, "WHOLEFDS", "chase_business"),
     ];
-    const r = scanForDuplicates(txs, { dayWindow: 3, amountTolerance: 0.01, descriptionMode: "exact" });
+    const r = scanForDuplicates(txs, { dayWindow: 3, amountTolerance: 0.01, descriptionMode: "exact", crossAccount: true });
     expect(r.groups).toHaveLength(1);
     expect(r.groups[0].members).toHaveLength(2);
+    expect(r.groups[0].crossAccount).toBe(true);
+  });
+});
+
+describe("normalizeAccount", () => {
+  it("trims, lowercases, collapses whitespace", () => {
+    expect(normalizeAccount("  Amex   Platinum ")).toBe("amex platinum");
+  });
+  it("returns empty for missing/non-string", () => {
+    expect(normalizeAccount(null)).toBe("");
+    expect(normalizeAccount(undefined)).toBe("");
+    expect(normalizeAccount(123)).toBe("");
+  });
+});
+
+describe("scanForDuplicates — account awareness", () => {
+  it("default (same-account only) does NOT cluster matching rows on different accounts", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Amex Platinum"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "Amex Platinum Additional"),
+    ];
+    const r = scanForDuplicates(txs);
+    expect(r.groups).toHaveLength(0);
+    expect(r.totalDuplicates).toBe(0);
+  });
+
+  it("default DOES cluster matching rows on the same account", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Amex Platinum"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "Amex Platinum"),
+    ];
+    const r = scanForDuplicates(txs);
+    expect(r.groups).toHaveLength(1);
+    expect(r.groups[0].members).toHaveLength(2);
+    expect(r.groups[0].crossAccount).toBe(false);
+  });
+
+  it("crossAccount:true clusters across accounts and tags the group", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Amex Platinum"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "Amex Platinum Additional"),
+    ];
+    const r = scanForDuplicates(txs, { crossAccount: true });
+    expect(r.groups).toHaveLength(1);
+    expect(r.groups[0].members).toHaveLength(2);
+    expect(r.groups[0].crossAccount).toBe(true);
+  });
+
+  it("treats blank/missing accounts as the same (unknown) account", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", ""),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "   "),
+    ];
+    const r = scanForDuplicates(txs);
+    expect(r.groups).toHaveLength(1);
+    expect(r.groups[0].crossAccount).toBe(false);
+  });
+
+  it("account match is case/whitespace-insensitive", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Amex Platinum"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "amex  platinum"),
+    ];
+    const r = scanForDuplicates(txs);
+    expect(r.groups).toHaveLength(1);
+    expect(r.groups[0].crossAccount).toBe(false);
+  });
+
+  it("sorts same-account groups before cross-account groups", () => {
+    const txs = [
+      // same-account pair, small amount
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Checking"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "Checking"),
+      // cross-account pair, larger amount (would sort first on amount alone)
+      tx("c", "2024-02-10", -99.0, "BigStore", "Amex Platinum"),
+      tx("d", "2024-02-10", -99.0, "BigStore", "Amex Platinum Additional"),
+    ];
+    const r = scanForDuplicates(txs, { crossAccount: true });
+    expect(r.groups).toHaveLength(2);
+    expect(r.groups[0].crossAccount).toBe(false); // same-account first despite smaller amount
+    expect(r.groups[1].crossAccount).toBe(true);
+  });
+
+  it("in crossAccount mode, a group confined to one account is not tagged cross", () => {
+    const txs = [
+      tx("a", "2024-01-10", -4.5, "Starbucks", "Checking"),
+      tx("b", "2024-01-10", -4.5, "Starbucks", "Checking"),
+    ];
+    const r = scanForDuplicates(txs, { crossAccount: true });
+    expect(r.groups).toHaveLength(1);
+    expect(r.groups[0].crossAccount).toBe(false);
   });
 });

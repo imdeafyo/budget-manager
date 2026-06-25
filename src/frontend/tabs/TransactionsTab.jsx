@@ -56,6 +56,7 @@ export default function TransactionsTab(props) {
     dupScanAmountTolerance = 0.01,
     dupScanDescriptionMode = "exact",
     dupScanFirstWordCount = 2,
+    dupScanCrossAccount = false,
     outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
     txLoaded,
   } = props;
@@ -700,6 +701,7 @@ export default function TransactionsTab(props) {
       amountTolerance: dupScanAmountTolerance,
       descriptionMode: dupScanDescriptionMode,
       firstWordCount: dupScanFirstWordCount,
+      crossAccount: dupScanCrossAccount,
     });
     // Preselect: in each group, mark all but the first row for deletion.
     const selected = new Set();
@@ -1946,6 +1948,12 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid var(--bdr2, #eee)", background: "var(--input-bg, #fafafa)", borderRadius: "6px 6px 0 0" }}>
                       <div style={{ flex: 1, fontSize: 12, color: "var(--tx2, #555)" }}>
                         <strong>{group.members.length} rows</strong> · {fmt(group.members[0].amount)} · {group.members[0].description || <em style={{ color: "var(--tx3,#aaa)" }}>(no description)</em>}
+                        {group.crossAccount && (
+                          <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, color: "#E67E22", textTransform: "uppercase", letterSpacing: 0.5, padding: "2px 6px", border: "1px solid #E67E22", borderRadius: 4, whiteSpace: "nowrap" }}
+                            title="These rows are on different accounts — more likely a coincidence than a true duplicate. Review carefully.">
+                            cross-account
+                          </span>
+                        )}
                       </div>
                       <button onClick={() => onSelectGroupRest(group.key)} disabled={allTicked && !memberIds.some(id => !selected.has(id) && id !== memberIds[0])}
                         title="Tick everything except the earliest row (the typical 'delete duplicates, keep original' action)"

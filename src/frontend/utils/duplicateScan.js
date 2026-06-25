@@ -13,6 +13,21 @@
    - The output is groups (clusters), not pairs — a triplicate should
      surface as one group of 3, not three groups of 2.
 
+   Account awareness (crossAccount option):
+   A *real* duplicate is almost always two imports of the SAME charge into
+   the SAME account. A match across two different accounts is usually a
+   coincidence — two cards, same coffee shop, same day, same $4.50. So the
+   account field is a strong signal and the scan uses it:
+   - crossAccount: false (default) — rows only cluster with same-account
+     rows. Cross-account coincidences never surface. This is the safe
+     default for the common "Amex Platinum + Amex Platinum Additional are
+     two views but I imported both" worry: those are different account
+     names, so their matches simply don't show unless you opt in.
+   - crossAccount: true — rows cluster regardless of account. Any group
+     that ends up spanning 2+ distinct accounts is tagged crossAccount:true
+     and sorted BELOW the same-account groups, so high-confidence
+     same-account dups are reviewed first.
+
    Algorithm:
    1. Drop marked-transfer rows — pairing the two sides of a confirmed
       transfer as duplicates would be a false positive every time.
@@ -21,18 +36,21 @@
       stay negative (a -$50 expense and a +$50 income shouldn't pair).
    3. Within each bucket, walk the rows and build clusters via union-find.
       Two rows merge into the same cluster when ALL configured criteria
-      pass: |dateDiff| ≤ dayWindow AND descriptionMatches per the mode.
+      pass: |dateDiff| ≤ dayWindow AND descriptionMatches per the mode
+      AND (crossAccount OR same account).
    4. Return only clusters with 2+ members.
 
    Output shape:
    {
      groups: [
-       { key: "amt:-5000|fp:starbucks", members: [tx, tx, tx] },
+       { key: "amt:-5000|fp:starbucks", members: [tx, tx, tx], crossAccount: false },
        ...
      ],
      totalDuplicates: 5,        // total rows in any group beyond the first
      scannedCount: 1234,        // rows considered after transfer filter
    }
+   `crossAccount` on a group is true when its members span 2+ distinct
+   account names (only possible when the crossAccount option is on).
    `members` is sorted by date ascending so the "earliest" row is first —
    downstream UI can default to "keep the earliest, delete the rest." */
 
@@ -77,6 +95,15 @@ export function descriptionsMatch(a, b, mode = "exact", firstWordCount = 2) {
   return false;
 }
 
+/* Normalize an account name for same-account comparison: trim + lowercase +
+   collapse whitespace. Missing/blank accounts normalize to "" — two rows that
+   both lack an account are treated as the "same" (unknown) account, which is
+   the conservative choice (they can still cluster in same-account mode). */
+export function normalizeAccount(s) {
+  if (typeof s !== "string") return "";
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /* ── Date diff in days, ISO yyyy-mm-dd inputs ── */
 function daysBetween(isoA, isoB) {
   if (!isoA || !isoB) return Infinity;
@@ -111,6 +138,8 @@ export function scanForDuplicates(transactions, opts = {}) {
     amountTolerance = 0.01,  // $X tolerance; default penny-precision
     descriptionMode = "exact", // "off" | "exact" | "first-words"
     firstWordCount = 2,
+    crossAccount = false,    // false = only cluster within the same account;
+                             // true = cluster across accounts, tag mixed groups
   } = opts;
 
   if (!Array.isArray(transactions) || transactions.length === 0) {
@@ -164,6 +193,10 @@ export function scanForDuplicates(transactions, opts = {}) {
         const a = bucket[i], b = bucket[j];
         // Already in same cluster? skip (shaves a bit off pathological cases)
         if (uf.find(i) === uf.find(j)) continue;
+        // Account gate: in same-account mode, two rows from different accounts
+        // never cluster — a cross-account match is almost always a coincidence,
+        // not a re-imported duplicate.
+        if (!crossAccount && normalizeAccount(a.account) !== normalizeAccount(b.account)) continue;
         if (daysBetween(a.date, b.date) > dayWindow) continue;
         if (!descriptionsMatch(a.description, b.description, descriptionMode, firstWordCount)) continue;
         // All criteria match — merge clusters.
@@ -188,9 +221,14 @@ export function scanForDuplicates(transactions, opts = {}) {
         : descriptionMode === "first-words"
           ? tokenize(cluster[0].description).slice(0, firstWordCount).join("-") || "blank"
           : normalizeDesc(cluster[0].description) || "blank";
+      // A group is "cross-account" when its members span 2+ distinct accounts.
+      // Only possible when the crossAccount option is on; in same-account mode
+      // every group is single-account by construction.
+      const distinctAccts = new Set(cluster.map(m => normalizeAccount(m.account)));
       groups.push({
         key: `amt:${firstAmtCents}|fp:${fp}`,
         members: cluster,
+        crossAccount: distinctAccts.size > 1,
       });
       // "duplicates" = members beyond the first (i.e., rows that could be
       // deleted to dedupe the cluster).
@@ -198,9 +236,11 @@ export function scanForDuplicates(transactions, opts = {}) {
     }
   }
 
-  // Sort groups so the most-confident matches surface first: groups with more
-  // members first, then by amount desc (largest dollar impact first).
+  // Sort groups so the most-confident matches surface first: same-account
+  // groups (high confidence) before cross-account groups (likely coincidence),
+  // then groups with more members, then by amount desc (largest impact first).
   groups.sort((g1, g2) => {
+    if (!!g1.crossAccount !== !!g2.crossAccount) return g1.crossAccount ? 1 : -1;
     if (g2.members.length !== g1.members.length) return g2.members.length - g1.members.length;
     const a1 = Math.abs(g1.members[0].amount || 0);
     const a2 = Math.abs(g2.members[0].amount || 0);

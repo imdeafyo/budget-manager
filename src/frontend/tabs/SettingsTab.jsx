@@ -89,6 +89,8 @@ export default function SettingsTab(props) {
     dupScanDescriptionMode = "exact",
     setDupScanDescriptionMode,
     dupScanFirstWordCount = 2,
+    dupScanCrossAccount = false,
+    setDupScanCrossAccount,
     setDupScanFirstWordCount,
     outlierSettings = { enabled: true, sensitivity: "normal", minAbsoluteDelta: 50 },
     setOutlierSettings,
@@ -370,14 +372,16 @@ export default function SettingsTab(props) {
           const desc = dupScanDescriptionMode === "off" ? "any description"
             : dupScanDescriptionMode === "first-words" ? `first ${dupScanFirstWordCount} words`
             : "exact description";
-          return `${days === 0 ? "same day" : `±${days} day${days === 1 ? "" : "s"}`} · ±$${tol.toFixed(2)} · ${desc}`;
+          const scope = dupScanCrossAccount ? "all accounts" : "same account";
+          return `${days === 0 ? "same day" : `±${days} day${days === 1 ? "" : "s"}`} · ±$${tol.toFixed(2)} · ${desc} · ${scope}`;
         })()}
         style={{ marginTop: 16 }}>
         <p style={{ fontSize: 13, color: "var(--tx2, #555)", marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
-          Controls how the "🔍 Scan duplicates" button on the Transactions tab finds candidates. The scan walks
-          your entire history (cross-account by design — a charge appearing on two cards is the most common
-          duplicate). Confirmed transfers are always excluded. ALL three criteria must match for two rows to
-          cluster — relax any of them to catch more.
+          Controls how the "🔍 Scan duplicates" button on the Transactions tab finds candidates. By default the
+          scan only clusters rows <strong>within the same account</strong> — a genuine duplicate is almost always
+          the same charge imported twice. Confirmed transfers are always excluded. ALL criteria must match for two
+          rows to cluster — relax any of them to catch more. Enable "Match across accounts" below if you want to
+          catch the same charge appearing on two different cards.
         </p>
 
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -450,6 +454,24 @@ export default function SettingsTab(props) {
               </span>
             </label>
           </div>
+        </div>
+
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "var(--tx, #333)", cursor: "pointer" }}>
+            <input type="checkbox" checked={!!dupScanCrossAccount}
+              onChange={e => setDupScanCrossAccount && setDupScanCrossAccount(e.target.checked)}
+              style={{ marginTop: 3 }} />
+            <span>
+              <strong>Match across accounts</strong>
+              <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)" }}>
+                Off (default): only rows on the <em>same</em> account can be duplicates. This avoids false positives
+                from two genuinely separate charges that happen to share a date, amount, and merchant on different
+                cards. On: rows cluster regardless of account. Groups that span two or more accounts are flagged
+                "cross-account" and sorted below same-account matches, since they're more likely to be coincidences
+                than true duplicates.
+              </span>
+            </span>
+          </label>
         </div>
       </CollapsibleCard>
 
