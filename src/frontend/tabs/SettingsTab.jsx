@@ -69,7 +69,7 @@ export default function SettingsTab(props) {
     rowCapThreshold, setRowCapThreshold,
     defaultTxPageSize = 100,
     setDefaultTxPageSize,
-    transactions, setTransactions,
+    transactions, setTransactions, bulkUpdateTransactions,
     updateTransaction,
     importProfiles = [], setImportProfiles,
     transactionRules = [], setTransactionRules,
@@ -141,7 +141,8 @@ export default function SettingsTab(props) {
   const resetAllDismissed = () => {
     if (!dismissedCount) return;
     if (!confirm(`Re-enable ${dismissedCount} dismissed transaction${dismissedCount === 1 ? "" : "s"} for transfer detection?\n\nThey'll become candidates again the next time you run "Detect transfers".`)) return;
-    setTransactions(prev => prev.map(t => {
+    const apply = bulkUpdateTransactions || setTransactions;
+    apply(transactions.map(t => {
       if (!t.custom_fields?._transfer_dismissed) return t;
       const cf = { ...t.custom_fields };
       delete cf._transfer_dismissed;
@@ -356,6 +357,7 @@ export default function SettingsTab(props) {
           transactionColumns={transactionColumns || []}
           transactions={transactions}
           setTransactions={setTransactions}
+          bulkUpdateTransactions={bulkUpdateTransactions}
         />
       </CollapsibleCard>
 
@@ -751,7 +753,7 @@ function ProfileRow({ profile, onRename, onDelete }) {
 /* ══════════════════════════ RulesPanel ══════════════════════════
    Manages the list of transactionRules. One component so the collapsible card
    stays tidy. Rules are stored in array order = priority. */
-function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionColumns, transactions, setTransactions }) {
+function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionColumns, transactions, setTransactions, bulkUpdateTransactions }) {
   const [expanded, setExpanded] = useState(() => new Set()); // rule ids with editor open
   const [sweepResult, setSweepResult] = useState(null);
 
@@ -807,7 +809,7 @@ function RulesPanel({ rules, setRules, cats, savCats, transferCats, transactionC
     const msg = `Apply ${enabled.length} enabled rule${enabled.length === 1 ? "" : "s"} across ${transactions.length.toLocaleString()} transactions? Manually-categorized rows won't be overwritten.`;
     if (!confirm(msg)) return;
     const { transactions: updated, stats } = applyRulesToAll(transactions, enabled);
-    setTransactions(updated);
+    (bulkUpdateTransactions || setTransactions)(updated);
     log.info("rules.applyAll", {
       enabledRules: enabled.length,
       totalRules: rules.length,

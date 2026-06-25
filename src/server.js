@@ -379,6 +379,65 @@ app.put('/api/transactions/:id{/:userId}', async (req, res) => {
   }
 });
 
+// PATCH — bulk update a set of transactions (used by "Re-run rules on all" and
+// the "apply to existing" rule sweep). Upserts each row in a single DB
+// transaction. Only the rows the caller changed should be sent — the client
+// diffs before calling so we don't rewrite the whole table on every sweep.
+app.patch('/api/transactions{/:userId}', async (req, res) => {
+  const userId = req.params.userId || 'default';
+  const { transactions } = req.body;
+  if (!Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'transactions must be an array' });
+  }
+  if (!transactions.length) {
+    // Nothing to do — not an error, just a no-op sweep.
+    req.log.info({ event: 'tx.bulkUpdate', userId, count: 0 }, 'tx.bulkUpdate noop');
+    return res.json({ ok: true, updated: 0 });
+  }
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const now = new Date().toISOString();
+      for (const tx of transactions) {
+        // Reuse the same upsert columns as insertTransaction, but bind to the
+        // transaction-scoped client and always bump updated_at server-side.
+        await client.query(
+          `INSERT INTO transactions
+            (id, user_id, date, amount, currency, description, category, account, notes,
+             import_batch_id, import_source, custom_fields, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
+           ON CONFLICT (id) DO UPDATE SET
+             date = EXCLUDED.date, amount = EXCLUDED.amount, currency = EXCLUDED.currency,
+             description = EXCLUDED.description, category = EXCLUDED.category,
+             account = EXCLUDED.account, notes = EXCLUDED.notes,
+             import_batch_id = EXCLUDED.import_batch_id, import_source = EXCLUDED.import_source,
+             custom_fields = EXCLUDED.custom_fields, updated_at = EXCLUDED.updated_at`,
+          [
+            tx.id, userId, tx.date, tx.amount, tx.currency || 'USD',
+            tx.description || '', tx.category || null, tx.account || '', tx.notes || null,
+            tx.import_batch_id || null, tx.import_source || null,
+            JSON.stringify(tx.custom_fields || {}),
+            tx.created_at || now,
+            now,
+          ]
+        );
+      }
+      await client.query('COMMIT');
+      req.log.info({ event: 'tx.bulkUpdate', userId, count: transactions.length }, 'tx.bulkUpdate');
+      res.json({ ok: true, updated: transactions.length });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    req.log.error({ event: 'tx.bulkUpdate.error', userId, err: err.message }, 'tx.bulkUpdate failed');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE — one, or a batch, or all (via ?batch=id or ?all=1)
 app.delete('/api/transactions{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';

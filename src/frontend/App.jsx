@@ -254,6 +254,7 @@ function App() {
           updateTransaction={S.updateTransaction}
           deleteTransactions={S.deleteTransactions}
           setTransactions={S.setTransactions}
+          bulkUpdateTransactions={S.bulkUpdateTransactions}
           importProfiles={S.importProfiles}
           setImportProfiles={S.setImportProfiles}
           transactionRules={S.transactionRules}
@@ -285,6 +286,7 @@ function App() {
           setDefaultTxPageSize={S.setDefaultTxPageSize}
           transactions={S.transactions}
           setTransactions={S.setTransactions}
+          bulkUpdateTransactions={S.bulkUpdateTransactions}
           updateTransaction={S.updateTransaction}
           importProfiles={S.importProfiles}
           setImportProfiles={S.setImportProfiles}

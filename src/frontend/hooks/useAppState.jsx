@@ -6,6 +6,7 @@ import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetComp
 import { ensureIds, newItemId, firstSaveAction } from "../utils/itemIds.js";
 import log from "../utils/log.js";
 import { apiFetch } from "../utils/apiFetch.js";
+import { diffChangedTransactions } from "../utils/txDiff.js";
 import { useM } from "../components/ui.jsx";
 
 /* ── Runtime mode. "deploy" uses /api/transactions; "generic" bundles
@@ -883,6 +884,41 @@ export default function useAppState() {
     }
   }, []);
 
+  /* ── Bulk update (deploy: PATCH /api/transactions; generic: state-only) ──
+     Used by rule sweeps ("Re-run rules on all" + "apply to existing"). The
+     caller passes the FULL next transactions array; this diffs against the
+     previous array and only sends rows that actually changed to the server,
+     so a sweep that recategorizes 30 of 5,000 rows is a 30-row PATCH, not a
+     full-table rewrite. In generic mode the auto-save effect persists st
+     (which holds transactions) so we only need to update local state. */
+  const bulkUpdateTransactions = useCallback(async (next) => {
+    if (!Array.isArray(next)) return;
+    let changed = [];
+    setTransactions(prev => {
+      // Diff inside the updater so we compare against the freshest state and
+      // avoid a stale-closure read of `transactions`.
+      changed = diffChangedTransactions(prev, next);
+      return next;
+    });
+    if (MODE === "deploy") {
+      // setTransactions' updater runs synchronously, so `changed` is populated
+      // by the time we get here.
+      if (!changed.length) { log.info("tx.bulkUpdate", { count: 0 }); return; }
+      try {
+        const res = await apiFetch("/api/transactions", {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transactions: changed }),
+        });
+        if (!res.ok) log.warn("tx.bulkUpdate.fail", { status: res.status, count: changed.length, reqId: res.reqId });
+        else log.info("tx.bulkUpdate", { count: changed.length, reqId: res.reqId });
+      } catch(e) {
+        log.warn("tx.bulkUpdate.throw", { message: String(e?.message || e), count: changed.length, reqId: e?.reqId });
+      }
+    } else {
+      log.info("tx.bulkUpdate", { count: changed.length, mode: "generic" });
+    }
+  }, []);
+
 
   /* ── Tax calculations ── */
   const C = useMemo(() => {
@@ -1406,6 +1442,7 @@ export default function useAppState() {
     forecast, setForecast,
     txLoaded,
     addTransactions, updateTransaction, deleteTransactions, deleteImportBatch,
+    bulkUpdateTransactions,
     MODE,
   };
 }

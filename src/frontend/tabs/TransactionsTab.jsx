@@ -46,7 +46,7 @@ export default function TransactionsTab(props) {
     cats, savCats, transferCats = [], incomeCats = [],
     exp = [], sav = [],
     milestones = [],
-    addTransactions, updateTransaction, deleteTransactions, setTransactions,
+    addTransactions, updateTransaction, deleteTransactions, setTransactions, bulkUpdateTransactions,
     importProfiles, setImportProfiles,
     transactionRules = [], setTransactionRules,
     transferToleranceAmount = 0.01,
@@ -1098,11 +1098,13 @@ export default function TransactionsTab(props) {
             setTransactionRules(prev => [...prev, rule]);
             if (applyToExisting) {
               // Sweep all transactions and apply the new rule only (don't clobber existing).
-              setTransactions(prev => prev.map(t => {
-                if (t.id === pendingCategorize.tx.id) return t; // already categorized manually above
+              const skipId = pendingCategorize.tx.id; // already categorized manually above
+              const next = transactions.map(t => {
+                if (t.id === skipId) return t;
                 const { tx: updated, matchedRuleIds } = applyRulesToTransaction(t, [rule]);
                 return matchedRuleIds.length ? updated : t;
-              }));
+              });
+              (bulkUpdateTransactions || setTransactions)(next);
             }
             setPendingCategorize(null);
           }}
