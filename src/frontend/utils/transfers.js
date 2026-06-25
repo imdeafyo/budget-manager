@@ -54,17 +54,25 @@ export function dayDiff(aIso, bIso) {
    Excluded:
    - already marked _is_transfer (rule-based or previously paired)
    - already dismissed (user said don't suggest)
+   - already in a transfer category (the user has explicitly categorized this
+     row as a transfer — it's already excluded from spending totals via the
+     transferCats path in budgetCompare.js, so pairing it accomplishes nothing.
+     Skipping it keeps the detector focused on its real job: surfacing transfers
+     the user HASN'T already handled. Pass the set of transfer-category names via
+     opts.transferCatSet; omit it to disable this check.)
    - has splits (splits mean the user has broken this into multiple allocations;
      we don't try to pair them — if one side of a transfer needs splitting, the
      user can unsplit it first)
    - amount is zero or missing
    - date is missing/invalid
 */
-export function isPairEligible(tx) {
+export function isPairEligible(tx, opts = {}) {
   if (!tx || typeof tx !== "object") return false;
   const cf = tx.custom_fields || {};
   if (cf._is_transfer) return false;
   if (cf._transfer_dismissed) return false;
+  const { transferCatSet } = opts;
+  if (transferCatSet && tx.category && transferCatSet.has(tx.category)) return false;
   if (Array.isArray(tx.splits) && tx.splits.length > 0) return false;
   const amt = Number(tx.amount);
   if (!isFinite(amt) || amt === 0) return false;
@@ -166,11 +174,12 @@ export function findTransferCandidates(transactions, opts = {}) {
     amountTolerance = 0.01,
     dayTolerance = 2,
     requireDifferentAccounts = true,
+    transferCatSet = null,
   } = opts;
 
   if (!Array.isArray(transactions) || transactions.length < 2) return [];
 
-  const eligible = transactions.filter(isPairEligible);
+  const eligible = transactions.filter(tx => isPairEligible(tx, { transferCatSet }));
   if (eligible.length < 2) return [];
 
   // Stable sort by date asc, then by id for deterministic tiebreak.

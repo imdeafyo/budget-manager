@@ -639,6 +639,7 @@ export default function TransactionsTab(props) {
       amountTolerance: Number(transferToleranceAmount) || 0.01,
       dayTolerance:    Number(transferToleranceDays)  || 2,
       requireDifferentAccounts: true,
+      transferCatSet,
     });
     // Confidence threshold filter — drops weakly-scored pairs from the modal
     // entirely so the user doesn't have to manually deselect them. 0 = keep all.

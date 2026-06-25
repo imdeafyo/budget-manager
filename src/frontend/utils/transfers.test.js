@@ -68,6 +68,43 @@ describe("isPairEligible", () => {
   it("rejects invalid dates", () => {
     expect(isPairEligible(tx({ date: "not a date" }))).toBe(false);
   });
+  it("skips rows already in a transfer category when a transferCatSet is supplied", () => {
+    const set = new Set(["Transfer", "Vault"]);
+    expect(isPairEligible(tx({ category: "Vault" }), { transferCatSet: set })).toBe(false);
+    expect(isPairEligible(tx({ category: "Groceries" }), { transferCatSet: set })).toBe(true);
+  });
+  it("ignores transfer categories when no transferCatSet is supplied (back-compat)", () => {
+    expect(isPairEligible(tx({ category: "Vault" }))).toBe(true);
+  });
+  it("treats an empty transferCatSet as 'no transfer categories'", () => {
+    expect(isPairEligible(tx({ category: "Vault" }), { transferCatSet: new Set() })).toBe(true);
+  });
+});
+
+describe("findTransferCandidates — transfer-category skip", () => {
+  // The real-world false positive: a categorized transfer (+$185 into a vault)
+  // amount-matching a vendor expense (−$185 to lawn care) on a nearby date.
+  // Both halves cancel and the dates are close, so without the category skip
+  // they pair at 100% confidence even though only one is an actual transfer.
+  const vaultIn  = tx({ id: "vault",  amount: 185,  date: "2026-06-22", account: "SoFi Savings", category: "Vault",     description: "From House Vault" });
+  const lawnCare = tx({ id: "lawn",   amount: -185, date: "2026-06-22", account: "Checking",     category: "Lawn Care", description: "In *lemaster Lawn Care" });
+
+  it("does NOT pair a categorized transfer with a coincidental vendor expense", () => {
+    const set = new Set(["Vault"]);
+    const pairs = findTransferCandidates([vaultIn, lawnCare], { transferCatSet: set });
+    expect(pairs).toEqual([]);
+  });
+  it("WOULD pair them without the category skip (proves the skip is what fixes it)", () => {
+    const pairs = findTransferCandidates([vaultIn, lawnCare]);
+    expect(pairs.length).toBe(1);
+    expect(pairs[0].confidence).toBe(1);
+  });
+  it("still pairs two genuine, un-categorized transfers", () => {
+    const a = tx({ id: "a", amount: -500, date: "2026-06-10", account: "Checking", category: null });
+    const b = tx({ id: "b", amount: 500,  date: "2026-06-10", account: "Savings",  category: null });
+    const pairs = findTransferCandidates([a, b], { transferCatSet: new Set(["Vault"]) });
+    expect(pairs.length).toBe(1);
+  });
 });
 
 describe("isCandidatePair — amount rules", () => {
