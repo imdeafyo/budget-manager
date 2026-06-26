@@ -438,3 +438,75 @@ Deliberately parked, not rejected. The dup-scan account-awareness covers the
 narrow dedup pain that prompted this; full aliasing is its own feature and
 only worth it if the separate-names problem actually bites in day-to-day use
 (filtering, rollups). Revisit if it does.
+
+### Fragmented contributions: import root cause (HIGH-VALUE investigation)
+
+Discovered while investigating a 362-group duplicate scan. Ground-truthed
+against real brokerage statements: the duplicate scan's matches on
+contribution/investment accounts (Lockheed 401k, HSA, Roth) are NOT
+duplicates — they are a SINGLE real contribution that the import has either
+(a) fragmented into multiple identical-looking rows, or (b) split into parts
+that SUM to the true amount. Verified one week: brokerage showed Employee
+$269.74 + Employer $337.17; the app held three $269.74 rows that summed to the
+correct per-date total. The app rows reconstruct the real entries; nothing is
+over-counted. The $337.17 employer leg was also present, similarly split.
+
+Key facts established:
+- These rows are identical on every field the scan compares (date, amount,
+  description, account) but represent DIFFERENT real dollars. No scan-threshold
+  tuning can separate them — the disambiguating data (transaction-type code,
+  share qty, leg identity) was dropped at import time.
+- It is NOT a transfer artifact: the scan ran same-account-only, and transfers
+  span two accounts, so transfer logic never grouped these.
+- BUT genuine duplicates ALSO exist layered on top of the fragmentation on at
+  least some dates (rows that sum to MORE than the real per-date total). So a
+  given contribution date can have both legitimate fragments AND real dupes.
+- Decision taken: default to treating contribution-account matches as
+  legitimate (keep), because wrongly excluding a fragment deletes real
+  retirement money and understates FIRE — an asymmetric risk vs. a slightly
+  over-counted spending row.
+
+The real fix is upstream, in the import pipeline — not in the dup scan:
+1. Figure out WHICH source export produces the fragmented/split rows and what
+   field distinguishes the legs (open the raw CSV from a known batch, compare
+   the columns the importer drops). Likely a transaction-type or activity
+   column that the column-mapping wizard isn't capturing.
+2. Options once the distinguishing field is known:
+   - Preserve it as a custom field on import so legs stay distinct (and the
+     dup scan stops matching them).
+   - Or collapse the fragments at import into one row per real contribution
+     (riskier — changes historical numbers; needs a back-compat shim).
+3. Until then, the scan modal's contribution-account ⚠ warning (shipped) is the
+   stopgap: it tells the user not to bulk-exclude these.
+
+Shipped so far (context): the dup-scan insight panel + `looksLikeContribution
+Account` heuristic flag these in the modal. Next agreed session: persistent
+"mark not-a-duplicate" / dismiss so confirmed-legit groups stop resurfacing on
+every scan (mirrors the existing `_transfer_dismissed` pattern). This is now
+better motivated — the ⚠ contribution groups are exactly what the user will
+want to dismiss permanently.
+
+### Persistent dismiss for duplicate groups (NEXT SESSION — agreed)
+
+The existing `dupScanDismissGroup` is session-only: it removes a group from the
+current modal view, but a re-scan brings it right back. With 200+ legitimate
+contribution-account groups that will never be real duplicates, that's a
+recurring annoyance.
+
+Build: a persistent `_dup_dismissed` flag (mirror `_transfer_dismissed`):
+- Mark-not-a-duplicate action per group in the scan modal.
+- scanForDuplicates skips rows whose group was dismissed (or filters dismissed
+  groups post-scan — decide which; row-level flag is probably cleaner so a row
+  added later to a dismissed shape still surfaces).
+- Settings: dismissed-duplicates count + un-dismiss-all escape hatch, exactly
+  like the transfer-dismissed card already does.
+- Ships with tests; flag is additive so old saves load fine.
+
+### JSON import (round-trip the JSON export)
+
+The Transactions tab now exports JSON (full objects incl. import_batch_id,
+custom_fields, splits). There's no matching JSON import — the export currently
+feeds analysis tooling only. A JSON import path would let the export round-trip
+(backup/restore at the transactions level, move data between deploy/generic).
+Lower priority; the whole-state JSON export/import on Charts already covers full
+backups. Only worth it if transaction-level round-trip becomes a real need.
