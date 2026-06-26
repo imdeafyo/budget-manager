@@ -228,8 +228,17 @@ export function scanForDuplicates(transactions, opts = {}) {
       // Only possible when the crossAccount option is on; in same-account mode
       // every group is single-account by construction.
       const distinctAccts = new Set(cluster.map(m => normalizeAccount(m.account)));
+      // Key must be UNIQUE per group. Amount + description fingerprint is NOT
+      // unique: recurring identical charges (e.g. a weekly contribution to the
+      // same fund for the same amount) produce many distinct groups that share
+      // amount and description but differ by date. Append the earliest member's
+      // id — ids are unique and clusters never share members, so this is a
+      // stable unique key. (Previously the non-unique key caused React key
+      // collisions: stale rows lingered in the list and per-group actions hit
+      // every same-amount/description group at once.)
+      const groupKey = `amt:${firstAmtCents}|fp:${fp}|id:${cluster[0].id}`;
       groups.push({
-        key: `amt:${firstAmtCents}|fp:${fp}`,
+        key: groupKey,
         members: cluster,
         crossAccount: distinctAccts.size > 1,
       });

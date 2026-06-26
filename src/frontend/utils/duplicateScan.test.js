@@ -489,3 +489,25 @@ describe("analyzeDuplicateGroups", () => {
     expect(analyzeDuplicateGroups(groups, { big: 200 }).byBracket.mid).toBe(1);
   });
 });
+
+describe("scanForDuplicates — group key uniqueness (regression)", () => {
+  it("assigns unique keys to groups sharing amount + description but differing by date", () => {
+    // Recurring identical contribution: same amount, same description, same
+    // account, different weeks. Each week is its own duplicate pair. These used
+    // to collide on key (amt|fp), causing React key collisions in the modal —
+    // stale rows lingered and per-group actions hit every same-amount group.
+    const mk = (id, date) => ({
+      id, date, amount: -269.74, description: "Lmimco Target-date Fund 2060",
+      account: "Lockheed Martin Savings", custom_fields: {},
+    });
+    const txns = [
+      mk("a1", "2023-09-01"), mk("a2", "2023-09-01"),
+      mk("b1", "2023-09-08"), mk("b2", "2023-09-08"),
+      mk("c1", "2023-09-15"), mk("c2", "2023-09-15"),
+    ];
+    const r = scanForDuplicates(txns);
+    expect(r.groups.length).toBe(3);
+    const keys = r.groups.map(g => g.key);
+    expect(new Set(keys).size).toBe(3); // all unique
+  });
+});

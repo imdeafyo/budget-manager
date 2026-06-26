@@ -2020,18 +2020,13 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
   // bracket is AND with that. Empty account set = all accounts.
   const { big, mid } = analysis.thresholds;
   const filteredGroups = useMemo(() => {
-    const out = groups.filter(g => {
+    return groups.filter(g => {
       const amt = Math.abs(Number(g.members[0]?.amount) || 0);
       const bracket = amt >= big ? "big" : amt >= mid ? "mid" : "small";
       if (amtFilter !== "all" && bracket !== amtFilter) return false;
       if (acctSel.size > 0 && !acctSel.has((g.members[0]?.account || "—").trim())) return false;
       return true;
     });
-    try {
-      // eslint-disable-next-line no-console
-      console.log("[dupscan-filter]", { amtFilter, acctSelSize: acctSel.size, big, mid, inputGroups: groups.length, outputGroups: out.length, firstThreeBrackets: groups.slice(0, 3).map(g => { const a = Math.abs(Number(g.members[0]?.amount) || 0); return { amt: a, bracket: a >= big ? "big" : a >= mid ? "mid" : "small" }; }) });
-    } catch {}
-    return out;
   }, [groups, amtFilter, acctSel, big, mid]);
 
   // Settings summary line — same shape as the Settings card summary so users
