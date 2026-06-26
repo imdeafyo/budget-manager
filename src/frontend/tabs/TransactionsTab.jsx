@@ -529,6 +529,37 @@ export default function TransactionsTab(props) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  /* JSON export of the current filtered view.
+     Unlike the CSV path (which is limited to visible columns for spreadsheet
+     friendliness), JSON exports the FULL transaction objects — every field,
+     including import_batch_id, import_source, custom_fields, and splits. This
+     is the format for backups, round-trips, and feeding analysis tooling that
+     needs the fields the CSV drops. Wrapped in a small envelope with metadata
+     so importers can sanity-check what they're loading. */
+  const exportJsonCurrentView = () => {
+    if (!visibleRows || visibleRows.length === 0) {
+      alert("Nothing to export — no rows match the current filters.");
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      kind: "budget-manager-transactions",
+      version: 1,
+      count: visibleRows.length,
+      transactions: visibleRows,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `transactions-${today}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
   const bulkApplyCategory = async () => {
     if (!bulkCat) return;
     const ids = new Set(selected);
@@ -869,8 +900,11 @@ export default function TransactionsTab(props) {
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
             <button onClick={() => setShowImport(true)} style={btn("#556FB5", "#fff")}>📥 Import</button>
             <button onClick={exportCsvCurrentView}
-              title="Download the currently-filtered view as CSV (uses your visible columns)"
-              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 Export</button>
+              title="Download the currently-filtered view as CSV (uses your visible columns — spreadsheet-friendly)"
+              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 CSV</button>
+            <button onClick={exportJsonCurrentView}
+              title="Download the currently-filtered view as JSON (full data — every field including import batch, custom fields, and splits)"
+              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 JSON</button>
           </div>
         </div>
 
