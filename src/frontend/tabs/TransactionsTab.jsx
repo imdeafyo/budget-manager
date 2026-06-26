@@ -2214,10 +2214,14 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                 const ticked = memberIds.filter(id => selected.has(id)).length;
                 const allTicked = ticked === memberIds.length;
                 const noneTicked = ticked === 0;
+                const gAmt = Math.abs(Number(group.members[0]?.amount) || 0);
+                const gBracket = gAmt >= big ? "big" : gAmt >= mid ? "mid" : "small";
+                const bracketColor = gBracket === "big" ? "#C0392B" : gBracket === "mid" ? "#B4791F" : "#888";
                 return (
                   <div key={group.key} style={{ marginBottom: 8, border: "1px solid var(--bdr2, #eee)", borderRadius: 6, background: "var(--card-bg, #fff)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid var(--bdr2, #eee)", background: "var(--input-bg, #fafafa)", borderRadius: "6px 6px 0 0" }}>
                       <div style={{ flex: 1, fontSize: 12, color: "var(--tx2, #555)" }}>
+                        <span style={{ marginRight: 8, fontSize: 9, fontWeight: 700, color: bracketColor, textTransform: "uppercase", letterSpacing: 0.5, padding: "2px 6px", border: `1px solid ${bracketColor}`, borderRadius: 4 }}>{gBracket}</span>
                         <strong>{group.members.length} rows</strong> · {fmt(group.members[0].amount)} · {group.members[0].description || <em style={{ color: "var(--tx3,#aaa)" }}>(no description)</em>}
                         {group.crossAccount && (
                           <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, color: "#E67E22", textTransform: "uppercase", letterSpacing: 0.5, padding: "2px 6px", border: "1px solid #E67E22", borderRadius: 4, whiteSpace: "nowrap" }}
