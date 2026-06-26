@@ -1970,13 +1970,27 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
 function DupScanModal({ groups, selected, scannedCount, dayWindow, amountTolerance, descriptionMode, firstWordCount, onToggleRow, onSelectGroupRest, onDeselectGroup, onDismissGroup, onClose, onConfirm, onExclude }) {
   const totalGroups = groups.length;
   const totalSelected = selected.size;
-  const [showInsights, setShowInsights] = useState(true);
+  const [showInsights, setShowInsights] = useState(false);
+  const [amtFilter, setAmtFilter] = useState("all");   // all | big | mid | small
+  const [acctFilter, setAcctFilter] = useState("all"); // "all" | account name
 
   // Same breakdown the local diagnostic script produces — batch relationship,
   // dollar brackets, and the per-account view with contribution-account flags —
   // so the user can make informed choices instead of bulk-acting blind.
   const analysis = useMemo(() => analyzeDuplicateGroups(groups), [groups]);
   const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(Number(n) || 0).toFixed(2);
+
+  // Apply the amount-size + account filters to decide which groups render.
+  const { big, mid } = analysis.thresholds;
+  const filteredGroups = useMemo(() => {
+    return groups.filter(g => {
+      const amt = Math.abs(Number(g.members[0]?.amount) || 0);
+      const bracket = amt >= big ? "big" : amt >= mid ? "mid" : "small";
+      if (amtFilter !== "all" && bracket !== amtFilter) return false;
+      if (acctFilter !== "all" && (g.members[0]?.account || "—").trim() !== acctFilter) return false;
+      return true;
+    });
+  }, [groups, amtFilter, acctFilter, big, mid]);
 
   // Settings summary line — same shape as the Settings card summary so users
   // can sanity-check what the scan was looking for.
@@ -1992,7 +2006,7 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
   return (
     <div onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 820, width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+      <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 1100, width: "100%", maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
         <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>
           {totalGroups === 0
             ? "No duplicates found"
@@ -2064,7 +2078,10 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                       </thead>
                       <tbody>
                         {analysis.byAccount.map((a) => (
-                          <tr key={a.account} style={{ borderTop: "1px solid var(--bdr2, #eee)" }}>
+                          <tr key={a.account}
+                            onClick={() => { setAcctFilter(acctFilter === a.account ? "all" : a.account); }}
+                            style={{ borderTop: "1px solid var(--bdr2, #eee)", cursor: "pointer", background: acctFilter === a.account ? "rgba(85,111,181,0.12)" : "transparent" }}
+                            title="Click to filter the list to this account">
                             <td style={{ padding: "4px 8px" }}>
                               {a.contrib && <span title="Looks like a contribution/investment account — verify before excluding" style={{ color: "#E67E22", marginRight: 4 }}>⚠</span>}
                               {a.account}
@@ -2080,12 +2097,49 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
               )}
             </div>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12, color: "var(--tx3, #888)", flexWrap: "wrap" }}>
-              <span><strong style={{ color: "var(--tx, #333)" }}>{totalSelected}</strong> row{totalSelected === 1 ? "" : "s"} marked for deletion across {totalGroups} group{totalGroups === 1 ? "" : "s"}</span>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8, fontSize: 12, color: "var(--tx3, #888)", flexWrap: "wrap" }}>
+              <span><strong style={{ color: "var(--tx, #333)" }}>{totalSelected}</strong> row{totalSelected === 1 ? "" : "s"} marked across {totalGroups} group{totalGroups === 1 ? "" : "s"}</span>
             </div>
 
-            <div style={{ flex: 1, minHeight: 200, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 8, padding: 4 }}>
-              {groups.map((group) => {
+            {/* ── Filter bar ── */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 700 }}>Amount:</span>
+              {["all", "big", "mid", "small"].map(key => (
+                <button key={key} onClick={() => setAmtFilter(key)}
+                  style={{ ...pillBtn(), fontWeight: amtFilter === key ? 700 : 400,
+                    background: amtFilter === key ? "#556FB5" : "var(--input-bg, #f5f5f5)",
+                    color: amtFilter === key ? "#fff" : "var(--tx, #333)" }}>
+                  {key === "all" ? "all"
+                    : key === "big" ? `big (≥$${big})`
+                    : key === "mid" ? `mid` : `small (<$${mid})`}
+                </button>
+              ))}
+              <span style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 700, marginLeft: 8 }}>Account:</span>
+              <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)}
+                style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #fff)", color: "var(--tx, #333)", maxWidth: 240 }}>
+                <option value="all">all accounts</option>
+                {analysis.byAccount.map(a => (
+                  <option key={a.account} value={a.account}>{a.contrib ? "⚠ " : ""}{a.account} ({a.groups})</option>
+                ))}
+              </select>
+              {(amtFilter !== "all" || acctFilter !== "all") && (
+                <>
+                  <button onClick={() => { setAmtFilter("all"); setAcctFilter("all"); }}
+                    style={{ ...pillBtn() }}>clear</button>
+                  <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>
+                    showing {filteredGroups.length} of {totalGroups}
+                  </span>
+                </>
+              )}
+            </div>
+
+            <div style={{ flex: 1, minHeight: 320, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 8, padding: 4 }}>
+              {filteredGroups.length === 0 && (
+                <div style={{ padding: 24, textAlign: "center", fontSize: 13, color: "var(--tx3, #888)" }}>
+                  No groups match the current filters.
+                </div>
+              )}
+              {filteredGroups.map((group) => {
                 // Group-level state derived from the shared Set
                 const memberIds = group.members.map(m => m.id);
                 const ticked = memberIds.filter(id => selected.has(id)).length;
