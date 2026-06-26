@@ -2020,13 +2020,18 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
   // bracket is AND with that. Empty account set = all accounts.
   const { big, mid } = analysis.thresholds;
   const filteredGroups = useMemo(() => {
-    return groups.filter(g => {
+    const out = groups.filter(g => {
       const amt = Math.abs(Number(g.members[0]?.amount) || 0);
       const bracket = amt >= big ? "big" : amt >= mid ? "mid" : "small";
       if (amtFilter !== "all" && bracket !== amtFilter) return false;
       if (acctSel.size > 0 && !acctSel.has((g.members[0]?.account || "—").trim())) return false;
       return true;
     });
+    try {
+      // eslint-disable-next-line no-console
+      console.log("[dupscan-filter]", { amtFilter, acctSelSize: acctSel.size, big, mid, inputGroups: groups.length, outputGroups: out.length, firstThreeBrackets: groups.slice(0, 3).map(g => { const a = Math.abs(Number(g.members[0]?.amount) || 0); return { amt: a, bracket: a >= big ? "big" : a >= mid ? "mid" : "small" }; }) });
+    } catch {}
+    return out;
   }, [groups, amtFilter, acctSel, big, mid]);
 
   // Settings summary line — same shape as the Settings card summary so users
@@ -2195,11 +2200,11 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                 <>
                   <button onClick={() => { setAmtFilter("all"); setAcctSel(new Set()); }}
                     style={{ ...pillBtn() }}>clear all</button>
-                  <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>
-                    showing {filteredGroups.length} of {totalGroups}
-                  </span>
                 </>
               )}
+              <span style={{ fontSize: 12, fontWeight: 700, color: (amtFilter !== "all" || acctSel.size > 0) ? "#556FB5" : "var(--tx3, #888)" }}>
+                List shows {filteredGroups.length} of {totalGroups} group{totalGroups === 1 ? "" : "s"}
+              </span>
             </div>
 
             <div style={{ flex: 1, minHeight: 320, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 8, padding: 4 }}>
