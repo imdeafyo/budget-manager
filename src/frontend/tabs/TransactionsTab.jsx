@@ -91,6 +91,7 @@ export default function TransactionsTab(props) {
   const [selected, setSelected] = useState(new Set());
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [showBulk, setShowBulk] = useState(false);
   const [bulkCat, setBulkCat] = useState("");
@@ -899,12 +900,9 @@ export default function TransactionsTab(props) {
             )}
             <button onClick={() => setShowAdd(true)} style={btn("#2ECC71", "#fff")}>+ Add</button>
             <button onClick={() => setShowImport(true)} style={btn("#556FB5", "#fff")}>📥 Import</button>
-            <button onClick={exportCsvCurrentView}
-              title="Download the currently-filtered view as CSV (uses your visible columns — spreadsheet-friendly)"
-              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 CSV</button>
-            <button onClick={exportJsonCurrentView}
-              title="Download the currently-filtered view as JSON (full data — every field including import batch, custom fields, and splits)"
-              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 JSON</button>
+            <button onClick={() => setShowExportModal(true)}
+              title="Export the currently-filtered view — choose CSV or JSON"
+              style={btn("var(--card-bg, #fff)", "var(--tx, #333)")}>📤 Export</button>
           </div>
         </div>
 
@@ -1124,6 +1122,33 @@ export default function TransactionsTab(props) {
           onSubmit={async (tx) => { await addTransactions([tx]); setShowAdd(false); }}
           onClose={() => setShowAdd(false)}
         />
+      )}
+
+      {showExportModal && (
+        <div onClick={(e) => { if (e.target === e.currentTarget) setShowExportModal(false); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "var(--card-bg, #fff)", color: "var(--card-color, #222)", borderRadius: 12, padding: 24, maxWidth: 460, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 800 }}>Export transactions</h3>
+            <div style={{ fontSize: 13, color: "var(--tx2, #555)", marginBottom: 16, lineHeight: 1.5 }}>
+              Exports the {visibleRows.length.toLocaleString()} row{visibleRows.length === 1 ? "" : "s"} in your current filtered view. Pick a format:
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={() => { exportCsvCurrentView(); setShowExportModal(false); }}
+                style={{ textAlign: "left", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #fafafa)", color: "var(--tx, #333)", cursor: "pointer" }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>📄 CSV</div>
+                <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 2 }}>Spreadsheet-friendly. Uses your visible columns. Best for Excel / Sheets.</div>
+              </button>
+              <button onClick={() => { exportJsonCurrentView(); setShowExportModal(false); }}
+                style={{ textAlign: "left", padding: "12px 14px", borderRadius: 8, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #fafafa)", color: "var(--tx, #333)", cursor: "pointer" }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>🧩 JSON</div>
+                <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginTop: 2 }}>Full data — every field including import batch, custom fields, and splits. Best for backups and analysis tooling.</div>
+              </button>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setShowExportModal(false)} style={btn("var(--input-bg, #f5f5f5)", "var(--tx, #333)")}>Cancel</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showImport && (
@@ -1972,7 +1997,9 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
   const totalSelected = selected.size;
   const [showInsights, setShowInsights] = useState(false);
   const [amtFilter, setAmtFilter] = useState("all");   // all | big | mid | small
-  const [acctFilter, setAcctFilter] = useState("all"); // "all" | account name
+  const [acctSel, setAcctSel] = useState(() => new Set()); // empty = all accounts
+  const [acctSearch, setAcctSearch] = useState("");
+  const [acctMenuOpen, setAcctMenuOpen] = useState(false);
 
   // Same breakdown the local diagnostic script produces — batch relationship,
   // dollar brackets, and the per-account view with contribution-account flags —
@@ -1980,17 +2007,27 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
   const analysis = useMemo(() => analyzeDuplicateGroups(groups), [groups]);
   const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(Number(n) || 0).toFixed(2);
 
+  const toggleAcct = (name) => {
+    setAcctSel(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
   // Apply the amount-size + account filters to decide which groups render.
+  // Accounts are OR among themselves (any selected account matches); the amount
+  // bracket is AND with that. Empty account set = all accounts.
   const { big, mid } = analysis.thresholds;
   const filteredGroups = useMemo(() => {
     return groups.filter(g => {
       const amt = Math.abs(Number(g.members[0]?.amount) || 0);
       const bracket = amt >= big ? "big" : amt >= mid ? "mid" : "small";
       if (amtFilter !== "all" && bracket !== amtFilter) return false;
-      if (acctFilter !== "all" && (g.members[0]?.account || "—").trim() !== acctFilter) return false;
+      if (acctSel.size > 0 && !acctSel.has((g.members[0]?.account || "—").trim())) return false;
       return true;
     });
-  }, [groups, amtFilter, acctFilter, big, mid]);
+  }, [groups, amtFilter, acctSel, big, mid]);
 
   // Settings summary line — same shape as the Settings card summary so users
   // can sanity-check what the scan was looking for.
@@ -2079,9 +2116,9 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                       <tbody>
                         {analysis.byAccount.map((a) => (
                           <tr key={a.account}
-                            onClick={() => { setAcctFilter(acctFilter === a.account ? "all" : a.account); }}
-                            style={{ borderTop: "1px solid var(--bdr2, #eee)", cursor: "pointer", background: acctFilter === a.account ? "rgba(85,111,181,0.12)" : "transparent" }}
-                            title="Click to filter the list to this account">
+                            onClick={() => toggleAcct(a.account)}
+                            style={{ borderTop: "1px solid var(--bdr2, #eee)", cursor: "pointer", background: acctSel.has(a.account) ? "rgba(85,111,181,0.12)" : "transparent" }}
+                            title="Click to filter the list to this account (multi-select)">
                             <td style={{ padding: "4px 8px" }}>
                               {a.contrib && <span title="Looks like a contribution/investment account — verify before excluding" style={{ color: "#E67E22", marginRight: 4 }}>⚠</span>}
                               {a.account}
@@ -2115,17 +2152,49 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                 </button>
               ))}
               <span style={{ fontSize: 11, color: "var(--tx3, #888)", fontWeight: 700, marginLeft: 8 }}>Account:</span>
-              <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)}
-                style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #fff)", color: "var(--tx, #333)", maxWidth: 240 }}>
-                <option value="all">all accounts</option>
-                {analysis.byAccount.map(a => (
-                  <option key={a.account} value={a.account}>{a.contrib ? "⚠ " : ""}{a.account} ({a.groups})</option>
-                ))}
-              </select>
-              {(amtFilter !== "all" || acctFilter !== "all") && (
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setAcctMenuOpen(o => !o)}
+                  style={{ ...pillBtn(), display: "flex", alignItems: "center", gap: 6, maxWidth: 280 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {acctSel.size === 0 ? "all accounts"
+                      : acctSel.size === 1 ? [...acctSel][0]
+                      : `${acctSel.size} accounts`}
+                  </span>
+                  <span style={{ color: "var(--tx3, #888)" }}>{acctMenuOpen ? "▴" : "▾"}</span>
+                </button>
+                {acctMenuOpen && (
+                  <div style={{ position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 10, width: 300, maxHeight: 320, display: "flex", flexDirection: "column", background: "var(--card-bg, #fff)", border: "1px solid var(--bdr, #ccc)", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.18)" }}>
+                    <input autoFocus value={acctSearch} onChange={e => setAcctSearch(e.target.value)}
+                      placeholder="Type to filter accounts…"
+                      style={{ margin: 8, padding: "6px 8px", fontSize: 12, borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #fff)", color: "var(--tx, #333)" }} />
+                    <div style={{ overflowY: "auto", padding: "0 4px 4px" }}>
+                      {analysis.byAccount
+                        .filter(a => a.account.toLowerCase().includes(acctSearch.trim().toLowerCase()))
+                        .map(a => (
+                          <label key={a.account}
+                            style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 8px", fontSize: 12, color: "var(--tx, #333)", cursor: "pointer", borderRadius: 4 }}>
+                            <input type="checkbox" checked={acctSel.has(a.account)} onChange={() => toggleAcct(a.account)} />
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {a.contrib && <span style={{ color: "#E67E22", marginRight: 3 }}>⚠</span>}{a.account}
+                            </span>
+                            <span style={{ color: "var(--tx3, #888)" }}>{a.groups}</span>
+                          </label>
+                        ))}
+                      {analysis.byAccount.filter(a => a.account.toLowerCase().includes(acctSearch.trim().toLowerCase())).length === 0 && (
+                        <div style={{ padding: 10, fontSize: 12, color: "var(--tx3, #888)", textAlign: "center" }}>No matches</div>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: 8, borderTop: "1px solid var(--bdr2, #eee)" }}>
+                      <button onClick={() => setAcctSel(new Set())} style={{ ...pillBtn() }}>clear accounts</button>
+                      <button onClick={() => setAcctMenuOpen(false)} style={{ ...pillBtn() }}>done</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {(amtFilter !== "all" || acctSel.size > 0) && (
                 <>
-                  <button onClick={() => { setAmtFilter("all"); setAcctFilter("all"); }}
-                    style={{ ...pillBtn() }}>clear</button>
+                  <button onClick={() => { setAmtFilter("all"); setAcctSel(new Set()); }}
+                    style={{ ...pillBtn() }}>clear all</button>
                   <span style={{ fontSize: 11, color: "var(--tx3, #888)" }}>
                     showing {filteredGroups.length} of {totalGroups}
                   </span>
