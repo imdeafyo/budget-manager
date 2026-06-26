@@ -21,7 +21,7 @@ import { fmt } from "../utils/calc.js";
 import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/budgetCompare.js";
 import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
-import { scanForDuplicates } from "../utils/duplicateScan.js";
+import { scanForDuplicates, analyzeDuplicateGroups } from "../utils/duplicateScan.js";
 import { applyExclusions, isExcludedDuplicate, unmarkExcludedDuplicate } from "../utils/exclusions.js";
 import { detectOutliers } from "../utils/outliers.js";
 import ImportModal from "../components/ImportModal.jsx";
@@ -1970,6 +1970,13 @@ function SplitEditor({ tx, allCategoryOptions, onClose, onSave, onClearAll }) {
 function DupScanModal({ groups, selected, scannedCount, dayWindow, amountTolerance, descriptionMode, firstWordCount, onToggleRow, onSelectGroupRest, onDeselectGroup, onDismissGroup, onClose, onConfirm, onExclude }) {
   const totalGroups = groups.length;
   const totalSelected = selected.size;
+  const [showInsights, setShowInsights] = useState(true);
+
+  // Same breakdown the local diagnostic script produces — batch relationship,
+  // dollar brackets, and the per-account view with contribution-account flags —
+  // so the user can make informed choices instead of bulk-acting blind.
+  const analysis = useMemo(() => analyzeDuplicateGroups(groups), [groups]);
+  const money = (n) => (n < 0 ? "-$" : "$") + Math.abs(Number(n) || 0).toFixed(2);
 
   // Settings summary line — same shape as the Settings card summary so users
   // can sanity-check what the scan was looking for.
@@ -2002,6 +2009,77 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
 
         {totalGroups > 0 && (
           <>
+            {/* ── Insight panel: batch / bracket / per-account breakdown ── */}
+            <div style={{ border: "1px solid var(--bdr2, #eee)", borderRadius: 8, marginBottom: 12, background: "var(--input-bg, #fafafa)" }}>
+              <button onClick={() => setShowInsights(v => !v)}
+                style={{ width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: "8px 12px", fontSize: 12, fontWeight: 700, color: "var(--tx, #333)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>📊 Before you act — what these {totalGroups} groups look like</span>
+                <span style={{ color: "var(--tx3, #888)" }}>{showInsights ? "▾" : "▸"}</span>
+              </button>
+              {showInsights && (
+                <div style={{ padding: "4px 12px 12px", fontSize: 12, color: "var(--tx2, #555)" }}>
+                  {analysis.contribGroups > 0 && (
+                    <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 6, background: "rgba(230,126,34,0.10)", border: "1px solid #E67E22", color: "var(--tx, #333)", lineHeight: 1.5 }}>
+                      <strong>⚠ {analysis.contribGroups} group{analysis.contribGroups === 1 ? "" : "s"} are on contribution/investment accounts.</strong> Retirement
+                      and brokerage exports often split one contribution into several identical-looking rows, or
+                      fragment it across parts — so matching rows there may be <em>real money</em>, not duplicates.
+                      Verify these against a paystub or your brokerage before excluding them. The other {analysis.spendingGroups} group{analysis.spendingGroups === 1 ? "" : "s"} are
+                      on spending accounts, where identical same-day rows are usually true duplicates.
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 18 }}>
+                    {/* Dollar brackets */}
+                    <div>
+                      <div style={{ fontWeight: 700, color: "var(--tx, #333)", marginBottom: 3 }}>By amount</div>
+                      <div>big (≥ ${analysis.thresholds.big}): <strong>{analysis.byBracket.big}</strong> — review individually</div>
+                      <div>mid (${analysis.thresholds.mid}–${analysis.thresholds.big}): <strong>{analysis.byBracket.mid}</strong> — spot-check</div>
+                      <div>small (&lt; ${analysis.thresholds.mid}): <strong>{analysis.byBracket.small}</strong> — low stakes</div>
+                    </div>
+                    {/* Batch relationship */}
+                    <div>
+                      <div style={{ fontWeight: 700, color: "var(--tx, #333)", marginBottom: 3 }}>By import</div>
+                      <div>same import: <strong>{analysis.byBatch["INTRA-BATCH"]}</strong></div>
+                      <div>across imports: <strong>{analysis.byBatch["CROSS-BATCH"]}</strong></div>
+                      <div>manual/unknown: <strong>{analysis.byBatch["MANUAL/UNKNOWN"]}</strong></div>
+                    </div>
+                    {/* Totals */}
+                    <div>
+                      <div style={{ fontWeight: 700, color: "var(--tx, #333)", marginBottom: 3 }}>Totals</div>
+                      <div>groups: <strong>{analysis.totalGroups}</strong></div>
+                      <div>removable rows: <strong>{analysis.removableRows}</strong></div>
+                    </div>
+                  </div>
+
+                  {/* Per-account table */}
+                  <div style={{ fontWeight: 700, color: "var(--tx, #333)", margin: "10px 0 3px" }}>By account</div>
+                  <div style={{ maxHeight: 140, overflowY: "auto", border: "1px solid var(--bdr2, #eee)", borderRadius: 6 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ textAlign: "left", color: "var(--tx3, #888)" }}>
+                          <th style={{ padding: "4px 8px" }}>account</th>
+                          <th style={{ padding: "4px 8px", textAlign: "right" }}>groups</th>
+                          <th style={{ padding: "4px 8px", textAlign: "right" }}>rows</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analysis.byAccount.map((a) => (
+                          <tr key={a.account} style={{ borderTop: "1px solid var(--bdr2, #eee)" }}>
+                            <td style={{ padding: "4px 8px" }}>
+                              {a.contrib && <span title="Looks like a contribution/investment account — verify before excluding" style={{ color: "#E67E22", marginRight: 4 }}>⚠</span>}
+                              {a.account}
+                            </td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{a.groups}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right" }}>{a.rows}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, fontSize: 12, color: "var(--tx3, #888)", flexWrap: "wrap" }}>
               <span><strong style={{ color: "var(--tx, #333)" }}>{totalSelected}</strong> row{totalSelected === 1 ? "" : "s"} marked for deletion across {totalGroups} group{totalGroups === 1 ? "" : "s"}</span>
             </div>

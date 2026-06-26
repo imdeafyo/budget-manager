@@ -256,3 +256,89 @@ export function scanForDuplicates(transactions, opts = {}) {
     scannedCount: rows.length,
   };
 }
+
+/* ── Group analysis (for the scan modal's insight panel) ──
+   Takes the `groups` array from scanForDuplicates and produces the same
+   breakdown the local diagnostic script shows, so the user can make informed
+   choices in the UI instead of bulk-acting blind:
+
+   - byBatch:   how groups relate across import batches.
+       INTRA-BATCH   : 2+ members share one import_batch_id (same charge twice
+                       within one import).
+       CROSS-BATCH   : members span different import_batch_id values (overlapping
+                       re-imports).
+       MANUAL/UNKNOWN: a member has no import_batch_id.
+   - byBracket: groups bucketed by absolute amount (big / mid / small).
+   - byAccount: per-account group + removable-row counts, with a `contrib` flag
+       when the account name looks like a retirement/investment account. Those
+       are the ones where identical-looking rows can be legitimate fragmented
+       contributions rather than duplicates — so the UI can warn before bulk
+       action.
+
+   Pure: no side effects, safe to memoize on the groups array. */
+
+const CONTRIB_ACCOUNT_RX = /\b(401|403b|457|ira|roth|hsa|health savings|brokerage|invest|fund|pension|retirement|vanguard|fidelity|schwab|lockheed|lmimco|tsp|espp|rsu)\b/i;
+
+export function looksLikeContributionAccount(name) {
+  return CONTRIB_ACCOUNT_RX.test(name || "");
+}
+
+function batchIdOf(tx) {
+  return tx?.import_batch_id ?? tx?.custom_fields?.import_batch_id ?? null;
+}
+
+export function classifyBatchRelationship(group) {
+  const ids = (group?.members || []).map(batchIdOf);
+  const distinct = new Set(ids.filter(id => id != null));
+  const counts = {};
+  for (const id of ids) if (id != null) counts[id] = (counts[id] || 0) + 1;
+  const hasIntra = Object.values(counts).some(c => c >= 2);
+  if (hasIntra) return "INTRA-BATCH";
+  if (distinct.size >= 2) return "CROSS-BATCH";
+  return "MANUAL/UNKNOWN";
+}
+
+export function analyzeDuplicateGroups(groups, opts = {}) {
+  const big = Number(opts.big ?? 200);
+  const mid = Number(opts.mid ?? 25);
+
+  const byBatch = { "INTRA-BATCH": 0, "CROSS-BATCH": 0, "MANUAL/UNKNOWN": 0 };
+  const byBracket = { big: 0, mid: 0, small: 0 };
+  const accounts = new Map(); // name -> { account, groups, rows, contrib }
+  let removableRows = 0;
+  let contribGroups = 0;
+
+  for (const g of (groups || [])) {
+    const members = g.members || [];
+    const extra = Math.max(0, members.length - 1);
+    removableRows += extra;
+
+    byBatch[classifyBatchRelationship(g)]++;
+
+    const amt = Math.abs(Number(members[0]?.amount) || 0);
+    const bracket = amt >= big ? "big" : amt >= mid ? "mid" : "small";
+    byBracket[bracket]++;
+
+    const acct = (members[0]?.account || "—").trim() || "—";
+    if (!accounts.has(acct)) {
+      accounts.set(acct, { account: acct, groups: 0, rows: 0, contrib: looksLikeContributionAccount(acct) });
+    }
+    const rec = accounts.get(acct);
+    rec.groups++;
+    rec.rows += extra;
+    if (rec.contrib) contribGroups++;
+  }
+
+  const byAccount = [...accounts.values()].sort((a, b) => b.groups - a.groups);
+
+  return {
+    totalGroups: (groups || []).length,
+    removableRows,
+    byBatch,
+    byBracket,
+    byAccount,
+    contribGroups,
+    spendingGroups: (groups || []).length - contribGroups,
+    thresholds: { big, mid },
+  };
+}

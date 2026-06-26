@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   normalizeDesc, tokenize, descriptionsMatch, scanForDuplicates, normalizeAccount,
+  analyzeDuplicateGroups, looksLikeContributionAccount, classifyBatchRelationship,
 } from "./duplicateScan.js";
 
 const tx = (id, date, amount, description, account = "checking", extra = {}) => ({
@@ -393,5 +394,98 @@ describe("scanForDuplicates — account awareness", () => {
     const r = scanForDuplicates(txs, { crossAccount: true });
     expect(r.groups).toHaveLength(1);
     expect(r.groups[0].crossAccount).toBe(false);
+  });
+});
+
+describe("looksLikeContributionAccount", () => {
+  it("flags retirement/investment account names", () => {
+    expect(looksLikeContributionAccount("Lockheed Martin Savings Plans")).toBe(true);
+    expect(looksLikeContributionAccount("Corey Roth IRA")).toBe(true);
+    expect(looksLikeContributionAccount("Health Savings Account")).toBe(true);
+    expect(looksLikeContributionAccount("Fidelity 401k")).toBe(true);
+  });
+  it("does not flag ordinary spending accounts", () => {
+    expect(looksLikeContributionAccount("Amex Platinum")).toBe(false);
+    expect(looksLikeContributionAccount("Chase Checking")).toBe(false);
+    expect(looksLikeContributionAccount("Paypal Balance")).toBe(false);
+  });
+  it("is safe on blank/garbage", () => {
+    expect(looksLikeContributionAccount("")).toBe(false);
+    expect(looksLikeContributionAccount(null)).toBe(false);
+  });
+});
+
+describe("classifyBatchRelationship", () => {
+  const m = (id, batch) => ({ id, import_batch_id: batch });
+  it("INTRA-BATCH when members share a batch id", () => {
+    expect(classifyBatchRelationship({ members: [m("a", "b1"), m("b", "b1")] })).toBe("INTRA-BATCH");
+  });
+  it("CROSS-BATCH when members span different batches", () => {
+    expect(classifyBatchRelationship({ members: [m("a", "b1"), m("b", "b2")] })).toBe("CROSS-BATCH");
+  });
+  it("MANUAL/UNKNOWN when a member lacks a batch id", () => {
+    expect(classifyBatchRelationship({ members: [m("a", null), m("b", "b2")] })).toBe("MANUAL/UNKNOWN");
+  });
+  it("reads batch id from custom_fields fallback", () => {
+    const g = { members: [
+      { id: "a", custom_fields: { import_batch_id: "b1" } },
+      { id: "b", custom_fields: { import_batch_id: "b1" } },
+    ] };
+    expect(classifyBatchRelationship(g)).toBe("INTRA-BATCH");
+  });
+});
+
+describe("analyzeDuplicateGroups", () => {
+  const grp = (amount, account, batch, n = 2) => ({
+    key: `k${amount}${account}`,
+    members: Array.from({ length: n }, (_, i) => ({
+      id: `${account}-${amount}-${i}`, amount, account, import_batch_id: batch,
+    })),
+  });
+
+  it("tallies batch, bracket, and account breakdowns", () => {
+    const groups = [
+      grp(-1847, "Checking", "b1"),       // big, intra, spending
+      grp(-52.30, "Amex Platinum", "b1"), // mid, intra, spending
+      grp(-4.50, "Amex Platinum", "b2", 3), // small, but 2 removable
+      grp(-370.74, "Lockheed Martin Savings", "b1"), // big, intra, CONTRIB
+    ];
+    const a = analyzeDuplicateGroups(groups);
+    expect(a.totalGroups).toBe(4);
+    expect(a.removableRows).toBe(1 + 1 + 2 + 1); // 5
+    expect(a.byBatch["INTRA-BATCH"]).toBe(4);
+    expect(a.byBracket.big).toBe(2);
+    expect(a.byBracket.mid).toBe(1);
+    expect(a.byBracket.small).toBe(1);
+    expect(a.contribGroups).toBe(1);
+    expect(a.spendingGroups).toBe(3);
+  });
+
+  it("per-account rows count removable (members beyond the first)", () => {
+    const groups = [grp(-10, "Amex", "b1", 4)]; // 3 removable
+    const a = analyzeDuplicateGroups(groups);
+    const amex = a.byAccount.find(x => x.account === "Amex");
+    expect(amex.rows).toBe(3);
+    expect(amex.groups).toBe(1);
+    expect(amex.contrib).toBe(false);
+  });
+
+  it("flags contribution accounts in byAccount", () => {
+    const groups = [grp(-370.74, "Corey Roth IRA", "b1")];
+    const a = analyzeDuplicateGroups(groups);
+    expect(a.byAccount[0].contrib).toBe(true);
+  });
+
+  it("handles empty input", () => {
+    const a = analyzeDuplicateGroups([]);
+    expect(a.totalGroups).toBe(0);
+    expect(a.removableRows).toBe(0);
+    expect(a.byAccount).toEqual([]);
+  });
+
+  it("respects custom bracket thresholds", () => {
+    const groups = [grp(-100, "Amex", "b1")];
+    expect(analyzeDuplicateGroups(groups, { big: 50 }).byBracket.big).toBe(1);
+    expect(analyzeDuplicateGroups(groups, { big: 200 }).byBracket.mid).toBe(1);
   });
 });
