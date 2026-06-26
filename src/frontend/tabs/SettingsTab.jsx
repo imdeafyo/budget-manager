@@ -175,6 +175,27 @@ export default function SettingsTab(props) {
     }));
   };
 
+  /* ── Dismissed duplicates ("not a duplicate") ──
+     Rows the user marked as not-a-duplicate in the scan modal. They stay fully
+     counted in totals; they're only skipped by future scans. This count + the
+     reset button let the user make them eligible for scanning again. */
+  const dismissedDupCount = useMemo(
+    () => transactions.reduce((n, t) => n + (t.custom_fields?._dup_dismissed ? 1 : 0), 0),
+    [transactions]
+  );
+
+  const undismissAllDuplicates = () => {
+    if (!dismissedDupCount) return;
+    if (!confirm(`Make ${dismissedDupCount} dismissed row${dismissedDupCount === 1 ? "" : "s"} eligible for duplicate scanning again?\n\nThey'll be able to surface as duplicate candidates the next time you run a scan.`)) return;
+    const apply = bulkUpdateTransactions || setTransactions;
+    apply(transactions.map(t => {
+      if (!t.custom_fields?._dup_dismissed) return t;
+      const cf = { ...t.custom_fields };
+      delete cf._dup_dismissed;
+      return { ...t, custom_fields: cf };
+    }));
+  };
+
   /* ── Recent import batches: group transactions by import_batch_id ── */
   const recentBatches = useMemo(() => {
     const byBatch = new Map();
@@ -518,6 +539,26 @@ export default function SettingsTab(props) {
             <button onClick={unExcludeAllDuplicates}
               style={{ marginTop: 10, marginLeft: 26, fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #f5f5f5)", color: "var(--tx, #333)", cursor: "pointer" }}>
               Restore all {excludedDupCount} excluded duplicate{excludedDupCount === 1 ? "" : "s"}
+            </button>
+          )}
+        </div>
+
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--bdr2, #eee)" }}>
+          <div style={{ fontSize: 13, color: "var(--tx, #333)" }}>
+            <strong>Dismissed duplicates ("not a duplicate")</strong>
+            <span style={{ display: "block", fontSize: 11, color: "var(--tx3, #888)", marginTop: 2 }}>
+              When you mark a group "Not a duplicate" in the scan, its rows stay fully visible and fully counted in
+              all totals — they're just skipped by future duplicate scans, so a legitimate recurring group (like a
+              weekly contribution) doesn't keep resurfacing.
+              {dismissedDupCount > 0
+                ? ` You currently have ${dismissedDupCount} dismissed row${dismissedDupCount === 1 ? "" : "s"}.`
+                : " You have no dismissed rows right now."}
+            </span>
+          </div>
+          {dismissedDupCount > 0 && (
+            <button onClick={undismissAllDuplicates}
+              style={{ marginTop: 10, fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid var(--bdr, #ddd)", background: "var(--input-bg, #f5f5f5)", color: "var(--tx, #333)", cursor: "pointer" }}>
+              Make all {dismissedDupCount} dismissed row{dismissedDupCount === 1 ? "" : "s"} scannable again
             </button>
           )}
         </div>

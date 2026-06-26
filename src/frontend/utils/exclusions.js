@@ -75,3 +75,49 @@ export function clearExclusions(transactions, ids) {
   if (!set.size) return transactions;
   return transactions.map(t => (t && set.has(t.id) ? unmarkExcludedDuplicate(t) : t));
 }
+
+/* ── "Not a duplicate" dismissal ──
+   Distinct from exclusion. Excluding says "this IS a duplicate, hide it and
+   drop it from totals." Dismissing says "this is NOT a duplicate — stop
+   flagging it." A dismissed row stays fully visible and fully counted in every
+   total; it is only skipped by FUTURE duplicate scans so the same legitimate
+   group (e.g. a recurring contribution that looks identical week to week)
+   doesn't resurface every time.
+
+   Flag: `_dup_dismissed` on custom_fields. scanForDuplicates filters these out
+   before clustering, mirroring how it already skips marked transfers and
+   excluded duplicates. */
+
+export function isDuplicateDismissed(tx) {
+  return !!(tx?.custom_fields?._dup_dismissed);
+}
+
+export function markDuplicateDismissed(tx) {
+  if (!tx) return tx;
+  const cf = { ...(tx.custom_fields || {}) };
+  cf._dup_dismissed = true;
+  return { ...tx, custom_fields: cf };
+}
+
+export function unmarkDuplicateDismissed(tx) {
+  if (!tx) return tx;
+  const cf = { ...(tx.custom_fields || {}) };
+  delete cf._dup_dismissed;
+  return { ...tx, custom_fields: cf };
+}
+
+/* Bulk-mark a set of ids as "not a duplicate" (dismissed from future scans). */
+export function applyDuplicateDismissals(transactions, ids) {
+  if (!Array.isArray(transactions)) return transactions;
+  const set = ids instanceof Set ? ids : new Set(ids || []);
+  if (!set.size) return transactions;
+  return transactions.map(t => (t && set.has(t.id) ? markDuplicateDismissed(t) : t));
+}
+
+/* Bulk-clear the dismissed flag for a set of ids (re-eligible for scanning). */
+export function clearDuplicateDismissals(transactions, ids) {
+  if (!Array.isArray(transactions)) return transactions;
+  const set = ids instanceof Set ? ids : new Set(ids || []);
+  if (!set.size) return transactions;
+  return transactions.map(t => (t && set.has(t.id) ? unmarkDuplicateDismissed(t) : t));
+}

@@ -3,6 +3,8 @@ import {
   isExcludedDuplicate, isExcludedFromTotals,
   markExcludedDuplicate, unmarkExcludedDuplicate,
   applyExclusions, clearExclusions,
+  isDuplicateDismissed, markDuplicateDismissed, unmarkDuplicateDismissed,
+  applyDuplicateDismissals, clearDuplicateDismissals,
 } from "./exclusions.js";
 import { markPaired } from "./transfers.js";
 
@@ -98,5 +100,46 @@ describe("applyExclusions / clearExclusions (bulk)", () => {
   it("non-array input returned unchanged", () => {
     expect(applyExclusions(null, ["a"])).toBe(null);
     expect(clearExclusions(undefined, ["a"])).toBe(undefined);
+  });
+});
+
+describe("duplicate dismissal (not-a-duplicate)", () => {
+  it("mark/unmark sets and clears the _dup_dismissed flag", () => {
+    const m = markDuplicateDismissed(tx("a"));
+    expect(m.custom_fields._dup_dismissed).toBe(true);
+    expect(isDuplicateDismissed(m)).toBe(true);
+    const u = unmarkDuplicateDismissed(m);
+    expect(u.custom_fields._dup_dismissed).toBeUndefined();
+    expect(isDuplicateDismissed(u)).toBe(false);
+  });
+
+  it("is independent of the exclusion flag (different semantics)", () => {
+    const dismissed = markDuplicateDismissed(tx("a"));
+    // Dismissed = NOT a duplicate → must stay counted in totals.
+    expect(isExcludedFromTotals(dismissed)).toBe(false);
+    expect(isExcludedDuplicate(dismissed)).toBe(false);
+  });
+
+  it("does not mutate input and is null-safe", () => {
+    const orig = tx("a");
+    markDuplicateDismissed(orig);
+    expect(orig.custom_fields._dup_dismissed).toBeUndefined();
+    expect(markDuplicateDismissed(null)).toBe(null);
+    expect(unmarkDuplicateDismissed(null)).toBe(null);
+  });
+
+  it("bulk apply/clear over ids", () => {
+    const rows = [tx("a"), tx("b"), tx("c")];
+    const applied = applyDuplicateDismissals(rows, new Set(["a", "c"]));
+    expect(isDuplicateDismissed(applied.find(t => t.id === "a"))).toBe(true);
+    expect(isDuplicateDismissed(applied.find(t => t.id === "b"))).toBe(false);
+    const cleared = clearDuplicateDismissals(applied, ["a", "c"]);
+    expect(cleared.every(t => !isDuplicateDismissed(t))).toBe(true);
+  });
+
+  it("empty id set is a no-op returning the original reference", () => {
+    const rows = [tx("a")];
+    expect(applyDuplicateDismissals(rows, new Set())).toBe(rows);
+    expect(clearDuplicateDismissals(rows, [])).toBe(rows);
   });
 });

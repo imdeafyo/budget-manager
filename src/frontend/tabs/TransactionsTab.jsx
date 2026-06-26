@@ -22,7 +22,7 @@ import { compareBudgetToActual, monthlyBuckets, UNCATEGORIZED } from "../utils/b
 import { computeCacheKey, readCache, writeCache } from "../utils/compareCache.js";
 import { buildCSV } from "../utils/csv.js";
 import { scanForDuplicates, analyzeDuplicateGroups } from "../utils/duplicateScan.js";
-import { applyExclusions, isExcludedDuplicate, unmarkExcludedDuplicate } from "../utils/exclusions.js";
+import { applyExclusions, isExcludedDuplicate, unmarkExcludedDuplicate, applyDuplicateDismissals } from "../utils/exclusions.js";
 import { detectOutliers } from "../utils/outliers.js";
 import ImportModal from "../components/ImportModal.jsx";
 import log from "../utils/log.js";
@@ -781,20 +781,26 @@ export default function TransactionsTab(props) {
       return { ...m, selected: next };
     });
   };
-  /* Dismiss a group — removes the whole group from the modal without
-     deleting anything. Useful for coincidental matches the user knows aren't
-     real duplicates (e.g. two unrelated $20 charges on the same day). */
+  /* Dismiss a group — mark its rows "not a duplicate" so they're permanently
+     skipped by future scans (the row stays fully visible and counted in totals;
+     only the scan ignores it). Also removes the group from the current modal
+     view. Reversible from Settings → "Dismissed duplicates". */
   const dupScanDismissGroup = (groupKey) => {
+    const g = dupScanModal?.groups.find(gr => gr.key === groupKey);
+    if (g) {
+      const ids = new Set(g.members.map(m => m.id));
+      const next = applyDuplicateDismissals(transactions, ids);
+      bulkUpdateTransactions(next);
+    }
     setDupScanModal(m => {
       if (!m) return m;
-      const groups = m.groups.filter(g => g.key !== groupKey);
-      // Drop any selections from the dismissed group's rows.
+      const groups = m.groups.filter(gr => gr.key !== groupKey);
       const dismissedMembers = new Set();
-      const g = m.groups.find(gr => gr.key === groupKey);
-      if (g) for (const mem of g.members) dismissedMembers.add(mem.id);
-      const next = new Set();
-      for (const id of m.selected) if (!dismissedMembers.has(id)) next.add(id);
-      return { ...m, groups, selected: next };
+      const grp = m.groups.find(gr => gr.key === groupKey);
+      if (grp) for (const mem of grp.members) dismissedMembers.add(mem.id);
+      const sel = new Set();
+      for (const id of m.selected) if (!dismissedMembers.has(id)) sel.add(id);
+      return { ...m, groups, selected: sel };
     });
   };
 
@@ -2241,9 +2247,9 @@ function DupScanModal({ groups, selected, scannedCount, dayWindow, amountToleran
                         Clear
                       </button>
                       <button onClick={() => onDismissGroup(group.key)}
-                        title="False positive — remove this whole group from the modal without deleting anything"
-                        style={pillBtn()}>
-                        Dismiss
+                        title="Not a duplicate — keep these rows fully (still counted in all totals) and stop flagging this group in future scans. Reversible from Settings."
+                        style={{ ...pillBtn(), borderColor: "#2ECC71", color: "#27AE60" }}>
+                        Not a duplicate
                       </button>
                     </div>
                     <div>

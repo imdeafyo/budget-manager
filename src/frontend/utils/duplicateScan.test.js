@@ -511,3 +511,18 @@ describe("scanForDuplicates — group key uniqueness (regression)", () => {
     expect(new Set(keys).size).toBe(3); // all unique
   });
 });
+
+describe("scanForDuplicates — dismissed rows skipped", () => {
+  it("does not surface a group whose rows are marked _dup_dismissed", () => {
+    const mk = (id, dismissed) => ({
+      id, date: "2024-01-10", amount: -50, description: "Lunch", account: "amex",
+      custom_fields: dismissed ? { _dup_dismissed: true } : {},
+    });
+    // Without dismissal: one group of 2.
+    const live = scanForDuplicates([mk("a"), mk("b")]);
+    expect(live.groups).toHaveLength(1);
+    // With both dismissed: skipped entirely.
+    const dismissed = scanForDuplicates([mk("a", true), mk("b", true)]);
+    expect(dismissed.groups).toHaveLength(0);
+  });
+});
