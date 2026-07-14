@@ -353,6 +353,19 @@ const saveHelperCode = `
 
   useEffect(() => { runUpdateCheck(false); }, [runUpdateCheck]);
 
+  // Auto-fade the green "you're on the latest version" confirmation after 5s.
+  // Only the current-status message fades; the orange "behind" banner persists
+  // until dismissed or updated. Clearing just the message (not the status)
+  // collapses the green box since it only renders when message is truthy.
+  useEffect(() => {
+    if (updateState.status === "current" && updateState.message) {
+      const t = setTimeout(() => {
+        setUpdateState(s => (s.status === "current" ? { ...s, message: "" } : s));
+      }, 5000);
+      return () => clearTimeout(t);
+    }
+  }, [updateState.status, updateState.message]);
+
   // Download the latest HTML with the current data injected — the same
   // machinery as handleSaveHTML, but the shell comes from the network copy
   // (already fetched during the check) rather than the current document.
