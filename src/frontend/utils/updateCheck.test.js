@@ -4,8 +4,6 @@ import {
   compareVersions,
   isBehind,
   extractVersionFromHtml,
-  extractBuildFromHtml,
-  isNewerBuild,
   shouldRecheck,
   makeCacheEntry,
   UPDATE_CACHE_TTL_MS,
@@ -106,48 +104,6 @@ describe("extractVersionFromHtml", () => {
   });
 });
 
-describe("extractBuildFromHtml", () => {
-  it("pulls the baked SHA from double-quoted marker", () => {
-    const html = `<script>window.__APP_BUILD__ = "a3f9c2e";</script>`;
-    expect(extractBuildFromHtml(html)).toBe("a3f9c2e");
-  });
-  it("pulls from single-quoted marker with tight spacing", () => {
-    expect(extractBuildFromHtml(`window.__APP_BUILD__='deadbeef'`)).toBe("deadbeef");
-  });
-  it("returns null when marker absent", () => {
-    expect(extractBuildFromHtml("<html>no build here</html>")).toBeNull();
-  });
-  it("returns null for non-string / empty", () => {
-    expect(extractBuildFromHtml(null)).toBeNull();
-    expect(extractBuildFromHtml("")).toBeNull();
-    expect(extractBuildFromHtml(99)).toBeNull();
-  });
-});
-
-describe("isNewerBuild", () => {
-  it("true when SHAs differ", () => {
-    expect(isNewerBuild("a3f9c2e", "b1c4d5f")).toBe(true);
-  });
-  it("false when SHAs equal (case-insensitive)", () => {
-    expect(isNewerBuild("a3f9c2e", "a3f9c2e")).toBe(false);
-    expect(isNewerBuild("A3F9C2E", "a3f9c2e")).toBe(false);
-  });
-  it("false when one SHA is a prefix of the other (short vs full)", () => {
-    expect(isNewerBuild("a3f9c2e", "a3f9c2e1b2c3d4e5f6")).toBe(false);
-    expect(isNewerBuild("a3f9c2e1b2c3d4e5f6", "a3f9c2e")).toBe(false);
-  });
-  it("false (no nag) when either SHA missing/empty", () => {
-    expect(isNewerBuild(null, "a3f9c2e")).toBe(false);
-    expect(isNewerBuild("a3f9c2e", null)).toBe(false);
-    expect(isNewerBuild("", "a3f9c2e")).toBe(false);
-    expect(isNewerBuild("  ", "a3f9c2e")).toBe(false);
-  });
-  it("tolerates surrounding whitespace", () => {
-    expect(isNewerBuild("  a3f9c2e  ", "a3f9c2e")).toBe(false);
-    expect(isNewerBuild(" a3f9c2e ", " b1c4d5f ")).toBe(true);
-  });
-});
-
 describe("shouldRecheck", () => {
   const now = 1_000_000_000_000;
   it("true when no cache", () => {
@@ -155,38 +111,50 @@ describe("shouldRecheck", () => {
     expect(shouldRecheck(undefined, now)).toBe(true);
     expect(shouldRecheck("nonsense", now)).toBe(true);
   });
-  it("true when cache lacks a usable timestamp or latestBuild", () => {
-    expect(shouldRecheck({ latestBuild: "a3f9c2e" }, now)).toBe(true);
+  it("true when cache lacks a usable timestamp or latest", () => {
+    expect(shouldRecheck({ latest: "1.0.0" }, now)).toBe(true);
     expect(shouldRecheck({ checkedAt: now }, now)).toBe(true);
-    expect(shouldRecheck({ checkedAt: "bad", latestBuild: "a3f9c2e" }, now)).toBe(true);
+    expect(shouldRecheck({ checkedAt: "bad", latest: "1.0.0" }, now)).toBe(true);
   });
   it("false within TTL", () => {
-    const cache = makeCacheEntry("a3f9c2e", "1.0.0", now);
+    const cache = makeCacheEntry("1.0.0", now);
     expect(shouldRecheck(cache, now + 1000)).toBe(false);
     expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS - 1)).toBe(false);
   });
   it("true once TTL elapsed", () => {
-    const cache = makeCacheEntry("a3f9c2e", "1.0.0", now);
+    const cache = makeCacheEntry("1.0.0", now);
     expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS)).toBe(true);
     expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS + 5000)).toBe(true);
   });
   it("respects a custom ttl", () => {
-    const cache = makeCacheEntry("a3f9c2e", "1.0.0", now);
+    const cache = makeCacheEntry("1.0.0", now);
     expect(shouldRecheck(cache, now + 500, 1000)).toBe(false);
     expect(shouldRecheck(cache, now + 1000, 1000)).toBe(true);
   });
 });
 
 describe("makeCacheEntry", () => {
-  it("builds a persistable entry with build + version", () => {
-    expect(makeCacheEntry("a3f9c2e", "1.2.3", 42)).toEqual({
-      checkedAt: 42,
-      latestBuild: "a3f9c2e",
-      latest: "1.2.3",
-    });
+  it("builds a persistable entry", () => {
+    expect(makeCacheEntry("1.2.3", 42)).toEqual({ checkedAt: 42, latest: "1.2.3" });
   });
-  it("coerces to string, preserves null", () => {
-    expect(makeCacheEntry(123, null, 42)).toEqual({ checkedAt: 42, latestBuild: "123", latest: null });
-    expect(makeCacheEntry(null, null, 42).latestBuild).toBeNull();
+  it("coerces latest to string, preserves null", () => {
+    expect(makeCacheEntry(123, 42).latest).toBe("123");
+    expect(makeCacheEntry(null, 42).latest).toBeNull();
+  });
+});
+
+describe("tag comparison (git describe forms)", () => {
+  it("treats an untagged describe as matching its base tag (not newer)", () => {
+    // git describe on an untagged commit → "v1.2.0-3-gabcdef"; numeric core 1.2.0
+    expect(isBehind("v1.2.0", "v1.2.0-3-gabcdef")).toBe(false);
+    expect(isBehind("v1.2.0-3-gabcdef", "v1.2.0")).toBe(false);
+  });
+  it("real tag bump reads as behind", () => {
+    expect(isBehind("v1.2.0", "v1.3.0")).toBe(true);
+    expect(isBehind("v1.2.0", "v2.0.0")).toBe(true);
+  });
+  it("does not nag when ahead or equal", () => {
+    expect(isBehind("v1.3.0", "v1.2.0")).toBe(false);
+    expect(isBehind("v1.2.0", "v1.2.0")).toBe(false);
   });
 });

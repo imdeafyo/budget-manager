@@ -32,23 +32,24 @@ const OUT = path.join(ROOT, "budget-manager-generic.html");
 // fetches the latest budget-manager-generic.html from raw main and extracts
 // its baked version to compare. Sourced from the repo's package.json so a
 // single version bump there flows into the built file.
+// App version baked into the generic HTML for the Phase 13A update check.
+// Sourced from the current git tag (git describe), so the tag you cut is the
+// version the banner shows and compares against. On an untagged commit,
+// describe yields "vX.Y.Z-N-gSHA" whose numeric core still parses to the base
+// tag, so an untagged build never looks newer than the last real tag.
+// Prefer a CI-provided tag ref when present; fall back to git locally.
 const APP_VERSION = (() => {
+  const ci = process.env.GITHUB_REF_NAME; // set to the tag name on tag pushes
+  if (ci && /^v?\d/.test(ci)) return ci;
   try {
-    return JSON.parse(read(path.join(ROOT, "package.json"))).version || "0.0.0";
+    return execSync("git describe --tags --always", { cwd: ROOT }).toString().trim();
   } catch {
-    return "0.0.0";
-  }
-})();
-
-// Commit SHA baked into the generic HTML — the actual "is main newer" signal
-// for the update check. Changes on every commit with no manual step, unlike
-// the version string. Prefer CI-provided GITHUB_SHA; fall back to git locally.
-const APP_BUILD = (() => {
-  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 12);
-  try {
-    return execSync("git rev-parse --short=12 HEAD", { cwd: ROOT }).toString().trim();
-  } catch {
-    return "";
+    // No tags yet and no git → last-resort package.json so the marker isn't empty.
+    try {
+      return JSON.parse(read(path.join(ROOT, "package.json"))).version || "0.0.0";
+    } catch {
+      return "0.0.0";
+    }
   }
 })();
 
@@ -91,11 +92,23 @@ let hook = read(hookFile);
 hook = hook.replace(
   'await fetch("/api/state").then(r => r.json())',
   `await (async () => {
+    // If this file was produced by the in-app "download update" action, its
+    // textarea carries data-fresh="1" and holds the user's data baked in at
+    // download time. Because a downloaded update opens on the SAME origin as
+    // the copy it replaced, localStorage still holds the OLD data — so without
+    // this, the loader would read stale localStorage and the update would look
+    // like it lost the user's data. When the fresh marker is present, the
+    // textarea wins and we re-seed localStorage from it.
     let raw = null;
-    try { raw = localStorage.getItem("budget-data"); } catch {}
-    if (!raw) {
-      const ta = document.getElementById("budget-data");
-      if (ta && ta.textContent) raw = ta.textContent.trim();
+    const ta = document.getElementById("budget-data");
+    const fresh = ta && ta.getAttribute("data-fresh") === "1" && ta.textContent && ta.textContent.trim();
+    if (fresh) {
+      raw = ta.textContent.trim();
+      try { localStorage.setItem("budget-data", raw); } catch {}
+      try { ta.removeAttribute("data-fresh"); } catch {}
+    } else {
+      try { raw = localStorage.getItem("budget-data"); } catch {}
+      if (!raw && ta && ta.textContent) raw = ta.textContent.trim();
     }
     if (!raw) return null;
     try { return { state: JSON.parse(raw) }; } catch(e) { console.error("Load error:", e); return null; }
@@ -307,10 +320,9 @@ const saveHelperCode = `
      button. Pure version logic lives in utils/updateCheck.js; this handler
      owns fetch + DOM only. */
   const CURRENT_VERSION = (typeof window !== "undefined" && window.__APP_VERSION__) || "0.0.0";
-  const CURRENT_BUILD = (typeof window !== "undefined" && window.__APP_BUILD__) || "";
   const [updateState, setUpdateState] = useState({
     status: "idle", // idle | checking | behind | current | error
-    latest: null,   // display version of the newer build (may be null)
+    latest: null,   // latest tag from main (display + compare)
     message: "",
   });
 
@@ -321,7 +333,7 @@ const saveHelperCode = `
         const raw = localStorage.getItem("bm-update-cache");
         const cache = raw ? JSON.parse(raw) : null;
         if (!UC.shouldRecheck(cache)) {
-          if (UC.isNewerBuild(CURRENT_BUILD, cache.latestBuild)) {
+          if (UC.isBehind(CURRENT_VERSION, cache.latest)) {
             setUpdateState({ status: "behind", latest: cache.latest, message: "" });
           }
           return;
@@ -333,23 +345,22 @@ const saveHelperCode = `
       const res = await fetch(UC.RAW_HTML_URL, { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const html = await res.text();
-      const latestBuild = UC.extractBuildFromHtml(html);
-      const latestVersion = UC.extractVersionFromHtml(html); // display only
-      if (!latestBuild) throw new Error("Could not read build id from the latest file");
+      const latest = UC.extractVersionFromHtml(html);
+      if (!latest) throw new Error("Could not read version from the latest file");
       try {
-        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latestBuild, latestVersion)));
+        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latest)));
       } catch {}
-      if (UC.isNewerBuild(CURRENT_BUILD, latestBuild)) {
+      if (UC.isBehind(CURRENT_VERSION, latest)) {
         // Stash the fetched HTML so the download action doesn't re-fetch.
         window.__BM_LATEST_HTML__ = html;
-        setUpdateState({ status: "behind", latest: latestVersion, message: "" });
+        setUpdateState({ status: "behind", latest, message: "" });
       } else {
-        setUpdateState({ status: "current", latest: latestVersion, message: manual ? "You're on the latest version." : "" });
+        setUpdateState({ status: "current", latest, message: manual ? "You're on the latest version." : "" });
       }
     } catch (e) {
       setUpdateState({ status: "error", latest: null, message: String(e && e.message || e) });
     }
-  }, [CURRENT_BUILD]);
+  }, [CURRENT_VERSION]);
 
   useEffect(() => { runUpdateCheck(false); }, [runUpdateCheck]);
 
@@ -381,7 +392,7 @@ const saveHelperCode = `
       const parser = new DOMParser();
       const doc = parser.parseFromString(html, "text/html");
       const ta = doc.getElementById("budget-data");
-      if (ta) ta.textContent = data;
+      if (ta) { ta.textContent = data; ta.setAttribute("data-fresh", "1"); }
       const blob = new Blob(["<!DOCTYPE html>\\n" + doc.documentElement.outerHTML], { type: "text/html" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -416,13 +427,13 @@ const MARKERS = {
     `<button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>`,
   // Manual "check for updates" button next to save. Shows a dot when behind.
   "{/* @generic:update-btn */}":
-    `<button onClick={() => runUpdateCheck(true)} title={updateState.status === "checking" ? "Checking for updates…" : (updateState.status === "behind" ? ("Update available" + (updateState.latest ? (": v" + updateState.latest) : "")) : "Check for updates")} style={{ padding: "5px 10px", background: updateState.status === "behind" ? "#E8573A" : "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{updateState.status === "checking" ? "⏳" : "⟳"}{updateState.status === "behind" ? " •" : ""}</button>`,
+    `<button onClick={() => runUpdateCheck(true)} title={updateState.status === "checking" ? "Checking for updates…" : (updateState.status === "behind" ? ("Update available" + (updateState.latest ? (": " + updateState.latest) : "")) : "Check for updates")} style={{ padding: "5px 10px", background: updateState.status === "behind" ? "#E8573A" : "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{updateState.status === "checking" ? "⏳" : "⟳"}{updateState.status === "behind" ? " •" : ""}</button>`,
   // Update banner — renders only when a newer version is on main. Appears
   // directly below the sticky header. "Download update" bakes the user's
   // current data into the freshly-fetched HTML and downloads it.
   "{/* @generic:update-banner */}":
     `{updateState.status === "behind" && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "10px 16px", background: "#FFF4E5", border: "1px solid #E8573A", borderRadius: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", color: "#7a2e12" }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>🎉 A newer version{updateState.latest ? (" (v" + updateState.latest + ")") : ""} is available.{CURRENT_VERSION && CURRENT_VERSION !== "0.0.0" ? (" You're on v" + CURRENT_VERSION + ".") : ""}</span>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>🎉 A newer version{updateState.latest ? (" (" + updateState.latest + ")") : ""} is available.{CURRENT_VERSION && CURRENT_VERSION !== "0.0.0" ? (" You're on " + CURRENT_VERSION + ".") : ""}</span>
           <button onClick={handleDownloadUpdate} style={{ background: "#E8573A", color: "#fff", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>⬇ Download update with my data</button>
           <button onClick={() => setUpdateState(s => ({ ...s, status: "current" }))} title="Dismiss for now" style={{ background: "transparent", color: "#7a2e12", border: "1px solid #E8573A", borderRadius: 6, padding: "7px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Dismiss</button>
           <span style={{ fontSize: 12, opacity: 0.8 }}>Your data stays in this download — nothing is uploaded.</span>
@@ -529,8 +540,7 @@ let finalHTML = `<!DOCTYPE html>
 <body>
 <div id="root"></div>
 <textarea id="budget-data" style="display:none"></textarea>
-<script>window.__APP_VERSION__ = ${JSON.stringify(APP_VERSION)};
-window.__APP_BUILD__ = ${JSON.stringify(APP_BUILD)};</script>
+<script>window.__APP_VERSION__ = ${JSON.stringify(APP_VERSION)};</script>
 <script>${jsContent}</script>
 </body>
 </html>`;

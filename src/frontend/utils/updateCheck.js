@@ -5,33 +5,39 @@
    here's the latest" check for that build.
 
    How it works:
-     - Every generic build bakes its identity into the HTML as globals:
-         window.__APP_BUILD__   = "a3f9c2e"   // git commit SHA — the signal
-         window.__APP_VERSION__ = "1.2.3"     // package.json — display only
-       (injected by scripts/build-generic.mjs; SHA from `git rev-parse`).
+     - Every generic build bakes the current git tag into the HTML as a global:
+         window.__APP_VERSION__ = "1.2.0"   // from `git describe --tags`
+       (injected by scripts/build-generic.mjs).
      - CI rebuilds budget-manager-generic.html on every push to main, so the
        copy at raw.githubusercontent.com/…/main/budget-manager-generic.html is
-       always the newest published build, stamped with that commit's SHA.
-     - The running app fetches that raw HTML, extracts its baked SHA with
-       extractBuildFromHtml(), and compares to its own __APP_BUILD__.
-     - If the SHAs differ, main has moved since this copy was downloaded, so
-       the UI shows a banner + a one-tap "download the new version with my data
-       baked in" action. The download reuses the same DOMParser+inject machinery
-       as the 💾 save button, except the HTML shell comes from the network.
+       always the newest published build, stamped with the tag it was built at.
+     - The running app fetches that raw HTML, extracts its baked tag with
+       extractVersionFromHtml(), and semver-compares to its own __APP_VERSION__.
+     - If the latest tag is strictly higher (isBehind), the UI shows a banner +
+       a one-tap "download the new version with my data baked in" action. The
+       download reuses the same DOMParser+inject machinery as the 💾 save button,
+       except the HTML shell comes from the network.
 
-   Why the commit SHA and not a version number:
-     A package.json version only changes when someone manually bumps it, so it
-     can't detect "main moved" on its own — forget the bump and the banner never
-     fires (a silent failure). The git SHA changes on every commit with zero
-     manual effort, so latest-SHA ≠ my-SHA reliably means "there's something
-     newer." The version string is still baked and shown in the banner when
-     present, but it's decoration; the SHA decides whether to show it.
+   Why the git tag and not the GitHub tags API:
+     Baking the tag at build time and fetching the raw HTML avoids the GitHub
+     API's unauthenticated rate limit (60/hr/IP) — a real problem for a file://
+     page with no auth, where a few refreshes could trip a 403 and silently
+     break the check. The raw HTML on main isn't subject to that limit. The tag
+     is the single source of the version number, so the banner always shows two
+     meaningful, different numbers (or nothing) — no more "v1.0.0 → v1.0.0".
 
-   Why no GitHub releases/tags API:
-     The built HTML already lives on main and rebuilds on every push. Keying off
-     raw main is simpler and needs no release-tag discipline. It also dodges the
-     GitHub API's low unauthenticated rate limit (60/hr/IP), which raw.github
-     content is not subject to in the same way.
+   Why semver comparison (strictly-higher), not exact equality:
+     If a commit is ever re-tagged, or an older commit is checked out, exact
+     equality would nag in both directions ("update available" when you're
+     actually ahead). Strictly-higher only ever points the user forward.
+
+   Tagging discipline: this requires you to tag a release commit (git tag vX.Y.Z)
+     before/as you push, so CI bakes the right tag. If a build happens on an
+     untagged commit, `git describe --tags` yields something like
+     "v1.2.0-3-gabcdef", whose numeric core parses as 1.2.0 — so an untagged
+     build never appears newer than the last real tag, it just matches it.
+
+   Why no GitHub releases API: see above — raw HTML fetch, no rate limit.
 
    This module is pure: no DOM, no fetch, no network. The caller (injected into
    App.jsx by the build script for MODE=generic only) owns fetching and DOM work.
@@ -110,54 +116,13 @@ export function extractVersionFromHtml(html) {
   return m ? m[1] : null;
 }
 
-/* ── Build identity (commit SHA) — the actual "is there something newer" signal ──
-   Version strings (package.json) only change if someone manually bumps them, so
-   they can't tell you "main moved" on their own. The git commit SHA does: CI
-   bakes it into the HTML on every push to main, so a difference between the SHA
-   in your downloaded copy and the SHA on main means main is genuinely newer —
-   zero manual steps, no tags, no version bumps.
-
-   Baked by the build script as:
-       window.__APP_BUILD__ = "a3f9c2e";
-   The version string is still baked too (window.__APP_VERSION__) but is
-   display-only decoration on the banner — the SHA decides whether to show it. */
-
-/* extractBuildFromHtml(html): pull the baked commit SHA out of a generic HTML
-   file's source. Returns the SHA string, or null if absent (older build). */
-export function extractBuildFromHtml(html) {
-  if (typeof html !== "string" || !html) return null;
-  const m = html.match(/__APP_BUILD__\s*=\s*["']([^"']+)["']/);
-  return m ? m[1] : null;
-}
-
-/* isNewerBuild(currentSha, latestSha): true iff the two SHAs are both present,
-   non-empty, and different. SHAs have no ordering — you can't tell which of two
-   arbitrary commits is "later" from the hash alone — so "different" is the
-   signal: CI only advances main forward, and the running copy's SHA is frozen
-   at whenever it was downloaded, so latest≠current ⇒ main moved ⇒ newer.
-   Returns false if either SHA is missing (never nag on an unreadable value) or
-   if they're equal (you're current). Comparison is case-insensitive and
-   length-tolerant so a short SHA (a3f9c2e) and its full form compare equal when
-   one is a prefix of the other. */
-export function isNewerBuild(currentSha, latestSha) {
-  if (!currentSha || !latestSha) return false;
-  const a = String(currentSha).trim().toLowerCase();
-  const b = String(latestSha).trim().toLowerCase();
-  if (!a || !b) return false;
-  if (a === b) return false;
-  // Prefix match either direction → same commit, just different SHA length.
-  if (a.startsWith(b) || b.startsWith(a)) return false;
-  return true;
-}
-
 /* Cache helpers for the auto-check. The UI does an auto-check on load but
    shouldn't hammer raw.github on every reload, so it caches the last result
    with a timestamp and only re-fetches once the TTL has elapsed. These helpers
    keep that decision pure and testable; the caller owns the actual storage
    read/write (localStorage in the browser).
 
-   Cache shape: { checkedAt: <ms epoch>, latestBuild: "<sha>", latest: "<version>" }
-   latestBuild is the comparison signal; latest is the display version.
+   Cache shape: { checkedAt: <ms epoch>, latest: "<tag>" }
    TTL default: 24h. */
 export const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -167,16 +132,11 @@ export function shouldRecheck(cache, nowMs = Date.now(), ttlMs = UPDATE_CACHE_TT
   if (!cache || typeof cache !== "object") return true;
   const at = Number(cache.checkedAt);
   if (!Number.isFinite(at)) return true;
-  if (!cache.latestBuild) return true;
+  if (!cache.latest) return true;
   return nowMs - at >= ttlMs;
 }
 
-/* makeCacheEntry(latestBuild, latestVersion, nowMs): build a cache object to
-   persist. latestBuild (SHA) is the signal; latestVersion is display-only. */
-export function makeCacheEntry(latestBuild, latestVersion = null, nowMs = Date.now()) {
-  return {
-    checkedAt: nowMs,
-    latestBuild: latestBuild == null ? null : String(latestBuild),
-    latest: latestVersion == null ? null : String(latestVersion),
-  };
+/* makeCacheEntry(latestTag, nowMs): build a cache object to persist. */
+export function makeCacheEntry(latestTag, nowMs = Date.now()) {
+  return { checkedAt: nowMs, latest: latestTag == null ? null : String(latestTag) };
 }
