@@ -27,6 +27,31 @@ const SRC = path.join(ROOT, "src", "frontend");
 const TMP = path.join(ROOT, ".generic-build");
 const OUT = path.join(ROOT, "budget-manager-generic.html");
 
+// App version baked into the generic HTML for the Phase 13A update check.
+// The running generic app reads window.__APP_VERSION__; the update check
+// fetches the latest budget-manager-generic.html from raw main and extracts
+// its baked version to compare. Sourced from the repo's package.json so a
+// single version bump there flows into the built file.
+const APP_VERSION = (() => {
+  try {
+    return JSON.parse(read(path.join(ROOT, "package.json"))).version || "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+// Commit SHA baked into the generic HTML — the actual "is main newer" signal
+// for the update check. Changes on every commit with no manual step, unlike
+// the version string. Prefer CI-provided GITHUB_SHA; fall back to git locally.
+const APP_BUILD = (() => {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 12);
+  try {
+    return execSync("git rev-parse --short=12 HEAD", { cwd: ROOT }).toString().trim();
+  } catch {
+    return "";
+  }
+})();
+
 // ── helpers ──
 function read(f) { return fs.readFileSync(f, "utf8"); }
 function write(f, s) { fs.writeFileSync(f, s, "utf8"); }
@@ -201,6 +226,17 @@ console.log("→ Patching App.jsx for generic buttons...");
 const appFile = path.join(TMP, "App.jsx");
 let app = read(appFile);
 
+// Generic-only: App.jsx needs useState/useEffect/useCallback (for the update
+// check handlers) and the updateCheck module. Deploy App.jsx imports only
+// useRef/useMemo/Component, so widen the import and add the UC namespace here.
+app = app.replace(
+  'import { useRef, useMemo, Component } from "react";',
+  'import { useRef, useMemo, useState, useEffect, useCallback, Component } from "react";\nimport * as UC from "./utils/updateCheck.js";'
+);
+if (!app.includes("import * as UC from")) {
+  throw new Error("build-generic: failed to inject updateCheck import into App.jsx — the react import line changed shape.");
+}
+
 // Find the ChartsTab usage and add generic buttons after it
 // We need to add:
 //   - 💾 Save button in header
@@ -262,6 +298,86 @@ const saveHelperCode = `
     };
     input.click();
   };
+
+  /* ── Generic: Update check (Phase 13A) ──
+     Reads its own baked version from window.__APP_VERSION__, fetches the
+     latest generic HTML from raw main, extracts that file's baked version,
+     and — if behind — offers a one-tap "download the new version with my
+     data baked in" action. Auto-checks on mount (cached ~24h) plus a manual
+     button. Pure version logic lives in utils/updateCheck.js; this handler
+     owns fetch + DOM only. */
+  const CURRENT_VERSION = (typeof window !== "undefined" && window.__APP_VERSION__) || "0.0.0";
+  const CURRENT_BUILD = (typeof window !== "undefined" && window.__APP_BUILD__) || "";
+  const [updateState, setUpdateState] = useState({
+    status: "idle", // idle | checking | behind | current | error
+    latest: null,   // display version of the newer build (may be null)
+    message: "",
+  });
+
+  const runUpdateCheck = useCallback(async (manual) => {
+    // Cache gate: skip the network on auto-checks within the TTL.
+    if (!manual) {
+      try {
+        const raw = localStorage.getItem("bm-update-cache");
+        const cache = raw ? JSON.parse(raw) : null;
+        if (!UC.shouldRecheck(cache)) {
+          if (UC.isNewerBuild(CURRENT_BUILD, cache.latestBuild)) {
+            setUpdateState({ status: "behind", latest: cache.latest, message: "" });
+          }
+          return;
+        }
+      } catch {}
+    }
+    setUpdateState(s => ({ ...s, status: "checking", message: "" }));
+    try {
+      const res = await fetch(UC.RAW_HTML_URL, { cache: "no-store" });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const html = await res.text();
+      const latestBuild = UC.extractBuildFromHtml(html);
+      const latestVersion = UC.extractVersionFromHtml(html); // display only
+      if (!latestBuild) throw new Error("Could not read build id from the latest file");
+      try {
+        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latestBuild, latestVersion)));
+      } catch {}
+      if (UC.isNewerBuild(CURRENT_BUILD, latestBuild)) {
+        // Stash the fetched HTML so the download action doesn't re-fetch.
+        window.__BM_LATEST_HTML__ = html;
+        setUpdateState({ status: "behind", latest: latestVersion, message: "" });
+      } else {
+        setUpdateState({ status: "current", latest: latestVersion, message: manual ? "You're on the latest version." : "" });
+      }
+    } catch (e) {
+      setUpdateState({ status: "error", latest: null, message: String(e && e.message || e) });
+    }
+  }, [CURRENT_BUILD]);
+
+  useEffect(() => { runUpdateCheck(false); }, [runUpdateCheck]);
+
+  // Download the latest HTML with the current data injected — the same
+  // machinery as handleSaveHTML, but the shell comes from the network copy
+  // (already fetched during the check) rather than the current document.
+  const handleDownloadUpdate = async () => {
+    try {
+      let html = window.__BM_LATEST_HTML__;
+      if (!html) {
+        const res = await fetch(UC.RAW_HTML_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        html = await res.text();
+      }
+      const data = JSON.stringify(S.stRef.current);
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      const ta = doc.getElementById("budget-data");
+      if (ta) ta.textContent = data;
+      const blob = new Blob(["<!DOCTYPE html>\\n" + doc.documentElement.outerHTML], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "budget-manager.html"; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert("Update download failed: " + (e && e.message || e) + "\\n\\nYou can update manually from " + UC.RELEASES_PAGE_URL);
+    }
+  };
 `;
 
 // ── Marker-based injection ──
@@ -285,6 +401,21 @@ const MARKERS = {
   // JSX comment inside the existing theme-button <div> — inject a bare element.
   "{/* @generic:save-btn */}":
     `<button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>`,
+  // Manual "check for updates" button next to save. Shows a dot when behind.
+  "{/* @generic:update-btn */}":
+    `<button onClick={() => runUpdateCheck(true)} title={updateState.status === "checking" ? "Checking for updates…" : (updateState.status === "behind" ? ("Update available" + (updateState.latest ? (": v" + updateState.latest) : "")) : "Check for updates")} style={{ padding: "5px 10px", background: updateState.status === "behind" ? "#E8573A" : "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{updateState.status === "checking" ? "⏳" : "⟳"}{updateState.status === "behind" ? " •" : ""}</button>`,
+  // Update banner — renders only when a newer version is on main. Appears
+  // directly below the sticky header. "Download update" bakes the user's
+  // current data into the freshly-fetched HTML and downloads it.
+  "{/* @generic:update-banner */}":
+    `{updateState.status === "behind" && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "10px 16px", background: "#FFF4E5", border: "1px solid #E8573A", borderRadius: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", color: "#7a2e12" }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>🎉 A newer version{updateState.latest ? (" (v" + updateState.latest + ")") : ""} is available.{CURRENT_VERSION && CURRENT_VERSION !== "0.0.0" ? (" You're on v" + CURRENT_VERSION + ".") : ""}</span>
+          <button onClick={handleDownloadUpdate} style={{ background: "#E8573A", color: "#fff", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>⬇ Download update with my data</button>
+          <button onClick={() => setUpdateState(s => ({ ...s, status: "current" }))} title="Dismiss for now" style={{ background: "transparent", color: "#7a2e12", border: "1px solid #E8573A", borderRadius: 6, padding: "7px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Dismiss</button>
+          <span style={{ fontSize: 12, opacity: 0.8 }}>Your data stays in this download — nothing is uploaded.</span>
+        </div>}
+        {updateState.status === "current" && updateState.message && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "8px 16px", background: "#E9F7EF", border: "1px solid #27AE60", borderRadius: 8, color: "#1e7e45", fontSize: 13, fontWeight: 600 }}>✓ {updateState.message}</div>}
+        {updateState.status === "error" && updateState.message && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "8px 16px", background: "#FDECEA", border: "1px solid #C0392B", borderRadius: 8, color: "#922", fontSize: 13, fontWeight: 600 }}>Update check failed: {updateState.message}</div>}`,
   // JSX comment at tab-block level — inject a full {cond && <div>…</div>} block.
   "{/* @generic:clear-btn */}":
     `{S.tab === "taxes" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", textAlign: "center" }}>
@@ -310,7 +441,7 @@ for (const [marker, code] of Object.entries(MARKERS)) {
 }
 
 // Safety net 1: no generic handler should be referenced without being defined.
-for (const fn of ["handleSaveHTML", "handleClearAll", "handleExportJSON", "handleImportJSON"]) {
+for (const fn of ["handleSaveHTML", "handleClearAll", "handleExportJSON", "handleImportJSON", "handleDownloadUpdate", "runUpdateCheck"]) {
   const defined = app.includes(`const ${fn} =`);
   const used = app.includes(`onClick={${fn}}`);
   if (used && !defined) {
@@ -385,6 +516,8 @@ let finalHTML = `<!DOCTYPE html>
 <body>
 <div id="root"></div>
 <textarea id="budget-data" style="display:none"></textarea>
+<script>window.__APP_VERSION__ = ${JSON.stringify(APP_VERSION)};
+window.__APP_BUILD__ = ${JSON.stringify(APP_BUILD)};</script>
 <script>${jsContent}</script>
 </body>
 </html>`;
