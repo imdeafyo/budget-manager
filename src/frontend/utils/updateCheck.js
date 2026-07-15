@@ -1,4 +1,6 @@
 /* ══════════════════════════ Update check — Phase 13A (generic only) ══════════════════════════
+   (Update-check smoke test: this line exists to move the commit SHA so a
+   previously-downloaded copy sees a newer build on main. Safe to delete.)
    The self-contained generic HTML file (budget-manager.html) has no auto-update
    path the way the K8s deploy does — the user downloaded a single file and runs
    it from disk (often file://). This module powers a lightweight "you're behind,
