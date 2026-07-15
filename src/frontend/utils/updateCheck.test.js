@@ -211,36 +211,63 @@ describe("regression: a copy predating this feature can't self-detect", () => {
   });
 });
 
-describe("shouldRecheck", () => {
-
+describe("shouldRecheck (build-scoped cache)", () => {
   const now = 1_000_000_000_000;
+  const MINE = "6094dd031f60";
   it("true when no cache / missing fields", () => {
-    expect(shouldRecheck(null, now)).toBe(true);
-    expect(shouldRecheck({ latestBuild: "abc" }, now)).toBe(true);
-    expect(shouldRecheck({ checkedAt: now }, now)).toBe(true);
-    expect(shouldRecheck({ checkedAt: "bad", latestBuild: "abc" }, now)).toBe(true);
+    expect(shouldRecheck(null, MINE, now)).toBe(true);
+    expect(shouldRecheck({ latestBuild: "abc" }, MINE, now)).toBe(true);
+    expect(shouldRecheck({ checkedAt: now }, MINE, now)).toBe(true);
+    expect(shouldRecheck({ checkedAt: "bad", latestBuild: "abc" }, MINE, now)).toBe(true);
   });
-  it("false within TTL, true after", () => {
-    const cache = makeCacheEntry("abc", "v1.5.0", now);
-    expect(shouldRecheck(cache, now + 1000)).toBe(false);
-    expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS)).toBe(true);
+  it("false within TTL when the cache is for THIS build", () => {
+    const cache = makeCacheEntry("abc", "v1.5.0", MINE, now);
+    expect(shouldRecheck(cache, MINE, now + 1000)).toBe(false);
   });
+  it("true once TTL elapsed", () => {
+    const cache = makeCacheEntry("abc", "v1.5.0", MINE, now);
+    expect(shouldRecheck(cache, MINE, now + UPDATE_CACHE_TTL_MS)).toBe(true);
+  });
+
+  it("THE BUG: a fresh download must ignore a cache written by an older build", () => {
+    // localStorage is per-ORIGIN. An older file in the same folder cached
+    // "main is at aaaa1111" and nagged. The fresh download shares that cache.
+    // Without scoping it skipped the network and nagged about itself.
+    const olderBuild = "1e208456e82e";
+    const staleCache = makeCacheEntry("aaaa1111bbbb", "v1.7.0", olderBuild, now);
+    // The fresh build must NOT trust it -> must recheck over the network.
+    expect(shouldRecheck(staleCache, MINE, now + 1000)).toBe(true);
+    // Sanity: that stale entry would otherwise have caused a false nag.
+    expect(isNewerBuild(MINE, staleCache.latestBuild)).toBe(true);
+  });
+
+  it("an unscoped legacy cache entry (no forBuild) is ignored", () => {
+    const legacy = { checkedAt: now, latestBuild: "aaaa1111bbbb", latest: "v1.7.0" };
+    expect(shouldRecheck(legacy, MINE, now + 1000)).toBe(true);
+  });
+
+  it("without a currentBuild arg, scope check is skipped (back-compat)", () => {
+    const cache = makeCacheEntry("abc", "v1.5.0", "someone-else", now);
+    expect(shouldRecheck(cache, null, now + 1000)).toBe(false);
+  });
+
   it("respects a custom ttl", () => {
-    const cache = makeCacheEntry("abc", "v1.5.0", now);
-    expect(shouldRecheck(cache, now + 500, 1000)).toBe(false);
-    expect(shouldRecheck(cache, now + 1000, 1000)).toBe(true);
+    const cache = makeCacheEntry("abc", "v1.5.0", MINE, now);
+    expect(shouldRecheck(cache, MINE, now + 500, 1000)).toBe(false);
+    expect(shouldRecheck(cache, MINE, now + 1000, 1000)).toBe(true);
   });
 });
 
 describe("makeCacheEntry", () => {
-  it("stores trigger + label", () => {
-    expect(makeCacheEntry("abc123", "v1.5.0", 42)).toEqual({
-      checkedAt: 42, latestBuild: "abc123", latest: "v1.5.0",
+  it("stamps the build that observed the result", () => {
+    expect(makeCacheEntry("abc123", "v1.5.0", "mybuild", 42)).toEqual({
+      checkedAt: 42, forBuild: "mybuild", latestBuild: "abc123", latest: "v1.5.0",
     });
   });
   it("coerces to string, preserves null", () => {
-    expect(makeCacheEntry(123, null, 42)).toEqual({ checkedAt: 42, latestBuild: "123", latest: null });
-    expect(makeCacheEntry(null, null, 42).latestBuild).toBeNull();
+    expect(makeCacheEntry(123, null, null, 42)).toEqual({
+      checkedAt: 42, forBuild: null, latestBuild: "123", latest: null,
+    });
   });
 });
 

@@ -429,7 +429,7 @@ const saveHelperCode = `
       try {
         const raw = localStorage.getItem("bm-update-cache");
         const cache = raw ? JSON.parse(raw) : null;
-        if (!UC.shouldRecheck(cache)) {
+        if (!UC.shouldRecheck(cache, CURRENT_BUILD)) {
           if (UC.isNewerBuild(CURRENT_BUILD, cache.latestBuild)) {
             setUpdateState({ status: "behind", latest: cache.latest, showVers: UC.shouldShowVersions(CURRENT_VERSION, cache.latest), message: "" });
           }
@@ -446,7 +446,7 @@ const saveHelperCode = `
       const latest = UC.extractVersionFromHtml(html);
       if (!latestBuild) throw new Error("Could not read build id from the latest file");
       try {
-        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latestBuild, latest)));
+        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latestBuild, latest, CURRENT_BUILD)));
       } catch {}
       // SHA is the trigger: any difference means main moved.
       if (UC.isNewerBuild(CURRENT_BUILD, latestBuild)) {

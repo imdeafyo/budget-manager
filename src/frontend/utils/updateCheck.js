@@ -167,26 +167,48 @@ export function shouldShowVersions(currentVersion, latestVersion) {
    keep that decision pure and testable; the caller owns the actual storage
    read/write (localStorage in the browser).
 
-   Cache shape: { checkedAt: <ms epoch>, latestBuild: "<sha>", latest: "<tag>" }
-   latestBuild is the trigger; latest is the display label.
+   Cache shape: { checkedAt, forBuild, latestBuild, latest }
+     forBuild    — the running build that WROTE this entry (scoping key)
+     latestBuild — the SHA seen on main at that time (the trigger)
+     latest      — the tag seen on main at that time (the label)
+
+   WHY forBuild EXISTS (this was a real bug):
+     localStorage is per-ORIGIN, not per-file. Every generic .html opened from
+     the same folder shares one file:// origin, so they all share this cache.
+     Without scoping: an old file checks, caches "latest = <newer sha>", and
+     nags. You download the fresh file into the same folder, open it, and its
+     auto-check finds a <24h-old cache, SKIPS the network entirely, and compares
+     itself against that stale value — so a brand-new, up-to-date download
+     immediately announces it's out of date. The cache outlived the build that
+     created it. Scoping by forBuild makes a mismatched entry invalid, forcing a
+     real check.
+
    TTL default: 24h. */
 export const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-/* shouldRecheck(cache, nowMs, ttlMs): true if there's no usable cached result
-   or the cached one is older than the TTL. */
-export function shouldRecheck(cache, nowMs = Date.now(), ttlMs = UPDATE_CACHE_TTL_MS) {
+/* shouldRecheck(cache, currentBuild, nowMs, ttlMs): true if we must hit the
+   network — no usable cache, cache belongs to a DIFFERENT build, or it's stale.
+   Passing currentBuild is what prevents the cross-build nag described above;
+   when it's omitted we only skip the scope check (kept optional so older
+   callers can't silently break). */
+export function shouldRecheck(cache, currentBuild = null, nowMs = Date.now(), ttlMs = UPDATE_CACHE_TTL_MS) {
   if (!cache || typeof cache !== "object") return true;
   const at = Number(cache.checkedAt);
   if (!Number.isFinite(at)) return true;
   if (!cache.latestBuild) return true;
+  // Scope check: an entry written by a different build tells us nothing about
+  // THIS build. Treat it as absent rather than trusting it.
+  if (currentBuild && cache.forBuild !== currentBuild) return true;
   return nowMs - at >= ttlMs;
 }
 
-/* makeCacheEntry(latestBuild, latestVersion, nowMs): build a cache object to
-   persist. latestBuild (SHA) is the trigger; latestVersion (tag) is the label. */
-export function makeCacheEntry(latestBuild, latestVersion = null, nowMs = Date.now()) {
+/* makeCacheEntry(latestBuild, latestVersion, currentBuild, nowMs): build a
+   cache object to persist. currentBuild stamps which build observed this
+   result, so a later, different build knows to ignore it. */
+export function makeCacheEntry(latestBuild, latestVersion = null, currentBuild = null, nowMs = Date.now()) {
   return {
     checkedAt: nowMs,
+    forBuild: currentBuild == null ? null : String(currentBuild),
     latestBuild: latestBuild == null ? null : String(latestBuild),
     latest: latestVersion == null ? null : String(latestVersion),
   };
