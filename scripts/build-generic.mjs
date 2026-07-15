@@ -137,33 +137,57 @@ function replaceInHook(search, replacement, label) {
 
 replaceInHook(
   'import { apiFetch } from "../utils/apiFetch.js";',
-  `// Generic build: no server. This shim gives the rest of useAppState.jsx the
-// exact Response contract it expects (.ok / .status / .reqId / .json()) while
-// persisting to localStorage.
+  `import { installSafeStorage } from "../utils/safeStorage.js";
+
+// Generic build: no server. Make storage safe in EVERY browser before anything
+// touches it. Chromium (Chrome/Edge/Vivaldi/Brave) treats each file:// document
+// as a unique opaque origin and denies storage — in some versions even READING
+// window.localStorage throws. installSafeStorage() probes once and, if storage
+// is unusable, swaps in an in-memory store so all existing call sites keep
+// working instead of exploding. Returns durable:false in that case.
+const __bmStorage = installSafeStorage();
+const __bmDurable = __bmStorage.durable;
+
+// This shim gives the rest of useAppState.jsx the exact Response contract it
+// expects (.ok / .status / .reqId / .json()) while persisting locally.
 const apiFetch = async (url, opts) => {
   const method = (opts && opts.method) || "GET";
   if (method === "PUT") {
     try { localStorage.setItem("budget-data", opts.body); } catch (e) { console.error("Save error:", e); }
     return { ok: true, status: 200, reqId: null, json: async () => ({}) };
   }
-  // GET: a file produced by the in-app "download update" action carries
-  // data-fresh="1" on its textarea and holds the user's data baked in at
-  // download time. That download opens on the SAME origin as the copy it
-  // replaces, so localStorage still holds the OLD data — without this guard the
-  // loader reads stale localStorage and the update looks like it lost
-  // everything. When the marker is present the textarea wins and re-seeds
-  // localStorage; otherwise localStorage (freshest — autosaved every 600ms)
-  // wins and the textarea is only a fallback for a first open.
+  // GET — load precedence, which depends on whether storage is DURABLE:
+  //
+  //   durable (Safari file://, or any http/https incl. GitHub Pages):
+  //     localStorage wins. It is autosaved every 600ms, so it is the freshest
+  //     copy; the textarea is a stale snapshot from the last 💾. Preferring the
+  //     file here would silently discard unsaved work on every reload.
+  //
+  //   NOT durable (Chromium file://):
+  //     localStorage is a fresh in-memory store on every load — always empty at
+  //     boot. The file's textarea is the ONLY real persistence, so it wins.
+  //     This is why precedence can't be hardcoded: the right answer differs by
+  //     browser, which is exactly what the Vivaldi report surfaced.
+  //
+  //   data-fresh marker (either mode):
+  //     A file produced by the in-app "download update" action carries
+  //     data-fresh="1" and holds data baked in at download time. It opens on the
+  //     SAME origin as the copy it replaces, so durable localStorage still holds
+  //     the OLD data. The marker forces the file to win once, then reseeds.
   let raw = null;
   const ta = document.getElementById("budget-data");
-  const fresh = ta && ta.getAttribute("data-fresh") === "1" && ta.textContent && ta.textContent.trim();
-  if (fresh) {
-    raw = ta.textContent.trim();
-    try { localStorage.setItem("budget-data", raw); } catch {}
-    try { ta.removeAttribute("data-fresh"); } catch {}
+  const taText = ta && ta.textContent && ta.textContent.trim();
+  const fresh = ta && ta.getAttribute("data-fresh") === "1" && taText;
+  if (fresh || !__bmDurable) {
+    raw = taText || null;
+    if (raw) { try { localStorage.setItem("budget-data", raw); } catch {} }
+    if (fresh) { try { ta.removeAttribute("data-fresh"); } catch {} }
+    // Non-durable with an empty textarea (brand-new blank file): fall through
+    // to whatever the in-memory store has this session.
+    if (!raw) { try { raw = localStorage.getItem("budget-data"); } catch {} }
   } else {
     try { raw = localStorage.getItem("budget-data"); } catch {}
-    if (!raw && ta && ta.textContent && ta.textContent.trim()) raw = ta.textContent.trim();
+    if (!raw && taText) raw = taText;
   }
   return {
     ok: true, status: 200, reqId: null,
@@ -174,7 +198,7 @@ const apiFetch = async (url, opts) => {
     },
   };
 };`,
-  "apiFetch import → generic localStorage shim"
+  "apiFetch import → generic storage shim"
 );
 
 // 1b. (removed) The API save no longer needs its own patch: the apiFetch shim
