@@ -5,39 +5,34 @@
    here's the latest" check for that build.
 
    How it works:
-     - Every generic build bakes the current git tag into the HTML as a global:
-         window.__APP_VERSION__ = "1.2.0"   // from `git describe --tags`
+     - Every generic build bakes two things into the HTML:
+         window.__APP_BUILD__   = "2096489abc12"  // commit SHA — the TRIGGER
+         window.__APP_VERSION__ = "v1.5.0"        // git describe — the LABEL
        (injected by scripts/build-generic.mjs).
      - CI rebuilds budget-manager-generic.html on every push to main, so the
        copy at raw.githubusercontent.com/…/main/budget-manager-generic.html is
-       always the newest published build, stamped with the tag it was built at.
-     - The running app fetches that raw HTML, extracts its baked tag with
-       extractVersionFromHtml(), and semver-compares to its own __APP_VERSION__.
-     - If the latest tag is strictly higher (isBehind), the UI shows a banner +
-       a one-tap "download the new version with my data baked in" action. The
-       download reuses the same DOMParser+inject machinery as the 💾 save button,
-       except the HTML shell comes from the network.
+       always the newest published build.
+     - The running app fetches that raw HTML, extracts both, and compares.
 
-   Why the git tag and not the GitHub tags API:
-     Baking the tag at build time and fetching the raw HTML avoids the GitHub
-     API's unauthenticated rate limit (60/hr/IP) — a real problem for a file://
-     page with no auth, where a few refreshes could trip a 403 and silently
-     break the check. The raw HTML on main isn't subject to that limit. The tag
-     is the single source of the version number, so the banner always shows two
-     meaningful, different numbers (or nothing) — no more "v1.0.0 → v1.0.0".
+   Trigger vs label — why both:
+     TRIGGER (commit SHA): decides *whether* to show the banner. Changes on
+       every commit with zero manual effort, so every push to main = update
+       available. Never silently fails the way a forgotten tag/version bump
+       does. SHAs have no ordering, so "different" is the signal (see
+       isNewerBuild).
+     LABEL (git tag via `git describe`): decides *what number to show*. When
+       you've cut a tag, the banner reads "v1.5.0 → v1.6.0". When you haven't
+       (or both sides describe to the same base tag), the versions are equal
+       and the banner simply says "a newer version is available" with no
+       numbers — which is what prevents the nonsensical "v1.0.0 → v1.0.0".
+     This is why untagged commits still notify: the SHA moved even though the
+     tag didn't. shouldShowVersions() encodes the label decision.
 
-   Why semver comparison (strictly-higher), not exact equality:
-     If a commit is ever re-tagged, or an older commit is checked out, exact
-     equality would nag in both directions ("update available" when you're
-     actually ahead). Strictly-higher only ever points the user forward.
-
-   Tagging discipline: this requires you to tag a release commit (git tag vX.Y.Z)
-     before/as you push, so CI bakes the right tag. If a build happens on an
-     untagged commit, `git describe --tags` yields something like
-     "v1.2.0-3-gabcdef", whose numeric core parses as 1.2.0 — so an untagged
-     build never appears newer than the last real tag, it just matches it.
-
-   Why no GitHub releases API: see above — raw HTML fetch, no rate limit.
+   Why no GitHub tags/releases API:
+     Baking at build time and fetching the raw HTML avoids the GitHub API's
+     unauthenticated rate limit (60/hr/IP) — a real problem for a file:// page
+     with no auth, where a few refreshes could trip a 403 and silently break
+     the check. The raw HTML on main isn't subject to that limit.
 
    This module is pure: no DOM, no fetch, no network. The caller (injected into
    App.jsx by the build script for MODE=generic only) owns fetching and DOM work.
@@ -116,13 +111,56 @@ export function extractVersionFromHtml(html) {
   return m ? m[1] : null;
 }
 
+/* ── TRIGGER: build identity (commit SHA) ──
+   Baked by the build script as window.__APP_BUILD__. Decides whether a newer
+   build exists at all. */
+
+/* extractBuildFromHtml(html): pull the baked commit SHA out of a generic HTML
+   file's source. Returns the SHA string, or null if absent (older build). */
+export function extractBuildFromHtml(html) {
+  if (typeof html !== "string" || !html) return null;
+  const m = html.match(/__APP_BUILD__\s*=\s*["']([^"']+)["']/);
+  return m ? m[1] : null;
+}
+
+/* isNewerBuild(currentSha, latestSha): true iff both SHAs are present and
+   different. SHAs have no ordering — you can't tell which of two arbitrary
+   commits is "later" from the hash alone — so "different" is the signal: CI
+   only advances main forward, and the running copy's SHA is frozen at download
+   time, so latest≠current ⇒ main moved ⇒ newer.
+   Returns false if either is missing (never nag on an unreadable value), if
+   they're equal, or if one is a prefix of the other (short vs full SHA). */
+export function isNewerBuild(currentSha, latestSha) {
+  if (!currentSha || !latestSha) return false;
+  const a = String(currentSha).trim().toLowerCase();
+  const b = String(latestSha).trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return false;
+  if (a.startsWith(b) || b.startsWith(a)) return false;
+  return true;
+}
+
+/* ── LABEL: which version numbers (if any) to show in the banner ──
+   shouldShowVersions(currentVersion, latestVersion): true only when both tags
+   parse AND differ, so the banner can render "v1.5.0 → v1.6.0". When they're
+   equal (untagged commits sharing a base tag) or unparseable, returns false and
+   the caller shows a plain "a newer version is available" — this is precisely
+   what prevents the nonsensical "v1.0.0 is available, you're on v1.0.0". */
+export function shouldShowVersions(currentVersion, latestVersion) {
+  const pc = parseVersion(currentVersion);
+  const pl = parseVersion(latestVersion);
+  if (!pc || !pl) return false;
+  return compareVersions(pc, pl) !== 0;
+}
+
 /* Cache helpers for the auto-check. The UI does an auto-check on load but
    shouldn't hammer raw.github on every reload, so it caches the last result
    with a timestamp and only re-fetches once the TTL has elapsed. These helpers
    keep that decision pure and testable; the caller owns the actual storage
    read/write (localStorage in the browser).
 
-   Cache shape: { checkedAt: <ms epoch>, latest: "<tag>" }
+   Cache shape: { checkedAt: <ms epoch>, latestBuild: "<sha>", latest: "<tag>" }
+   latestBuild is the trigger; latest is the display label.
    TTL default: 24h. */
 export const UPDATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -132,11 +170,78 @@ export function shouldRecheck(cache, nowMs = Date.now(), ttlMs = UPDATE_CACHE_TT
   if (!cache || typeof cache !== "object") return true;
   const at = Number(cache.checkedAt);
   if (!Number.isFinite(at)) return true;
-  if (!cache.latest) return true;
+  if (!cache.latestBuild) return true;
   return nowMs - at >= ttlMs;
 }
 
-/* makeCacheEntry(latestTag, nowMs): build a cache object to persist. */
-export function makeCacheEntry(latestTag, nowMs = Date.now()) {
-  return { checkedAt: nowMs, latest: latestTag == null ? null : String(latestTag) };
+/* makeCacheEntry(latestBuild, latestVersion, nowMs): build a cache object to
+   persist. latestBuild (SHA) is the trigger; latestVersion (tag) is the label. */
+export function makeCacheEntry(latestBuild, latestVersion = null, nowMs = Date.now()) {
+  return {
+    checkedAt: nowMs,
+    latestBuild: latestBuild == null ? null : String(latestBuild),
+    latest: latestVersion == null ? null : String(latestVersion),
+  };
+}
+
+/* ══════════════════════════ Stale-save nudge (generic only) ══════════════════════════
+   A browser page cannot write to a file on disk without a user-initiated
+   download. So the generic build autosaves to localStorage (600ms debounce)
+   but the .html file on disk only updates when the user presses 💾. That means
+   the file can silently fall arbitrarily far behind — and if localStorage is
+   ever cleared, the stale file is all that's left.
+
+   We can't fix that automatically (browsers forbid it), so instead we surface
+   it: track when the user last exported to file, and warn once edits have gone
+   unsaved-to-file for longer than a user-configured threshold.
+
+   Pure helpers below; the caller owns timers and storage. */
+
+/* Default nudge threshold, in minutes. */
+export const DEFAULT_SAVE_NUDGE_MINUTES = 30;
+
+/* Threshold bounds — keeps a nonsense value out of the pref. 0 = disabled. */
+export const SAVE_NUDGE_MIN_MINUTES = 0;
+export const SAVE_NUDGE_MAX_MINUTES = 1440; // 24h
+
+/* normalizeNudgeMinutes(v): coerce a user-entered threshold into a sane number.
+   Non-numeric / negative → the default. Clamped to [0, 1440]. 0 disables. */
+export function normalizeNudgeMinutes(v, fallback = DEFAULT_SAVE_NUDGE_MINUTES) {
+  // Guard null/""/booleans explicitly: Number(null) and Number("") are both 0,
+  // which would silently read as "0 = nudge disabled" rather than "unset".
+  if (v === null || v === undefined || v === "" || typeof v === "boolean") return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(Math.max(Math.round(n), SAVE_NUDGE_MIN_MINUTES), SAVE_NUDGE_MAX_MINUTES);
+}
+
+/* isSaveStale({ dirty, lastSavedAt, nowMs, thresholdMinutes }): should we warn?
+   True only when there ARE unsaved-to-file edits (dirty) AND the time since the
+   last file export exceeds the threshold. A threshold of 0 disables the nudge
+   entirely. If lastSavedAt is null (never exported this session) we measure from
+   the moment edits began — the caller passes that as lastSavedAt. */
+export function isSaveStale({ dirty, lastSavedAt, nowMs = Date.now(), thresholdMinutes = DEFAULT_SAVE_NUDGE_MINUTES } = {}) {
+  if (!dirty) return false;
+  const mins = normalizeNudgeMinutes(thresholdMinutes);
+  if (mins <= 0) return false;
+  // Guard null/undefined/"" explicitly before Number(): Number(null) is 0,
+  // which would read as "saved at the epoch" and make everything look stale.
+  if (lastSavedAt === null || lastSavedAt === undefined || lastSavedAt === "") return false;
+  const at = Number(lastSavedAt);
+  if (!Number.isFinite(at)) return false;
+  return nowMs - at >= mins * 60 * 1000;
+}
+
+/* formatStaleAge(ms): short human string for the nudge ("18 minutes", "2 hours",
+   "3 days"). Kept pure + tiny; no Intl dependency for the single-file build. */
+export function formatStaleAge(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return "";
+  const mins = Math.floor(n / 60000);
+  if (mins < 1) return "less than a minute";
+  if (mins < 60) return mins + (mins === 1 ? " minute" : " minutes");
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + (hrs === 1 ? " hour" : " hours");
+  const days = Math.floor(hrs / 24);
+  return days + (days === 1 ? " day" : " days");
 }

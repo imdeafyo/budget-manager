@@ -27,17 +27,26 @@ const SRC = path.join(ROOT, "src", "frontend");
 const TMP = path.join(ROOT, ".generic-build");
 const OUT = path.join(ROOT, "budget-manager-generic.html");
 
-// App version baked into the generic HTML for the Phase 13A update check.
-// The running generic app reads window.__APP_VERSION__; the update check
-// fetches the latest budget-manager-generic.html from raw main and extracts
-// its baked version to compare. Sourced from the repo's package.json so a
-// single version bump there flows into the built file.
-// App version baked into the generic HTML for the Phase 13A update check.
-// Sourced from the current git tag (git describe), so the tag you cut is the
-// version the banner shows and compares against. On an untagged commit,
-// describe yields "vX.Y.Z-N-gSHA" whose numeric core still parses to the base
-// tag, so an untagged build never looks newer than the last real tag.
-// Prefer a CI-provided tag ref when present; fall back to git locally.
+// ── Update check identity (Phase 13A) ──
+// Two values are baked into the generic HTML:
+//   APP_BUILD   (commit SHA) = the TRIGGER. Decides whether to show the update
+//                banner at all. Moves on every commit, so every push to main
+//                notifies — no tagging discipline required, never silently fails.
+//   APP_VERSION (git tag)    = the LABEL. Decides what number the banner shows.
+//                When you've cut a tag it reads "v1.5.0 → v1.6.0"; when both
+//                sides describe to the same base tag the numbers are equal and
+//                the banner omits them ("a newer version is available") rather
+//                than printing the nonsensical "v1.0.0 → v1.0.0".
+// Prefer CI-provided env vars; fall back to git locally.
+const APP_BUILD = (() => {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 12);
+  try {
+    return execSync("git rev-parse --short=12 HEAD", { cwd: ROOT }).toString().trim();
+  } catch {
+    return "";
+  }
+})();
+
 const APP_VERSION = (() => {
   const ci = process.env.GITHUB_REF_NAME; // set to the tag name on tag pushes
   if (ci && /^v?\d/.test(ci)) return ci;
@@ -171,11 +180,16 @@ if (!hook.includes("useRef")) {
   );
 }
 
-// 1e. Add stRef to the return object
+// 1e. Add stRef + loaded to the return object. `loaded` is needed by the
+// stale-save nudge's dirty tracker so it doesn't flag the initial hydration
+// as a user edit.
 hook = hook.replace(
   "// calculations\n    C,",
-  "// generic persistence\n    stRef,\n    // calculations\n    C,"
+  "// generic persistence\n    stRef,\n    loaded,\n    // calculations\n    C,"
 );
+if (!/\n    loaded,\n/.test(hook)) {
+  throw new Error("build-generic: failed to expose `loaded` on the state handle — return-object anchor changed.");
+}
 
 write(hookFile, hook);
 
@@ -279,6 +293,10 @@ const saveHelperCode = `
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = "budget-manager.html"; a.click();
+      // Tell the stale-save nudge the file on disk is now current. Dispatched
+      // as an event because handleSaveHTML is defined above the nudge state
+      // (calling markFileSaved directly would be a TDZ reference).
+      try { window.dispatchEvent(new CustomEvent("bm:file-saved")); } catch {}
       URL.revokeObjectURL(url);
     } catch(e) { alert("Save error: " + e.message); }
   };
@@ -319,10 +337,12 @@ const saveHelperCode = `
      data baked in" action. Auto-checks on mount (cached ~24h) plus a manual
      button. Pure version logic lives in utils/updateCheck.js; this handler
      owns fetch + DOM only. */
-  const CURRENT_VERSION = (typeof window !== "undefined" && window.__APP_VERSION__) || "0.0.0";
+  const CURRENT_VERSION = (typeof window !== "undefined" && window.__APP_VERSION__) || "";
+  const CURRENT_BUILD = (typeof window !== "undefined" && window.__APP_BUILD__) || "";
   const [updateState, setUpdateState] = useState({
-    status: "idle", // idle | checking | behind | current | error
-    latest: null,   // latest tag from main (display + compare)
+    status: "idle",   // idle | checking | behind | current | error
+    latest: null,     // latest tag from main (label only)
+    showVers: false,  // whether the tags are meaningfully different
     message: "",
   });
 
@@ -333,8 +353,8 @@ const saveHelperCode = `
         const raw = localStorage.getItem("bm-update-cache");
         const cache = raw ? JSON.parse(raw) : null;
         if (!UC.shouldRecheck(cache)) {
-          if (UC.isBehind(CURRENT_VERSION, cache.latest)) {
-            setUpdateState({ status: "behind", latest: cache.latest, message: "" });
+          if (UC.isNewerBuild(CURRENT_BUILD, cache.latestBuild)) {
+            setUpdateState({ status: "behind", latest: cache.latest, showVers: UC.shouldShowVersions(CURRENT_VERSION, cache.latest), message: "" });
           }
           return;
         }
@@ -345,22 +365,23 @@ const saveHelperCode = `
       const res = await fetch(UC.RAW_HTML_URL, { cache: "no-store" });
       if (!res.ok) throw new Error("HTTP " + res.status);
       const html = await res.text();
+      const latestBuild = UC.extractBuildFromHtml(html);
       const latest = UC.extractVersionFromHtml(html);
-      if (!latest) throw new Error("Could not read version from the latest file");
+      if (!latestBuild) throw new Error("Could not read build id from the latest file");
       try {
-        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latest)));
+        localStorage.setItem("bm-update-cache", JSON.stringify(UC.makeCacheEntry(latestBuild, latest)));
       } catch {}
-      if (UC.isBehind(CURRENT_VERSION, latest)) {
-        // Stash the fetched HTML so the download action doesn't re-fetch.
-        window.__BM_LATEST_HTML__ = html;
-        setUpdateState({ status: "behind", latest, message: "" });
+      // SHA is the trigger: any difference means main moved.
+      if (UC.isNewerBuild(CURRENT_BUILD, latestBuild)) {
+        window.__BM_LATEST_HTML__ = html; // avoid re-fetch on download
+        setUpdateState({ status: "behind", latest, showVers: UC.shouldShowVersions(CURRENT_VERSION, latest), message: "" });
       } else {
-        setUpdateState({ status: "current", latest, message: manual ? "You're on the latest version." : "" });
+        setUpdateState({ status: "current", latest, showVers: false, message: manual ? "You're on the latest version." : "" });
       }
     } catch (e) {
-      setUpdateState({ status: "error", latest: null, message: String(e && e.message || e) });
+      setUpdateState({ status: "error", latest: null, showVers: false, message: String(e && e.message || e) });
     }
-  }, [CURRENT_VERSION]);
+  }, [CURRENT_BUILD, CURRENT_VERSION]);
 
   useEffect(() => { runUpdateCheck(false); }, [runUpdateCheck]);
 
@@ -376,6 +397,81 @@ const saveHelperCode = `
       return () => clearTimeout(t);
     }
   }, [updateState.status, updateState.message]);
+
+  /* ── Generic: unsaved-to-file indicator + stale-save nudge ──
+     A browser page cannot write to disk on its own — the .html file only
+     updates when the user presses 💾. So localStorage (autosaved every 600ms)
+     is always the freshest store, and the file on disk can silently fall
+     behind. We can't autosave the file, so we surface the gap instead:
+       - dirty flag: state has changed since the last file export
+       - lastFileSaveAt: persisted timestamp of the last 💾 press
+       - nudge: warns once dirty edits exceed the user's threshold
+     Threshold is user-configurable on the Tax Rates page (generic-only
+     settings live there alongside Clear All). 0 disables the nudge. */
+  const [lastFileSaveAt, setLastFileSaveAt] = useState(() => {
+    try {
+      const v = localStorage.getItem("bm-last-file-save");
+      return v ? Number(v) : Date.now(); // never saved → measure from now
+    } catch { return Date.now(); }
+  });
+  const [fileDirty, setFileDirty] = useState(false);
+  const [nudgeMins, setNudgeMins] = useState(() => {
+    try { return UC.normalizeNudgeMinutes(localStorage.getItem("bm-save-nudge-mins")); }
+    catch { return UC.DEFAULT_SAVE_NUDGE_MINUTES; }
+  });
+  const [nudgeDismissed, setNudgeDismissed] = useState(false);
+  const [nowTick, setNowTick] = useState(Date.now());
+
+  // Mark dirty whenever app state changes after the initial load. Compares a
+  // serialized snapshot so we don't flag on identity-only re-renders.
+  const lastSeenRef = useRef(null);
+  useEffect(() => {
+    if (!S.loaded) return;
+    let snap;
+    try { snap = JSON.stringify(S.stRef.current); } catch { return; }
+    if (lastSeenRef.current === null) { lastSeenRef.current = snap; return; }
+    if (snap !== lastSeenRef.current) {
+      lastSeenRef.current = snap;
+      setFileDirty(true);
+    }
+  }, [S.st, S.loaded]);
+
+  // Tick every 30s so the nudge appears without needing an interaction.
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const saveStale = UC.isSaveStale({
+    dirty: fileDirty,
+    lastSavedAt: lastFileSaveAt,
+    nowMs: nowTick,
+    thresholdMinutes: nudgeMins,
+  });
+  const showNudge = saveStale && !nudgeDismissed;
+  const staleAge = UC.formatStaleAge(nowTick - lastFileSaveAt);
+
+  // Called by handleSaveHTML after a successful file export.
+  const markFileSaved = useCallback(() => {
+    const t = Date.now();
+    setLastFileSaveAt(t);
+    setFileDirty(false);
+    setNudgeDismissed(false);
+    try { lastSeenRef.current = JSON.stringify(S.stRef.current); } catch {}
+    try { localStorage.setItem("bm-last-file-save", String(t)); } catch {}
+  }, [S]);
+
+  useEffect(() => {
+    const h = () => markFileSaved();
+    window.addEventListener("bm:file-saved", h);
+    return () => window.removeEventListener("bm:file-saved", h);
+  }, [markFileSaved]);
+
+  const updateNudgeMins = useCallback((v) => {    const n = UC.normalizeNudgeMinutes(v);
+    setNudgeMins(n);
+    setNudgeDismissed(false);
+    try { localStorage.setItem("bm-save-nudge-mins", String(n)); } catch {}
+  }, []);
 
   // Download the latest HTML with the current data injected — the same
   // machinery as handleSaveHTML, but the shell comes from the network copy
@@ -397,6 +493,10 @@ const saveHelperCode = `
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = "budget-manager.html"; a.click();
+      // Tell the stale-save nudge the file on disk is now current. Dispatched
+      // as an event because handleSaveHTML is defined above the nudge state
+      // (calling markFileSaved directly would be a TDZ reference).
+      try { window.dispatchEvent(new CustomEvent("bm:file-saved")); } catch {}
       URL.revokeObjectURL(url);
     } catch (e) {
       alert("Update download failed: " + (e && e.message || e) + "\\n\\nYou can update manually from " + UC.RELEASES_PAGE_URL);
@@ -424,7 +524,7 @@ const MARKERS = {
   "/* @generic:helpers */": saveHelperCode,
   // JSX comment inside the existing theme-button <div> — inject a bare element.
   "{/* @generic:save-btn */}":
-    `<button onClick={handleSaveHTML} title="Save as HTML file" style={{ padding: "5px 10px", background: "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾</button>`,
+    `<button onClick={handleSaveHTML} title={fileDirty ? ("Unsaved changes — last saved to file " + staleAge + " ago") : "Saved to file"} style={{ position: "relative", padding: "5px 10px", background: fileDirty ? "rgba(232,87,58,0.85)" : "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>💾{fileDirty ? " •" : ""}</button>`,
   // Manual "check for updates" button next to save. Shows a dot when behind.
   "{/* @generic:update-btn */}":
     `<button onClick={() => runUpdateCheck(true)} title={updateState.status === "checking" ? "Checking for updates…" : (updateState.status === "behind" ? ("Update available" + (updateState.latest ? (": " + updateState.latest) : "")) : "Check for updates")} style={{ padding: "5px 10px", background: updateState.status === "behind" ? "#E8573A" : "rgba(255,255,255,0.1)", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{updateState.status === "checking" ? "⏳" : "⟳"}{updateState.status === "behind" ? " •" : ""}</button>`,
@@ -433,16 +533,30 @@ const MARKERS = {
   // current data into the freshly-fetched HTML and downloads it.
   "{/* @generic:update-banner */}":
     `{updateState.status === "behind" && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "10px 16px", background: "#FFF4E5", border: "1px solid #E8573A", borderRadius: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", color: "#7a2e12" }}>
-          <span style={{ fontSize: 14, fontWeight: 600 }}>🎉 A newer version{updateState.latest ? (" (" + updateState.latest + ")") : ""} is available.{CURRENT_VERSION && CURRENT_VERSION !== "0.0.0" ? (" You're on " + CURRENT_VERSION + ".") : ""}</span>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>🎉 {updateState.showVers ? ("Update available: " + CURRENT_VERSION + " → " + updateState.latest) : "A newer version is available."}</span>
           <button onClick={handleDownloadUpdate} style={{ background: "#E8573A", color: "#fff", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>⬇ Download update with my data</button>
           <button onClick={() => setUpdateState(s => ({ ...s, status: "current" }))} title="Dismiss for now" style={{ background: "transparent", color: "#7a2e12", border: "1px solid #E8573A", borderRadius: 6, padding: "7px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Dismiss</button>
           <span style={{ fontSize: 12, opacity: 0.8 }}>Your data stays in this download — nothing is uploaded.</span>
         </div>}
         {updateState.status === "current" && updateState.message && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "8px 16px", background: "#E9F7EF", border: "1px solid #27AE60", borderRadius: 8, color: "#1e7e45", fontSize: 13, fontWeight: 600 }}>✓ {updateState.message}</div>}
-        {updateState.status === "error" && updateState.message && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "8px 16px", background: "#FDECEA", border: "1px solid #C0392B", borderRadius: 8, color: "#922", fontSize: 13, fontWeight: 600 }}>Update check failed: {updateState.message}</div>}`,
+        {updateState.status === "error" && updateState.message && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "8px 16px", background: "#FDECEA", border: "1px solid #C0392B", borderRadius: 8, color: "#922", fontSize: 13, fontWeight: 600 }}>Update check failed: {updateState.message}</div>}
+        {showNudge && <div style={{ maxWidth: 1100, margin: "12px auto 0", padding: "10px 16px", background: "#FFF8E1", border: "1px solid #F0A202", borderRadius: 8, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", color: "#6b4a00" }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>⚠️ You have unsaved changes — last saved to file {staleAge} ago. Your browser can't write the file for you.</span>
+          <button onClick={handleSaveHTML} style={{ background: "#F0A202", color: "#fff", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>💾 Save to file now</button>
+          <button onClick={() => setNudgeDismissed(true)} title="Dismiss until the next change" style={{ background: "transparent", color: "#6b4a00", border: "1px solid #F0A202", borderRadius: 6, padding: "7px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Later</button>
+        </div>}`,
   // JSX comment at tab-block level — inject a full {cond && <div>…</div>} block.
   "{/* @generic:clear-btn */}":
     `{S.tab === "taxes" && <div style={{ maxWidth: 1100, margin: "20px auto", padding: "0 12px", textAlign: "center" }}>
+          <div style={{ margin: "0 auto 20px", maxWidth: 560, padding: "14px 16px", border: "1px solid rgba(128,128,128,0.35)", borderRadius: 8, textAlign: "left" }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>Unsaved-changes warning</div>
+            <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10 }}>This file only updates on disk when you press 💾 — browsers don't allow a page to save itself automatically. Warn me when I have unsaved edits older than:</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <input type="number" min="0" max="1440" step="5" value={nudgeMins} onChange={e => updateNudgeMins(e.target.value)} style={{ width: 90, padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(128,128,128,0.5)", fontSize: 14 }} />
+              <span style={{ fontSize: 13 }}>minutes</span>
+              <span style={{ fontSize: 12, opacity: 0.7 }}>(0 = never warn)</span>
+            </div>
+          </div>
           <button onClick={handleClearAll} style={{ background: "#dc3545", color: "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer" }}>🗑 Clear All Data</button>
         </div>}`,
   "{/* @generic:json-btns */}":
@@ -540,7 +654,8 @@ let finalHTML = `<!DOCTYPE html>
 <body>
 <div id="root"></div>
 <textarea id="budget-data" style="display:none"></textarea>
-<script>window.__APP_VERSION__ = ${JSON.stringify(APP_VERSION)};</script>
+<script>window.__APP_VERSION__ = ${JSON.stringify(APP_VERSION)};
+window.__APP_BUILD__ = ${JSON.stringify(APP_BUILD)};</script>
 <script>${jsContent}</script>
 </body>
 </html>`;

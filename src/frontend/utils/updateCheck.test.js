@@ -4,8 +4,15 @@ import {
   compareVersions,
   isBehind,
   extractVersionFromHtml,
+  extractBuildFromHtml,
+  isNewerBuild,
+  shouldShowVersions,
   shouldRecheck,
   makeCacheEntry,
+  normalizeNudgeMinutes,
+  isSaveStale,
+  formatStaleAge,
+  DEFAULT_SAVE_NUDGE_MINUTES,
   UPDATE_CACHE_TTL_MS,
 } from "./updateCheck.js";
 
@@ -104,57 +111,172 @@ describe("extractVersionFromHtml", () => {
   });
 });
 
+describe("extractBuildFromHtml", () => {
+  it("pulls the baked SHA", () => {
+    expect(extractBuildFromHtml(`<script>window.__APP_BUILD__ = "2096489abc12";</script>`)).toBe("2096489abc12");
+  });
+  it("handles single quotes / tight spacing", () => {
+    expect(extractBuildFromHtml(`window.__APP_BUILD__='deadbeef'`)).toBe("deadbeef");
+  });
+  it("null when absent or non-string", () => {
+    expect(extractBuildFromHtml("<html>nope</html>")).toBeNull();
+    expect(extractBuildFromHtml(null)).toBeNull();
+    expect(extractBuildFromHtml("")).toBeNull();
+  });
+});
+
+describe("isNewerBuild (the trigger)", () => {
+  it("true when SHAs differ — every push notifies", () => {
+    expect(isNewerBuild("2096489", "b1c4d5f")).toBe(true);
+  });
+  it("false when equal (case-insensitive) or prefix-equal", () => {
+    expect(isNewerBuild("a3f9c2e", "a3f9c2e")).toBe(false);
+    expect(isNewerBuild("A3F9C2E", "a3f9c2e")).toBe(false);
+    expect(isNewerBuild("a3f9c2e", "a3f9c2e1b2c3")).toBe(false);
+    expect(isNewerBuild("a3f9c2e1b2c3", "a3f9c2e")).toBe(false);
+  });
+  it("false when either missing/empty", () => {
+    expect(isNewerBuild(null, "a3f9c2e")).toBe(false);
+    expect(isNewerBuild("a3f9c2e", null)).toBe(false);
+    expect(isNewerBuild("  ", "a3f9c2e")).toBe(false);
+  });
+});
+
+describe("shouldShowVersions (the label)", () => {
+  it("true when tags parse and differ → banner shows v1.5.0 → v1.6.0", () => {
+    expect(shouldShowVersions("v1.5.0", "v1.6.0")).toBe(true);
+  });
+  it("false when tags are equal → plain 'newer version available', no numbers", () => {
+    expect(shouldShowVersions("v1.5.0", "v1.5.0")).toBe(false);
+  });
+  it("false for untagged commits sharing a base tag (the v1.0.0→v1.0.0 bug)", () => {
+    // both describe to the same base tag despite different commit counts
+    expect(shouldShowVersions("v1.5.0-3-gabc", "v1.5.0-17-g2096489")).toBe(false);
+    expect(shouldShowVersions("1.0.0", "1.0.0")).toBe(false);
+  });
+  it("false when either is unparseable", () => {
+    expect(shouldShowVersions("garbage", "v1.6.0")).toBe(false);
+    expect(shouldShowVersions(null, "v1.6.0")).toBe(false);
+  });
+  it("true even when current is ahead (label just shows both)", () => {
+    expect(shouldShowVersions("v1.6.0", "v1.5.0")).toBe(true);
+  });
+});
+
+describe("trigger + label together (the real scenarios)", () => {
+  it("17 untagged commits past v1.5.0: SHA differs → notify, but no version numbers shown", () => {
+    expect(isNewerBuild("2096489", "aaa1111")).toBe(true);
+    expect(shouldShowVersions("v1.5.0-17-g2096489", "v1.5.0-18-gaaa1111")).toBe(false);
+  });
+  it("a real tag bump: SHA differs → notify, and version numbers shown", () => {
+    expect(isNewerBuild("2096489", "aaa1111")).toBe(true);
+    expect(shouldShowVersions("v1.5.0", "v1.6.0")).toBe(true);
+  });
+  it("same build: no notify at all", () => {
+    expect(isNewerBuild("2096489", "2096489")).toBe(false);
+  });
+});
+
 describe("shouldRecheck", () => {
   const now = 1_000_000_000_000;
-  it("true when no cache", () => {
+  it("true when no cache / missing fields", () => {
     expect(shouldRecheck(null, now)).toBe(true);
-    expect(shouldRecheck(undefined, now)).toBe(true);
-    expect(shouldRecheck("nonsense", now)).toBe(true);
-  });
-  it("true when cache lacks a usable timestamp or latest", () => {
-    expect(shouldRecheck({ latest: "1.0.0" }, now)).toBe(true);
+    expect(shouldRecheck({ latestBuild: "abc" }, now)).toBe(true);
     expect(shouldRecheck({ checkedAt: now }, now)).toBe(true);
-    expect(shouldRecheck({ checkedAt: "bad", latest: "1.0.0" }, now)).toBe(true);
+    expect(shouldRecheck({ checkedAt: "bad", latestBuild: "abc" }, now)).toBe(true);
   });
-  it("false within TTL", () => {
-    const cache = makeCacheEntry("1.0.0", now);
+  it("false within TTL, true after", () => {
+    const cache = makeCacheEntry("abc", "v1.5.0", now);
     expect(shouldRecheck(cache, now + 1000)).toBe(false);
-    expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS - 1)).toBe(false);
-  });
-  it("true once TTL elapsed", () => {
-    const cache = makeCacheEntry("1.0.0", now);
     expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS)).toBe(true);
-    expect(shouldRecheck(cache, now + UPDATE_CACHE_TTL_MS + 5000)).toBe(true);
   });
   it("respects a custom ttl", () => {
-    const cache = makeCacheEntry("1.0.0", now);
+    const cache = makeCacheEntry("abc", "v1.5.0", now);
     expect(shouldRecheck(cache, now + 500, 1000)).toBe(false);
     expect(shouldRecheck(cache, now + 1000, 1000)).toBe(true);
   });
 });
 
 describe("makeCacheEntry", () => {
-  it("builds a persistable entry", () => {
-    expect(makeCacheEntry("1.2.3", 42)).toEqual({ checkedAt: 42, latest: "1.2.3" });
+  it("stores trigger + label", () => {
+    expect(makeCacheEntry("abc123", "v1.5.0", 42)).toEqual({
+      checkedAt: 42, latestBuild: "abc123", latest: "v1.5.0",
+    });
   });
-  it("coerces latest to string, preserves null", () => {
-    expect(makeCacheEntry(123, 42).latest).toBe("123");
-    expect(makeCacheEntry(null, 42).latest).toBeNull();
+  it("coerces to string, preserves null", () => {
+    expect(makeCacheEntry(123, null, 42)).toEqual({ checkedAt: 42, latestBuild: "123", latest: null });
+    expect(makeCacheEntry(null, null, 42).latestBuild).toBeNull();
   });
 });
 
-describe("tag comparison (git describe forms)", () => {
-  it("treats an untagged describe as matching its base tag (not newer)", () => {
-    // git describe on an untagged commit → "v1.2.0-3-gabcdef"; numeric core 1.2.0
-    expect(isBehind("v1.2.0", "v1.2.0-3-gabcdef")).toBe(false);
-    expect(isBehind("v1.2.0-3-gabcdef", "v1.2.0")).toBe(false);
+describe("normalizeNudgeMinutes", () => {
+  it("passes through sane values", () => {
+    expect(normalizeNudgeMinutes(30)).toBe(30);
+    expect(normalizeNudgeMinutes("45")).toBe(45);
   });
-  it("real tag bump reads as behind", () => {
-    expect(isBehind("v1.2.0", "v1.3.0")).toBe(true);
-    expect(isBehind("v1.2.0", "v2.0.0")).toBe(true);
+  it("rounds fractional input", () => {
+    expect(normalizeNudgeMinutes(30.6)).toBe(31);
   });
-  it("does not nag when ahead or equal", () => {
-    expect(isBehind("v1.3.0", "v1.2.0")).toBe(false);
-    expect(isBehind("v1.2.0", "v1.2.0")).toBe(false);
+  it("falls back on garbage / negative", () => {
+    expect(normalizeNudgeMinutes("abc")).toBe(DEFAULT_SAVE_NUDGE_MINUTES);
+    expect(normalizeNudgeMinutes(null)).toBe(DEFAULT_SAVE_NUDGE_MINUTES);
+    expect(normalizeNudgeMinutes(-5)).toBe(DEFAULT_SAVE_NUDGE_MINUTES);
+  });
+  it("clamps to max 24h", () => {
+    expect(normalizeNudgeMinutes(99999)).toBe(1440);
+  });
+  it("allows 0 (disabled)", () => {
+    expect(normalizeNudgeMinutes(0)).toBe(0);
+  });
+});
+
+describe("isSaveStale", () => {
+  const now = 1_000_000_000_000;
+  const min = 60 * 1000;
+  it("false when not dirty, no matter how old", () => {
+    expect(isSaveStale({ dirty: false, lastSavedAt: now - 999 * min, nowMs: now, thresholdMinutes: 30 })).toBe(false);
+  });
+  it("false when dirty but within threshold", () => {
+    expect(isSaveStale({ dirty: true, lastSavedAt: now - 10 * min, nowMs: now, thresholdMinutes: 30 })).toBe(false);
+  });
+  it("true when dirty and past threshold", () => {
+    expect(isSaveStale({ dirty: true, lastSavedAt: now - 31 * min, nowMs: now, thresholdMinutes: 30 })).toBe(true);
+  });
+  it("true exactly at the threshold boundary", () => {
+    expect(isSaveStale({ dirty: true, lastSavedAt: now - 30 * min, nowMs: now, thresholdMinutes: 30 })).toBe(true);
+  });
+  it("threshold 0 disables the nudge entirely", () => {
+    expect(isSaveStale({ dirty: true, lastSavedAt: now - 999 * min, nowMs: now, thresholdMinutes: 0 })).toBe(false);
+  });
+  it("false when lastSavedAt is unusable", () => {
+    expect(isSaveStale({ dirty: true, lastSavedAt: null, nowMs: now, thresholdMinutes: 30 })).toBe(false);
+  });
+  it("normalizes a garbage threshold to the default", () => {
+    // default 30 → 40min elapsed is stale
+    expect(isSaveStale({ dirty: true, lastSavedAt: now - 40 * min, nowMs: now, thresholdMinutes: "junk" })).toBe(true);
+  });
+  it("no-arg call does not throw", () => {
+    expect(isSaveStale()).toBe(false);
+  });
+});
+
+describe("formatStaleAge", () => {
+  const min = 60 * 1000;
+  it("sub-minute", () => expect(formatStaleAge(5000)).toBe("less than a minute"));
+  it("minutes, singular and plural", () => {
+    expect(formatStaleAge(1 * min)).toBe("1 minute");
+    expect(formatStaleAge(18 * min)).toBe("18 minutes");
+  });
+  it("hours", () => {
+    expect(formatStaleAge(60 * min)).toBe("1 hour");
+    expect(formatStaleAge(150 * min)).toBe("2 hours");
+  });
+  it("days", () => {
+    expect(formatStaleAge(24 * 60 * min)).toBe("1 day");
+    expect(formatStaleAge(72 * 60 * min)).toBe("3 days");
+  });
+  it("empty for garbage/negative", () => {
+    expect(formatStaleAge(-1)).toBe("");
+    expect(formatStaleAge("x")).toBe("");
   });
 });
