@@ -22,6 +22,12 @@ jobs:
     - uses: actions/checkout@v6
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
+        # fetch-depth: 0 pulls full history AND tags. Required by
+        # scripts/build-generic.mjs, which runs `git describe --tags` to bake
+        # the version label into the generic HTML. The default shallow checkout
+        # has no tags, so describe silently falls back to a bare commit SHA and
+        # the update banner shows a hash instead of "v1.5.0".
+        fetch-depth: 0
 
     - uses: actions/setup-node@v5
       with:

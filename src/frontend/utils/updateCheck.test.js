@@ -177,7 +177,42 @@ describe("trigger + label together (the real scenarios)", () => {
   });
 });
 
+describe("regression: bare SHA must never render as a version", () => {
+  // CI's default shallow checkout has no tags, so `git describe --tags --always`
+  // silently fell back to a bare commit SHA and baked __APP_VERSION__="7eb56b9".
+  // Fixed two ways: fetch-depth:0 in CI, and dropping --always so the version
+  // is empty rather than a fake. This pins the display side of that guard.
+  it("a bare SHA does not parse as a version", () => {
+    expect(parseVersion("7eb56b9")).toBeNull();
+    expect(parseVersion("9b2ce74db365")).toBeNull();
+  });
+  it("shouldShowVersions is false when either side is a bare SHA", () => {
+    expect(shouldShowVersions("7eb56b9", "v1.6.0")).toBe(false);
+    expect(shouldShowVersions("v1.5.0", "9b2ce74")).toBe(false);
+    expect(shouldShowVersions("7eb56b9", "9b2ce74")).toBe(false);
+  });
+  it("empty version (no tags reachable) shows no numbers but still allows the SHA trigger", () => {
+    expect(shouldShowVersions("", "v1.6.0")).toBe(false);
+    // the trigger is independent of the label — update still fires
+    expect(isNewerBuild("7eb56b97438b", "9b2ce74db365")).toBe(true);
+  });
+  it("a real describe string still parses to its base tag", () => {
+    expect(parseVersion("v1.5.0-22-g9b2ce74")).toMatchObject({ major: 1, minor: 5, patch: 0 });
+    expect(shouldShowVersions("v1.5.0-22-g9b2ce74", "v1.6.0")).toBe(true);
+  });
+});
+
+describe("regression: a copy predating this feature can't self-detect", () => {
+  // Files downloaded before Phase 13A have no __APP_BUILD__ global at all, so
+  // CURRENT_BUILD is "". By design we never nag on a missing value — meaning
+  // those copies are permanently blind and must be re-downloaded once by hand.
+  it("missing current build never triggers", () => {
+    expect(isNewerBuild("", "9b2ce74db365")).toBe(false);
+  });
+});
+
 describe("shouldRecheck", () => {
+
   const now = 1_000_000_000_000;
   it("true when no cache / missing fields", () => {
     expect(shouldRecheck(null, now)).toBe(true);

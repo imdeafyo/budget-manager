@@ -48,18 +48,30 @@ const APP_BUILD = (() => {
 })();
 
 const APP_VERSION = (() => {
-  const ci = process.env.GITHUB_REF_NAME; // set to the tag name on tag pushes
+  // On a tag push, GITHUB_REF_NAME is the tag itself (e.g. "v1.6.0"). On a
+  // branch push it's "main", which is not a version — hence the digit check.
+  const ci = process.env.GITHUB_REF_NAME;
   if (ci && /^v?\d/.test(ci)) return ci;
+  // `git describe --tags` (deliberately WITHOUT --always): on an untagged
+  // commit it yields "v1.5.0-22-g9b2ce74", whose numeric core parses to the
+  // base tag. --always would instead fall back to a bare SHA when no tags are
+  // reachable, which looks like a plausible version and silently produces a
+  // hash in the update banner — the exact failure this build hit when CI's
+  // shallow checkout had no tags. Failing loudly is better than a fake version.
   try {
-    return execSync("git describe --tags --always", { cwd: ROOT }).toString().trim();
+    const d = execSync("git describe --tags", { cwd: ROOT, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    if (d) return d;
   } catch {
-    // No tags yet and no git → last-resort package.json so the marker isn't empty.
-    try {
-      return JSON.parse(read(path.join(ROOT, "package.json"))).version || "0.0.0";
-    } catch {
-      return "0.0.0";
-    }
+    console.warn(
+      "⚠ build-generic: `git describe --tags` found no tags. The update banner " +
+      "will show no version numbers (it still works — the commit SHA drives the " +
+      "check). If this is CI, ensure actions/checkout uses fetch-depth: 0."
+    );
   }
+  // No tags reachable → return empty. shouldShowVersions() treats an
+  // unparseable version as "don't show numbers", so the banner degrades to
+  // a plain "a newer version is available" rather than printing a hash.
+  return "";
 })();
 
 // ── helpers ──

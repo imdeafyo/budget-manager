@@ -62,6 +62,12 @@ export const RELEASES_PAGE_URL = "https://github.com/imdeafyo/budget-manager";
 export function parseVersion(input) {
   if (input == null) return null;
   const s = String(input).trim().replace(/^v/i, "");
+  // Reject bare commit SHAs. A hex hash like "7eb56b9" would otherwise match
+  // the leading-digit rule below and parse as version 7.0.0 — a fake version
+  // that renders in the banner as if it were real. Real versions are dotted
+  // (1.2.3) or describe strings (1.5.0-22-g9b2ce74); a bare hex blob with no
+  // dot before its first non-digit is a SHA, not a version.
+  if (/^[0-9a-f]{7,40}$/i.test(s) && !s.includes(".")) return null;
   // Grab the leading numeric dotted core, ignore any -pre / +build suffix.
   const m = s.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
   if (!m) return null;
