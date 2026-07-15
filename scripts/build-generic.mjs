@@ -110,57 +110,79 @@ let hook = read(hookFile);
 // block-replacing the whole effect with a hardcoded map, which silently drifted
 // out of sync as new fields were added (transferCats, transactionRules, and the
 // transfer-tolerance/refund settings all stopped loading for that reason).
-hook = hook.replace(
-  'await fetch("/api/state").then(r => r.json())',
-  `await (async () => {
-    // If this file was produced by the in-app "download update" action, its
-    // textarea carries data-fresh="1" and holds the user's data baked in at
-    // download time. Because a downloaded update opens on the SAME origin as
-    // the copy it replaced, localStorage still holds the OLD data — so without
-    // this, the loader would read stale localStorage and the update would look
-    // like it lost the user's data. When the fresh marker is present, the
-    // textarea wins and we re-seed localStorage from it.
-    let raw = null;
-    const ta = document.getElementById("budget-data");
-    const fresh = ta && ta.getAttribute("data-fresh") === "1" && ta.textContent && ta.textContent.trim();
-    if (fresh) {
-      raw = ta.textContent.trim();
-      try { localStorage.setItem("budget-data", raw); } catch {}
-      try { ta.removeAttribute("data-fresh"); } catch {}
-    } else {
-      try { raw = localStorage.getItem("budget-data"); } catch {}
-      if (!raw && ta && ta.textContent) raw = ta.textContent.trim();
-    }
-    if (!raw) return null;
-    try { return { state: JSON.parse(raw) }; } catch(e) { console.error("Load error:", e); return null; }
-  })()`
+// ── Generic persistence: shim apiFetch instead of patching each call site ──
+// Rather than string-match the load effect and the save effect separately (both
+// of which have drifted before — see below), we replace the apiFetch IMPORT with
+// a local generic implementation. All /api/state traffic then routes through it,
+// so the surrounding logic in useAppState.jsx — the !loaded state-wipe guard,
+// the lastSavedHashRef baseline, the migration path, the logging — stays exactly
+// as written and keeps working as it evolves.
+//
+// HISTORY / WHY THIS SHAPE: the previous patches anchored on
+//   'await fetch("/api/state").then(r => r.json())'   (load)
+//   /useEffect\(\(\) => \{ const t = setTimeout\(async \(\) => \{ try \{ await fetch\("\/api\/state".../  (save)
+// Both stopped existing when every fetch site moved to apiFetch. Both used a
+// bare hook.replace(), so the misses were SILENT: the build "succeeded" and
+// shipped a generic file with NO localStorage load or save path at all. Anchor
+// on the import (one line, rarely changes) and fail loudly if it moves.
+function replaceInHook(search, replacement, label) {
+  if (!hook.includes(search)) {
+    throw new Error(
+      `build-generic: patch target missing (${label}). useAppState.jsx changed shape.\n` +
+      `  Looking for: ${search.slice(0, 100)}`
+    );
+  }
+  hook = hook.replace(search, replacement);
+}
+
+replaceInHook(
+  'import { apiFetch } from "../utils/apiFetch.js";',
+  `// Generic build: no server. This shim gives the rest of useAppState.jsx the
+// exact Response contract it expects (.ok / .status / .reqId / .json()) while
+// persisting to localStorage.
+const apiFetch = async (url, opts) => {
+  const method = (opts && opts.method) || "GET";
+  if (method === "PUT") {
+    try { localStorage.setItem("budget-data", opts.body); } catch (e) { console.error("Save error:", e); }
+    return { ok: true, status: 200, reqId: null, json: async () => ({}) };
+  }
+  // GET: a file produced by the in-app "download update" action carries
+  // data-fresh="1" on its textarea and holds the user's data baked in at
+  // download time. That download opens on the SAME origin as the copy it
+  // replaces, so localStorage still holds the OLD data — without this guard the
+  // loader reads stale localStorage and the update looks like it lost
+  // everything. When the marker is present the textarea wins and re-seeds
+  // localStorage; otherwise localStorage (freshest — autosaved every 600ms)
+  // wins and the textarea is only a fallback for a first open.
+  let raw = null;
+  const ta = document.getElementById("budget-data");
+  const fresh = ta && ta.getAttribute("data-fresh") === "1" && ta.textContent && ta.textContent.trim();
+  if (fresh) {
+    raw = ta.textContent.trim();
+    try { localStorage.setItem("budget-data", raw); } catch {}
+    try { ta.removeAttribute("data-fresh"); } catch {}
+  } else {
+    try { raw = localStorage.getItem("budget-data"); } catch {}
+    if (!raw && ta && ta.textContent && ta.textContent.trim()) raw = ta.textContent.trim();
+  }
+  return {
+    ok: true, status: 200, reqId: null,
+    json: async () => {
+      if (!raw) return {};
+      try { return { state: JSON.parse(raw) }; }
+      catch (e) { console.error("Load error:", e); return {}; }
+    },
+  };
+};`,
+  "apiFetch import → generic localStorage shim"
 );
 
-// 1a-bis. Generic mode has no separate /api/transactions effect (MODE=generic
-// neutralizes it), so we also set txLoaded from the state-load effect.
-hook = hook.replace(
-  'setLoaded(true); })(); }, []);',
-  'setLoaded(true); setTxLoaded(true); })(); }, []);'
-);
-
-// 1a-ter. The deploy-mode loader map doesn't include `transactions` (deploy
-// loads them separately from /api/transactions). Generic mode bundles them
-// into the same localStorage blob, so we inject the setter here. This is the
-// ONE field that legitimately differs between modes.
-hook = hook.replace(
-  'p2Name:setP2Name,transactionColumns:setTransactionColumns',
-  'p2Name:setP2Name,transactions:setTransactions,transactionColumns:setTransactionColumns'
-);
-
-// 1b. Replace API save with localStorage save
-const apiSaveRe = /useEffect\(\(\) => \{ const t = setTimeout\(async \(\) => \{ try \{ await fetch\("\/api\/state"[\s\S]*?\}, \[st\]\);/;
-hook = hook.replace(apiSaveRe, `useEffect(() => {
-    if (!loaded) return;
-    const t = setTimeout(() => {
-      try { localStorage.setItem("budget-data", JSON.stringify(st)); } catch(e) { console.error("Save error:", e); }
-    }, 600);
-    return () => clearTimeout(t);
-  }, [st, loaded]);`);
+// 1b. (removed) The API save no longer needs its own patch: the apiFetch shim
+// above intercepts the PUT and writes to localStorage. This deliberately keeps
+// the real save effect from useAppState.jsx — including the `!loaded` state-wipe
+// guard and the lastSavedHashRef baseline — rather than substituting a
+// simplified copy that would drift out of sync (which is exactly what the old
+// regex-replaced version did before it silently stopped matching entirely).
 
 // 1c. Add stRef right after the st useMemo line
 hook = hook.replace(
