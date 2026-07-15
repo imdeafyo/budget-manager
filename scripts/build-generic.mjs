@@ -153,7 +153,26 @@ const __bmDurable = __bmStorage.durable;
 const apiFetch = async (url, opts) => {
   const method = (opts && opts.method) || "GET";
   if (method === "PUT") {
-    try { localStorage.setItem("budget-data", opts.body); } catch (e) { console.error("Save error:", e); }
+    // useAppState PUTs a wrapped payload: JSON.stringify({ state: st }).
+    // The on-disk/textarea format is the BARE state object, and the GET below
+    // re-wraps it as { state: ... } to match the real endpoint's contract.
+    // So we must UNWRAP here before storing — otherwise the blob is saved as
+    // {state:{...}}, the GET wraps it again into {state:{state:{...}}}, and
+    // useAppState reads r.state and gets {state:{...}} instead of the actual
+    // fields. Every value comes back undefined and the app silently falls back
+    // to defaults — i.e. nothing persists. (This was the bug: saves appeared to
+    // work, reloads always showed a blank budget.)
+    try {
+      let body = opts.body;
+      try {
+        const parsed = JSON.parse(body);
+        // Unwrap {state: ...} → bare state. Tolerate an already-bare payload.
+        if (parsed && typeof parsed === "object" && parsed.state !== undefined) {
+          body = JSON.stringify(parsed.state);
+        }
+      } catch {}
+      localStorage.setItem("budget-data", body);
+    } catch (e) { console.error("Save error:", e); }
     return { ok: true, status: 200, reqId: null, json: async () => ({}) };
   }
   // GET — load precedence, which depends on whether storage is DURABLE:
