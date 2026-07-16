@@ -268,6 +268,73 @@ different states (rare), the FIRE estimate will slightly understate
 state tax for the higher-rate partner's residence. Surface a warning
 if `p1State.abbr !== p2State.abbr`, or model both states.
 
+## Build & test discipline
+
+### Generic-build patches must be verified by behavior, not by grepping the bundle
+
+Hard-won during the Phase 13A update-check sessions (2026-07-15), which
+shipped **four** broken builds in a row, each one declared "verified"
+before a user found it broken. Every failure lived in a *seam* between
+components that were individually correct and individually tested.
+
+What actually broke, in order:
+
+1. **Silent no-op patches.** `build-generic.mjs` patches a temp copy of
+   `useAppState.jsx` via `String.replace`. Two anchors
+   (`fetch("/api/state").then(r => r.json())` for load, a regex for save)
+   had silently stopped matching when every fetch site moved to
+   `apiFetch` in Phase 6.5b-A-Followup. **`String.replace` with a
+   non-matching needle returns the original string — no error, no
+   warning.** The build reported success and shipped a generic file with
+   *no localStorage load or save path at all*. Ironically the script
+   already had a warning `replace()` helper; these two call sites just
+   didn't use it.
+2. **Payload-shape mismatch (double-wrap).** The replacement shim stored
+   `opts.body` verbatim — but `useAppState` PUTs `JSON.stringify({state: st})`
+   while the on-disk/textarea format is the **bare** state. The GET then
+   re-wrapped, producing `{state:{state:{...}}}`. `useAppState` read
+   `r.state`, got the wrapper, every field came back `undefined`, and the
+   app silently fell back to defaults. Saves *looked* fine; every reload
+   was blank.
+3. **Cache scoped to the wrong thing.** localStorage is per-**origin**,
+   not per-file. Every generic `.html` in the same folder shares one
+   `file://` origin and therefore one update cache. A brand-new download
+   read an *older* file's cache entry, skipped the network entirely, and
+   announced itself out of date. Fixed by stamping `forBuild` on cache
+   entries.
+4. **A browser policy assumed away.** Chromium (Chrome/Edge/Vivaldi/Brave)
+   treats each `file://` document as a unique opaque origin and denies
+   storage — in some versions merely *reading* `window.localStorage`
+   throws. The whole persistence model had a Safari-shaped assumption
+   baked in. See `utils/safeStorage.js`.
+
+**The rule:** a generic-build change is not verified until a test asserts
+**write-then-read returns what you wrote**, end to end, through the same
+contract the real caller uses. Grepping the built HTML for a string only
+proves a string is present — during the `data-fresh` fix the *download*
+half was in the bundle and the *loader* half was not, and the grep passed.
+
+Concretely, going forward:
+
+- Every patch in `build-generic.mjs` that targets source text goes through
+  a helper that **throws** on a missed anchor (`replaceInHook`). Never a
+  bare `hook.replace()` for anything load-bearing.
+- Prefer anchoring on an **import line** (one line, rarely changes) over a
+  code block, and shim the imported function — this keeps the real logic in
+  `useAppState.jsx` (incl. the `!loaded` state-wipe guard and
+  `lastSavedHashRef` baseline) rather than substituting a simplified copy
+  that drifts.
+- `utils/genericPersistence.test.js` is the model: it transcribes the
+  shipped shim and asserts the round trip. **Verify a new regression test
+  actually fails against the broken code before trusting it** — reintroduce
+  the bug, watch it go red, then restore. A test that passes against both
+  versions is decoration.
+- Browser-policy assumptions (storage, CORS, origins) are claims about the
+  world, not about this codebase. State them explicitly and test the
+  denial path, because `file://` behaviour differs sharply across engines.
+
+
+
 ## Core architecture
 
 ### Stable IDs for budget line items (exp / sav rows)
