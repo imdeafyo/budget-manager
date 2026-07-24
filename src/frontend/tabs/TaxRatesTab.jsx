@@ -1,5 +1,5 @@
 import { Card, NI } from "../components/ui.jsx";
-import { fmt, fp, p2 } from "../utils/calc.js";
+import { fmt, fp, p2, evalF } from "../utils/calc.js";
 import { DEF_TAX, STATE_ABBR, STATE_BRACKETS } from "../data/taxDB.js";
 
 function StateBrView({ abbr, filing, label }) {
@@ -121,6 +121,76 @@ export default function TaxRatesTab({ mob, tax, upTax, upP1State, upP2State, set
         {(tax.p1State || {}).abbr && STATE_BRACKETS[(tax.p1State || {}).abbr] && <StateBrView abbr={(tax.p1State).abbr} filing={fil} label={`${(tax.p1State).name || (tax.p1State).abbr} — ${p1Name} (${fil === "mfj" ? "MFJ" : "Single"})`} />}
         {(tax.p2State || {}).abbr && STATE_BRACKETS[(tax.p2State || {}).abbr] && <StateBrView abbr={(tax.p2State).abbr} filing={fil} label={`${(tax.p2State).name || (tax.p2State).abbr} — ${p2Name} (${fil === "mfj" ? "MFJ" : "Single"})`} />}
       </div>
+
+      {/* Deductions: standard vs. itemized. Mode defaults to auto (take the
+          larger), which reproduces standard-only behavior for anyone who
+          leaves the itemized fields at zero. */}
+      <Card style={{ gridColumn: mob ? "1" : "1/-1" }}>
+        <h3 style={{ margin: "0 0 4px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Deductions</h3>
+        <div style={{ fontSize: 11, color: "var(--tx3,#888)", marginBottom: 12 }}>
+          You take whichever is larger: the standard deduction or your itemized total. Leave itemized at zero to use the standard deduction.
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {[["auto", "Auto (larger)"], ["standard", "Force standard"], ["itemized", "Force itemized"]].map(([val, label]) => {
+            const active = (tax.deductionMode || "auto") === val;
+            return (
+              <button key={val} onClick={() => setTax(prev => ({ ...prev, deductionMode: val }))}
+                style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, border: `1px solid ${active ? "#556FB5" : "var(--bdr,#ddd)"}`, borderRadius: 6, background: active ? "#556FB5" : "transparent", color: active ? "#fff" : "var(--tx2,#555)", cursor: "pointer" }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 14 }}>
+          {[
+            ["salt", "State & local tax (SALT)", "Income + property tax. Capped — see below."],
+            ["mortgageInterest", "Mortgage interest", "Not subject to the SALT cap."],
+            ["charitable", "Charitable giving", ""],
+            ["medical", "Medical expenses", "Only the portion above 7.5% of income counts."],
+          ].map(([key, label, hint]) => (
+            <div key={key}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--tx2,#555)", marginBottom: 3 }}>{label}</div>
+              <NI value={String((tax.deductions || {})[key] ?? 0)}
+                onChange={v => setTax(prev => ({ ...prev, deductions: { ...(prev.deductions || {}), [key]: evalF(v) } }))}
+                onBlurResolve />
+              {hint && <div style={{ fontSize: 10, color: "var(--tx3,#999)", marginTop: 2 }}>{hint}</div>}
+            </div>
+          ))}
+        </div>
+
+        {C && C.dedResult && (
+          <div style={{ padding: "10px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+              <span>Standard deduction</span>
+              <strong style={{ color: C.dedResult.used === "standard" ? "#2ECC71" : "var(--tx3,#999)" }}>{fmt(C.dedResult.standard)}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <span>Itemized total</span>
+              <strong style={{ color: C.dedResult.used === "itemized" ? "#2ECC71" : "var(--tx3,#999)" }}>{fmt(C.dedResult.itemized.total)}</strong>
+            </div>
+            <div style={{ paddingTop: 6, borderTop: "1px solid var(--bdr,#e5e5e5)", display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontWeight: 700 }}>Using {C.dedResult.used}</span>
+              <strong style={{ fontWeight: 800 }}>{fmt(C.dedResult.amount)}</strong>
+            </div>
+            {C.dedResult.itemized.saltDisallowed > 0 && (
+              <div style={{ marginTop: 6, fontSize: 10, color: "#F39C12" }}>
+                SALT capped at {fmt(C.dedResult.itemized.saltCap)} for {tax.year} — {fmt(C.dedResult.itemized.saltDisallowed)} of your entry is not deductible.
+              </div>
+            )}
+            {C.dedResult.itemized.medicalEntered > 0 && C.dedResult.itemized.medicalAllowed === 0 && (
+              <div style={{ marginTop: 4, fontSize: 10, color: "var(--tx3,#999)" }}>
+                Medical is below the 7.5% floor ({fmt(C.dedResult.itemized.medicalFloor)}), so none of it counts.
+              </div>
+            )}
+            <div style={{ marginTop: 6, fontSize: 10, color: "var(--tx3,#999)" }}>
+              SALT cap is {fmt(C.dedResult.itemized.saltCap)} for {tax.year}. Under current law it steps 1%/yr through 2029, then drops to $10,000 in 2030.
+            </div>
+          </div>
+        )}
+      </Card>
+
       <Card dark style={{ gridColumn: mob ? "1" : "1/-1" }}>
         <h3 style={{ margin: "0 0 12px", fontFamily: "'Fraunces',serif", fontSize: 18, fontWeight: 800 }}>Active Summary</h3>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, fontSize: 13 }}>

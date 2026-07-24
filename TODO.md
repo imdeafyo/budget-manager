@@ -201,29 +201,6 @@ Currently pro-rata across account types. Real retirees optimize: taxable first,
 Roth conversion ladders, RMD-driven sequencing. High UI complexity, marginal
 planning-time benefit. Don't build unless multiple users ask.
 
-### Itemized deductions — working-years tax (`calc.js`) — `ready`
-
-Commit 2 of 3 in the deduction series (commit 1, IRS indexing of brackets +
-standard deduction, shipped — see Done). `calc.js` applies the standard
-deduction unconditionally, so a household that itemizes has its current
-take-home and every accumulation year overstated on tax.
-
-Add an itemized-deduction block with a mode selector:
-- **Auto** (default) — compute both, use the larger, surface which won
-- **Standard** — force standard
-- **Itemized** — force the entered components
-
-Components: SALT, mortgage interest, charitable, medical. SALT needs a
-`saltCap(year)` helper — $40,400 for 2026, +1%/yr for years after 2026 and
-before 2030, reverting to $10,000 from 2030 (OBBBA made the *cap* permanent,
-not the expanded *amount*; verify against current law before shipping, as
-the 2030 snapback is politically live). Phase-out: deduction reduced by 30%
-of MAGI over the threshold ($505,000 MFJ for 2026, +1%/yr after 2026), with
-a hard $10,000 floor. Medical is only deductible above 7.5% of AGI.
-
-Versioned merge: default the block to absent/zero so existing saved states
-keep today's behavior exactly.
-
 ### Itemized deductions — retirement drawdown (`fireTarget.js`) — `parked`
 
 Commit 3 of 3. Blocked on commit 2 landing first (shared helpers).
@@ -444,6 +421,23 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **Itemized deductions — working-years tax** (commit 2 of 3) — `calc.js` /
+  `useAppState.jsx` applied the standard deduction unconditionally, so a
+  household that itemizes had its federal tax overstated and its take-home
+  understated every paycheck. New `utils/deductions.js` resolves standard vs.
+  itemized with a three-way mode (auto / force standard / force itemized).
+  SALT is capped on the statutory OBBBA schedule ($40,400 for 2026, +1%/yr
+  through 2029, snapback to $10,000 in 2030) with the 30%-of-MAGI-over-
+  threshold phase-out and its hard $10,000 floor; the schedule is statutory,
+  NOT inflation-indexed, so it deliberately does not ride the IRS indexing
+  knob from commit 1. Mortgage interest sits outside the SALT cap. Medical
+  applies the 7.5% AGI floor. New Deductions card on Tax Rates shows both
+  sides and which one won, plus a warning when SALT is being clipped.
+  Defaults (`deductionMode: "auto"`, all components 0) reproduce prior
+  behavior exactly for existing saved states. Also fixed: the single-filer
+  branch of the federal calc hardcoded `tax.stdSingle`, which would have
+  ignored itemizing for single filers. 32 new tests. Commit: `PENDING`
 
 - **IRS indexing of tax brackets + standard deduction** (commit 1 of 3 in the
   deduction series) — the FIRE tax estimate held a single `TAX_DB` row flat

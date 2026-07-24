@@ -53,6 +53,7 @@ Frontend, under `src/frontend/`:
 | CSV import wizard (mapping, profile detection, preview) | `components/ImportModal.jsx` |
 | Federal + state tax DB, forecast account pools | `data/taxDB.js` |
 | Pure calc (tax, match, forecast, milestone recalc, per-account growth) | `utils/calc.js` |
+| Itemized vs. standard deduction (SALT cap, phase-out, medical floor) | `utils/deductions.js` |
 | Tax-aware FIRE target math | `utils/fireTarget.js` |
 | IRS indexing of brackets / standard deduction for projection years | `utils/taxIndexing.js` |
 | Actual-vs-budget aggregation & period conversion | `utils/budgetCompare.js` |
