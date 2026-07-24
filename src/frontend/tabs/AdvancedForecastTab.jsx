@@ -1648,15 +1648,27 @@ export default function AdvancedForecastTab({
   const fireBaseTargetForYear = useMemo(() => {
     const reductions = fireReduction.reductionByYear;
     const overridden = retirementSpendingOverride != null;
+    /* Cache by integer year. This is called once per chart point per render
+       and each call runs a 6-iteration tax gross-up (~0.1ms), so without a
+       cache a 30-year chart pays for it on every re-render. Rebuilt whenever
+       any dependency below changes, so it can't go stale. */
+    const cache = new Map();
     return (y) => {
       if (!fireEnabled) return 0;
       const yi = Math.max(0, Math.min(reductions.length - 1, Math.round(y)));
+      if (cache.has(yi)) return cache.get(yi);
       const cut = overridden ? 0 : (reductions[yi] || 0);
-      if (cut <= 0) return fireTarget;
-      const reducedSpend = Math.max(0, fireSpending - cut);
-      return computeFireTarget(reducedSpend, fireAccountMix, taxConfig, swr, useSimpleMultiplier).target;
+      /* Index brackets to THIS year, not the horizon. Year 5 gets 5 years of
+         bracket growth, not 30. Indexing every year at the horizon shifted
+         the whole target curve by one constant factor, which made the
+         crossover year insensitive to indexing entirely. */
+      const cfgForYear = { ...taxConfig, indexYears: yi };
+      const reducedSpend = cut > 0 ? Math.max(0, fireSpending - cut) : fireSpending;
+      const out = computeFireTarget(reducedSpend, fireAccountMix, cfgForYear, swr, useSimpleMultiplier).target;
+      cache.set(yi, out);
+      return out;
     };
-  }, [fireReduction, retirementSpendingOverride, fireEnabled, fireTarget, fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier]);
+  }, [fireReduction, retirementSpendingOverride, fireEnabled, fireSpending, fireAccountMix, taxConfig, swr, useSimpleMultiplier]);
 
   /* Chart data: stacked area, one series per account. We use account ids
      for the dataKey so renames don't break Recharts' internal series state.

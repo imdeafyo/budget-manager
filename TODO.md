@@ -459,8 +459,15 @@ Newest first, with commit hashes.
   `calcFed`'s contiguity assumption holds by construction. State brackets and
   the SS wage cap deliberately not indexed (different measures). Indexes to
   `horizon`, matching `fireAccountMix` — indexing to the FIRE year would be
-  circular. Zero rate reproduces prior behavior exactly, pinned by test.
-  23 new tests. Commit: `PENDING`
+  circular. `fireBaseTargetForYear` indexes per projection year (year 5 gets
+  5 years of bracket growth, not 30); indexing every year at the horizon
+  shifted the whole target curve by a constant factor, which made the
+  years-to-FIRE crossover insensitive to indexing entirely. Per-year results
+  are cached by integer year since the gross-up runs per chart point per
+  render. Measured impact is modest — ~3.4% off the target at a 30-year
+  horizon, because LTCG and tax-free income aren't touched by ordinary
+  brackets and the SWR divisor compresses the rest. Zero rate reproduces
+  prior behavior exactly, pinned by test. 23 new tests. Commit: `PENDING`
 
 - **Generic auto-update check** — SHA as the trigger (every push notifies),
   `git describe` tag as the display label; one-tap "download update with your
