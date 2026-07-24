@@ -46,7 +46,7 @@ export default function TaxRatesTab({ mob, tax, upTax, upP1State, upP2State, set
               <div>OASDI: <strong>{p2(tax.ssRate)}</strong> — SS Cap: <strong>{fmt(tax.ssCap)}</strong></div>
               <div>Medicare: <strong>{p2(tax.medRate)}</strong></div>
               <div>Std Ded (Single): <strong>{fmt(tax.stdSingle)}</strong></div>
-              <div>Std Ded (MFJ): <strong>{fmt(tax.stdMFJ)}</strong></div>
+              <div>Std Ded (MFJ): <strong>{fmt(tax.stdMFJ)}</strong>{tax.stdProjected && <span style={{ marginLeft: 6, fontSize: 10, color: "#F39C12", fontWeight: 700 }}>estimated</span>}</div>
               <div>401(k) Limit: <strong>{fmt(tax.k401Lim)}</strong></div>
               <div>HSA Limit: <strong>{fmt(tax.hsaLimit)}</strong></div>
             </div>

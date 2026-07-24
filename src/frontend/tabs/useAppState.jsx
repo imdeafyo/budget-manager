@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS, defaultForecastAccounts } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
 import { resolveDeduction } from "../utils/deductions.js";
+import { projectStdDed } from "../utils/taxIndexing.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
 import { ensureIds, newItemId, firstSaveAction } from "../utils/itemIds.js";
@@ -173,8 +174,22 @@ export default function useAppState() {
   const loadTaxYear = (yr) => {
     const rates = allTaxDB[yr];
     if (!rates) { setFetchStatus("❌ No data for " + yr); return; }
-    setTax(prev => ({ ...prev, year: yr, ...rates, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
-    setFetchStatus("✅ Loaded " + yr + " federal rates.");
+    /* Real published data always wins — a year present in allTaxDB (built-in
+       or user-imported) is used exactly as-is. Projection below only fills a
+       gap where the row itself omits a standard deduction. */
+    const latestYear = Math.max(...Object.keys(allTaxDB).map(Number).filter(isFinite));
+    const latestRow = allTaxDB[String(latestYear)] || {};
+    /* 2.5% matches the IRS indexing default on Charts → Advanced. Not read
+       from `forecast` here: that state is declared further down in this hook,
+       and closing over it from a function defined above it is exactly the TDZ
+       trap that has bitten this codebase before. A projected standard
+       deduction is a fallback for a year with no published data, so a fixed
+       sensible default is fine — real or imported data always wins anyway. */
+    const projPct = 2.5;
+    const projMFJ = projectStdDed(rates.stdMFJ, { year: Number(yr), baseYear: latestYear, baseValue: latestRow.stdMFJ, pct: projPct });
+    const projSingle = projectStdDed(rates.stdSingle, { year: Number(yr), baseYear: latestYear, baseValue: latestRow.stdSingle, pct: projPct });
+    setTax(prev => ({ ...prev, year: yr, ...rates, stdMFJ: projMFJ.amount, stdSingle: projSingle.amount, stdProjected: projMFJ.projected || projSingle.projected, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+    setFetchStatus((projMFJ.projected ? "⚠️ Loaded " + yr + " — standard deduction projected from " + latestYear : "✅ Loaded " + yr + " federal rates."));
   };
   const addTaxYear = (json) => {
     try {
@@ -183,7 +198,9 @@ export default function useAppState() {
       const yr = String(parsed.year);
       const entry = { fedSingle: parsed.fedSingle, fedMFJ: parsed.fedMFJ, stdSingle: parsed.stdSingle, stdMFJ: parsed.stdMFJ, ssRate: parsed.ssRate, ssCap: parsed.ssCap, medRate: parsed.medRate, k401Lim: parsed.k401Lim, hsaLimit: parsed.hsaLimit };
       setCustomTaxDB(prev => ({ ...prev, [yr]: entry }));
-      setTax(prev => ({ ...prev, year: yr, ...entry, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+      /* Imported data is real published data — clear any projection flag so
+         the year stops being marked as an estimate. */
+      setTax(prev => ({ ...prev, year: yr, ...entry, stdProjected: false, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
       setFetchStatus("✅ Added & loaded " + yr + " rates!");
       setTaxPaste(""); setShowTaxPaste(false);
     } catch (e) { setFetchStatus("❌ Invalid JSON: " + e.message); }

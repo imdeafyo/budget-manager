@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { indexFactor, indexBrackets, indexStdDed, indexTaxRow } from "./taxIndexing.js";
+import { indexFactor, indexBrackets, indexStdDed, indexTaxRow, projectStdDed } from "./taxIndexing.js";
 import { calcFed } from "./calc.js";
 import { TAX_DB } from "../data/taxDB.js";
 
@@ -171,5 +171,54 @@ describe("bracket creep — the bug this fixes", () => {
     expect(calcFed(Math.max(0, grown - frozen.stdMFJ), frozen.fedMFJ)).toBe(
       calcFed(Math.max(0, grown - row.stdMFJ), row.fedMFJ)
     );
+  });
+});
+
+describe("projectStdDed — precedence", () => {
+  it("uses a real published value and does not project", () => {
+    const out = projectStdDed(32200, { year: 2026, baseYear: 2024, baseValue: 29200, pct: 2.5 });
+    expect(out.amount).toBe(32200);
+    expect(out.projected).toBe(false);
+  });
+
+  it("a user-imported value wins over any projection", () => {
+    // Deliberately far from what projection would produce.
+    const out = projectStdDed(50000, { year: 2030, baseYear: 2026, baseValue: 32200, pct: 2.5 });
+    expect(out.amount).toBe(50000);
+    expect(out.projected).toBe(false);
+  });
+
+  it("projects only when no real value exists", () => {
+    const out = projectStdDed(undefined, { year: 2030, baseYear: 2026, baseValue: 32200, pct: 2.5 });
+    expect(out.projected).toBe(true);
+    expect(out.amount).toBeGreaterThan(32200);
+    expect(out.fromYear).toBe(2026);
+  });
+
+  it("treats zero and null as missing, not as a real value of zero", () => {
+    expect(projectStdDed(0, { year: 2030, baseYear: 2026, baseValue: 32200, pct: 2.5 }).projected).toBe(true);
+    expect(projectStdDed(null, { year: 2030, baseYear: 2026, baseValue: 32200, pct: 2.5 }).projected).toBe(true);
+  });
+
+  it("does not project backwards", () => {
+    const out = projectStdDed(undefined, { year: 2020, baseYear: 2026, baseValue: 32200, pct: 2.5 });
+    expect(out.amount).toBe(32200);
+    expect(out.projected).toBe(false);
+  });
+
+  it("is a no-op at a zero rate even for future years", () => {
+    const out = projectStdDed(undefined, { year: 2040, baseYear: 2026, baseValue: 32200, pct: 0 });
+    expect(out.amount).toBe(32200);
+  });
+
+  it("returns zero rather than NaN with no usable base", () => {
+    expect(projectStdDed(undefined, { year: 2030, baseYear: 2026, pct: 2.5 }).amount).toBe(0);
+  });
+
+  it("compounds across the gap", () => {
+    const near = projectStdDed(undefined, { year: 2028, baseYear: 2026, baseValue: 32200, pct: 2.5 }).amount;
+    const far = projectStdDed(undefined, { year: 2036, baseYear: 2026, baseValue: 32200, pct: 2.5 }).amount;
+    expect(far).toBeGreaterThan(near);
+    expect(near).toBeGreaterThan(32200);
   });
 });

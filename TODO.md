@@ -439,6 +439,18 @@ Newest first, with commit hashes.
   branch of the federal calc hardcoded `tax.stdSingle`, which would have
   ignored itemizing for single filers. 32 new tests. Commit: `PENDING`
 
+- **Projected standard deduction for unpublished years** — `projectStdDed` in
+  `utils/taxIndexing.js` compounds the latest known standard deduction forward
+  when a selected year has no published value. Precedence is explicit and
+  enforced inside the helper rather than trusted to call sites: a real value
+  (built-in `TAX_DB` or user-imported via `customTaxDB`) ALWAYS wins and is
+  never overridden by a projection; only a missing/zero value triggers one.
+  Projected years are flagged (`tax.stdProjected`) and marked "estimated" on
+  the Tax Rates tab; `addTaxYear` clears the flag since imported data is real.
+  Uses a fixed 2.5% rather than reading `forecast.limitGrowthPct`, because
+  `forecast` is declared below `loadTaxYear` in the hook and closing over it
+  would be a TDZ hazard. 8 new tests. Commit: `PENDING`
+
 - **IRS indexing of tax brackets + standard deduction** (commit 1 of 3 in the
   deduction series) — the FIRE tax estimate held a single `TAX_DB` row flat
   across all projection years while spending inflated, producing artificial

@@ -87,6 +87,43 @@ export function indexStdDed(amount, pct, years) {
   return roundTo(a * f, 50);
 }
 
+/* Project a standard deduction forward for a year with no published data.
+
+   PRECEDENCE, in order:
+     1. A real row in the tax table (built-in TAX_DB or a user-imported year
+        via customTaxDB) — always wins. Real published numbers beat any
+        estimate, and a user who pastes in official figures should never see
+        them overridden by a projection.
+     2. Otherwise, compound the latest known year's value forward.
+
+   This is a fallback for FUTURE years only. Callers must pass the real value
+   when they have one; `projectStdDed` returns it untouched in that case, so
+   the guard is enforced here rather than trusted to every call site.
+
+   Returns { amount, projected, fromYear } so the UI can mark an estimate as
+   such rather than presenting it as fact. */
+export function projectStdDed(realValue, opts) {
+  const o = opts || {};
+  const real = Number(realValue);
+  /* A real value exists — use it, no projection. */
+  if (isFinite(real) && real > 0) {
+    return { amount: real, projected: false, fromYear: o.year };
+  }
+  const base = Number(o.baseValue);
+  if (!isFinite(base) || base <= 0) {
+    return { amount: 0, projected: false, fromYear: o.baseYear };
+  }
+  const years = Math.max(0, (Number(o.year) || 0) - (Number(o.baseYear) || 0));
+  if (years === 0) {
+    return { amount: base, projected: false, fromYear: o.baseYear };
+  }
+  return {
+    amount: indexStdDed(base, o.pct, years),
+    projected: true,
+    fromYear: o.baseYear,
+  };
+}
+
 /* Index a whole TAX_DB row forward `years` from its base year.
 
    Returns a new row with fedMFJ, fedSingle, stdMFJ, and stdSingle indexed;
