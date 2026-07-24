@@ -54,6 +54,7 @@ Frontend, under `src/frontend/`:
 | Federal + state tax DB, forecast account pools | `data/taxDB.js` |
 | Pure calc (tax, match, forecast, milestone recalc, per-account growth) | `utils/calc.js` |
 | Tax-aware FIRE target math | `utils/fireTarget.js` |
+| IRS indexing of brackets / standard deduction for projection years | `utils/taxIndexing.js` |
 | Actual-vs-budget aggregation & period conversion | `utils/budgetCompare.js` |
 | Forecast actuals (windowed savings-rate / contribution math) | `utils/forecastActuals.js` |
 | Loan amortization tracker | `utils/loans.js` |

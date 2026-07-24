@@ -201,6 +201,48 @@ Currently pro-rata across account types. Real retirees optimize: taxable first,
 Roth conversion ladders, RMD-driven sequencing. High UI complexity, marginal
 planning-time benefit. Don't build unless multiple users ask.
 
+### Itemized deductions — working-years tax (`calc.js`) — `ready`
+
+Commit 2 of 3 in the deduction series (commit 1, IRS indexing of brackets +
+standard deduction, shipped — see Done). `calc.js` applies the standard
+deduction unconditionally, so a household that itemizes has its current
+take-home and every accumulation year overstated on tax.
+
+Add an itemized-deduction block with a mode selector:
+- **Auto** (default) — compute both, use the larger, surface which won
+- **Standard** — force standard
+- **Itemized** — force the entered components
+
+Components: SALT, mortgage interest, charitable, medical. SALT needs a
+`saltCap(year)` helper — $40,400 for 2026, +1%/yr for years after 2026 and
+before 2030, reverting to $10,000 from 2030 (OBBBA made the *cap* permanent,
+not the expanded *amount*; verify against current law before shipping, as
+the 2030 snapback is politically live). Phase-out: deduction reduced by 30%
+of MAGI over the threshold ($505,000 MFJ for 2026, +1%/yr after 2026), with
+a hard $10,000 floor. Medical is only deductible above 7.5% of AGI.
+
+Versioned merge: default the block to absent/zero so existing saved states
+keep today's behavior exactly.
+
+### Itemized deductions — retirement drawdown (`fireTarget.js`) — `parked`
+
+Commit 3 of 3. Blocked on commit 2 landing first (shared helpers).
+
+Harder than commit 2 because of a circularity: the SALT phase-out depends on
+MAGI, MAGI is what `grossUpForTaxes` is solving for, and the deduction feeds
+back into the tax that determines it. Adding a MAGI-dependent deduction
+inside that fixed-point iteration may affect convergence — the existing
+6-iteration default was tuned without it. Verify convergence explicitly
+rather than assuming.
+
+Also decide whether itemized deductions offset ordinary income only. Current
+structure applies the standard deduction to ordinary income and taxes LTCG
+at a flat rate separately; matching that is probably right but it's a
+modeling decision, not a mechanical substitution.
+
+Lower value than commit 2: in retirement there's typically no mortgage and
+much lower SALT, so the standard deduction usually wins anyway.
+
 ### State-LTCG nuance — `parked`
 We assume all states tax LTCG as ordinary income (conservative — overstates
 target for no-income-tax states). Add a per-state override if Corey or a future
@@ -402,6 +444,23 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **IRS indexing of tax brackets + standard deduction** (commit 1 of 3 in the
+  deduction series) — the FIRE tax estimate held a single `TAX_DB` row flat
+  across all projection years while spending inflated, producing artificial
+  bracket creep that overstated future tax and inflated the FIRE target. New
+  `utils/taxIndexing.js` compounds federal brackets and the standard
+  deduction forward, mirroring the existing `limitFor` helper in `calc.js`.
+  Extended the existing projection-wide `limitGrowthPct` field rather than
+  adding a second knob (relabeled "IRS limit growth" → "IRS indexing");
+  federal indexing uses chained CPI vs CPI-U for contribution limits, but
+  that gap is a rounding error over a 30-year horizon and no comparable tool
+  separates them. Brackets are indexed by boundary, not by tuple, so
+  `calcFed`'s contiguity assumption holds by construction. State brackets and
+  the SS wage cap deliberately not indexed (different measures). Indexes to
+  `horizon`, matching `fireAccountMix` — indexing to the FIRE year would be
+  circular. Zero rate reproduces prior behavior exactly, pinned by test.
+  23 new tests. Commit: `PENDING`
 
 - **Generic auto-update check** — SHA as the trigger (every push notifies),
   `git describe` tag as the display label; one-tap "download update with your

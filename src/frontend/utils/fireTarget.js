@@ -26,6 +26,7 @@
 
 import { TAX_DB, ACCOUNT_TYPE_TO_TAX_CHARACTER } from "../data/taxDB.js";
 import { calcFed, calcStateTax } from "./calc.js";
+import { indexTaxRow } from "./taxIndexing.js";
 
 const TAX_CHARACTERS = ["ordinary", "ltcg", "taxfree"];
 
@@ -114,7 +115,15 @@ export function estimateRetirementTax(grossNeed, mix, taxConfig) {
   const ltcgIncome     = need * (Number(m.ltcg)     || 0);
   const taxfreeIncome  = need * (Number(m.taxfree)  || 0);
 
-  const taxRow = TAX_DB[yearKey] || TAX_DB["2026"];
+  /* Index the tax row forward to the projection year. Without this the row
+     stays frozen at its table year while spending/income inflate, producing
+     artificial bracket creep that overstates tax and inflates the FIRE
+     target. `indexYears` is how many years past the table row we are;
+     `indexPct` is the projection-wide IRS indexing rate (forecast
+     .limitGrowthPct). Both default to a no-op so existing callers that pass
+     neither keep today's exact behavior. */
+  const baseRow = TAX_DB[yearKey] || TAX_DB["2026"];
+  const taxRow = indexTaxRow(baseRow, cfg.indexPct, cfg.indexYears);
   const fedBrackets = filing === "mfj" ? taxRow.fedMFJ : taxRow.fedSingle;
   const stdDed = filing === "mfj" ? taxRow.stdMFJ : taxRow.stdSingle;
 

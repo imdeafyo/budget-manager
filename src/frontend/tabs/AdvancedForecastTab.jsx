@@ -254,13 +254,29 @@ export default function AdvancedForecastTab({
     return retirementSpendingOverride != null ? retirementSpendingOverride : fireAnnualExpenses;
   }, [retirementSpendingOverride, fireAnnualExpenses]);
 
+  /* Hoisted above taxConfig: the FIRE tax estimate needs the indexing rate,
+     and a const declared further down would be a TDZ error here. The other
+     consumer (limitFor, below) reads the same value. */
+  const limitGrowthPct = forecast && forecast.limitGrowthPct !== undefined ? forecast.limitGrowthPct : 2.5;
+  const baseYear = new Date().getFullYear();
+
   const taxConfig = useMemo(() => ({
     year: String(tax?.year || "2026"),
     filing: "mfj",
     stateAbbr: tax?.p1State?.abbr || tax?.p2State?.abbr || "",
     ltcgRate,
     stateTaxesLTCG: true,
-  }), [tax, ltcgRate]);
+    /* Index brackets/std deduction forward. Without this, brackets stay
+       frozen while spending inflates — artificial bracket creep that
+       overstates tax and inflates the target.
+
+       Basis is `horizon`, matching fireAccountMix below: indexing to the
+       actual FIRE year would be circular (yearsToFireAdv is derived from
+       the target, which depends on this config), and horizon is the same
+       end-state basis the mix already uses. */
+    indexPct: limitGrowthPct,
+    indexYears: horizon,
+  }), [tax, ltcgRate, limitGrowthPct, horizon]);
 
   const accountsRaw = (forecast && Array.isArray(forecast.accounts)) ? forecast.accounts : [];
 
@@ -349,9 +365,6 @@ export default function AdvancedForecastTab({
   const onDragEnd = () => { setDragId(null); setDragOverId(null); };
 
   const hsaCoverage = (forecast && forecast.hsaCoverage) || "family";
-  const limitGrowthPct = forecast && forecast.limitGrowthPct !== undefined ? forecast.limitGrowthPct : 2.5;
-  const baseYear = new Date().getFullYear();
-
   /* Color mode (per-device, per-tab — short-lived UI preference). */
   const [colorBy, setColorBy] = useState(() => {
     try { return localStorage.getItem("forecast-color-by") || "type"; } catch { return "type"; }
@@ -1987,12 +2000,12 @@ export default function AdvancedForecastTab({
             Small inline mini-section. Both fields tied to projection-wide
             behavior, distinct from per-account fine-tuning below. */}
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "var(--input-bg,#fafafa)", borderRadius: 6, fontSize: 11, color: "var(--tx2,#555)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <span style={{ fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>IRS limit growth:</span>
+          <span style={{ fontWeight: 700, color: "var(--tx3,#888)", textTransform: "uppercase", letterSpacing: 0.5 }}>IRS indexing:</span>
           <div style={{ width: 90 }}>
             <NI value={String(limitGrowthPct)} onChange={v => setForecast(prev => ({ ...prev, limitGrowthPct: evalF(v) }))} onBlurResolve />
           </div>
           <span style={{ fontSize: 10, color: "var(--tx3,#888)" }}>
-            % per year applied to today's IRS limits for future projection years (rounded to nearest $500). Default 2.5%. Set to 0 to freeze limits at today's values.
+            % per year applied to today's IRS figures for future projection years: contribution limits (rounded to nearest $500), federal tax brackets ($25) and the standard deduction ($50). Default 2.5%. Set to 0 to freeze everything at today's values. State brackets and the Social Security wage cap are not indexed.
           </span>
         </div>
 
