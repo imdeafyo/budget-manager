@@ -39,6 +39,12 @@ export const DEF_TAX = {
   ...TAX_DB["2026"],
   p1State: { name: "Colorado", abbr: "CO", famli: 0.45 },
   p2State: { name: "Colorado", abbr: "CO", famli: 0.45 },
+  /* Deductions: "auto" takes whichever of standard/itemized is larger.
+     All itemized components default to 0, so auto resolves to the standard
+     deduction until the user enters something — preserving prior behavior
+     for existing saved states, which lack these fields entirely. */
+  deductionMode: "auto",
+  deductions: { salt: 0, mortgageInterest: 0, charitable: 0, medical: 0 },
   k401Lim: 24500,
   c401Catch: 0, c401CatchPreTax: true,
   k401Catch: 0, k401CatchPreTax: true,

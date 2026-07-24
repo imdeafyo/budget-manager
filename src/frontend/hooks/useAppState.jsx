@@ -1,6 +1,8 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { TAX_DB, DEF_TAX, STATE_ABBR, STATE_TAX, STATE_PAYROLL, DEF_CATS, DEF_PRE, DEF_POST, DEF_EXP, DEF_SAV_CATS, DEF_SAV, DEF_TRANSFER_CATS, DEF_INCOME_CATS, defaultForecastAccounts } from "../data/taxDB.js";
 import { evalF, resolveFormula, calcMatch, calcFed, getMarg, calcStateTax, getStateMarg, toWk, fromWk, fmt, fp, p2, pctOf, recalcMilestonePure } from "../utils/calc.js";
+import { resolveDeduction } from "../utils/deductions.js";
+import { projectStdDed } from "../utils/taxIndexing.js";
 import { BUILTIN_COLUMNS, newTransaction } from "../utils/transactions.js";
 import { reconstructFromItems, compareBudgetToActual } from "../utils/budgetCompare.js";
 import { ensureIds, newItemId, firstSaveAction } from "../utils/itemIds.js";
@@ -172,8 +174,22 @@ export default function useAppState() {
   const loadTaxYear = (yr) => {
     const rates = allTaxDB[yr];
     if (!rates) { setFetchStatus("❌ No data for " + yr); return; }
-    setTax(prev => ({ ...prev, year: yr, ...rates, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
-    setFetchStatus("✅ Loaded " + yr + " federal rates.");
+    /* Real published data always wins — a year present in allTaxDB (built-in
+       or user-imported) is used exactly as-is. Projection below only fills a
+       gap where the row itself omits a standard deduction. */
+    const latestYear = Math.max(...Object.keys(allTaxDB).map(Number).filter(isFinite));
+    const latestRow = allTaxDB[String(latestYear)] || {};
+    /* 2.5% matches the IRS indexing default on Charts → Advanced. Not read
+       from `forecast` here: that state is declared further down in this hook,
+       and closing over it from a function defined above it is exactly the TDZ
+       trap that has bitten this codebase before. A projected standard
+       deduction is a fallback for a year with no published data, so a fixed
+       sensible default is fine — real or imported data always wins anyway. */
+    const projPct = 2.5;
+    const projMFJ = projectStdDed(rates.stdMFJ, { year: Number(yr), baseYear: latestYear, baseValue: latestRow.stdMFJ, pct: projPct });
+    const projSingle = projectStdDed(rates.stdSingle, { year: Number(yr), baseYear: latestYear, baseValue: latestRow.stdSingle, pct: projPct });
+    setTax(prev => ({ ...prev, year: yr, ...rates, stdMFJ: projMFJ.amount, stdSingle: projSingle.amount, stdProjected: projMFJ.projected || projSingle.projected, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+    setFetchStatus((projMFJ.projected ? "⚠️ Loaded " + yr + " — standard deduction projected from " + latestYear : "✅ Loaded " + yr + " federal rates."));
   };
   const addTaxYear = (json) => {
     try {
@@ -182,7 +198,9 @@ export default function useAppState() {
       const yr = String(parsed.year);
       const entry = { fedSingle: parsed.fedSingle, fedMFJ: parsed.fedMFJ, stdSingle: parsed.stdSingle, stdMFJ: parsed.stdMFJ, ssRate: parsed.ssRate, ssCap: parsed.ssCap, medRate: parsed.medRate, k401Lim: parsed.k401Lim, hsaLimit: parsed.hsaLimit };
       setCustomTaxDB(prev => ({ ...prev, [yr]: entry }));
-      setTax(prev => ({ ...prev, year: yr, ...entry, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
+      /* Imported data is real published data — clear any projection flag so
+         the year stops being marked as an estimate. */
+      setTax(prev => ({ ...prev, year: yr, ...entry, stdProjected: false, p1State: prev.p1State, p2State: prev.p2State, cMatchTiers: prev.cMatchTiers, cMatchBase: prev.cMatchBase, kMatchTiers: prev.kMatchTiers, kMatchBase: prev.kMatchBase, hsaEmployerMatch: prev.hsaEmployerMatch }));
       setFetchStatus("✅ Added & loaded " + yr + " rates!");
       setTaxPaste(""); setShowTaxPaste(false);
     } catch (e) { setFetchStatus("❌ Invalid JSON: " + e.message); }
@@ -952,8 +970,21 @@ export default function useAppState() {
     const cTxW = cw - cPreW - c4preW - cIraTradW, kTxW = kw - kPreW - k4preW - kIraTradW;
     const combTxA = (cTxW + kTxW) * 52;
     const br = fil === "mfj" ? tax.fedMFJ : tax.fedSingle;
-    const sd = fil === "mfj" ? tax.stdMFJ : tax.stdSingle;
-    const fTax = fil === "mfj" ? calcFed(Math.max(0, combTxA - sd), br) : calcFed(Math.max(0, cTxW * 52 - tax.stdSingle), tax.fedSingle) + calcFed(Math.max(0, kTxW * 52 - tax.stdSingle), tax.fedSingle);
+    const stdDed = fil === "mfj" ? tax.stdMFJ : tax.stdSingle;
+    /* Itemized vs. standard. `tax.deductions` is absent on saved states that
+       predate this feature, in which case computeItemized totals zero and
+       auto mode keeps the standard deduction — today's exact behavior.
+       MAGI/AGI are approximated by combined taxable wages, which is what
+       this calc already has; it drives the SALT phase-out (only bites above
+       ~$505k) and the 7.5% medical floor. */
+    const dedResult = resolveDeduction(stdDed, tax.deductions, {
+      mode: tax.deductionMode,
+      year: Number(tax.year) || undefined,
+      magi: combTxA,
+      agi: combTxA,
+    });
+    const sd = dedResult.amount;
+    const fTax = fil === "mfj" ? calcFed(Math.max(0, combTxA - sd), br) : calcFed(Math.max(0, cTxW * 52 - sd), tax.fedSingle) + calcFed(Math.max(0, kTxW * 52 - sd), tax.fedSingle);
     const mr = getMarg(Math.max(0, combTxA - sd), br);
     const tot = cTxW + kTxW, cr = tot > 0 ? cTxW / tot : .5;
     const cFed = (fTax / 52) * cr, kFed = (fTax / 52) * (1 - cr);
@@ -1007,7 +1038,7 @@ export default function useAppState() {
     // for the Pre-Tax Savings total. Employer values pass through for the
     // "+ $X/yr employer" display note; they do NOT affect net pay.
     const cHsaW = evalF(cHsa) / 52, kHsaW = evalF(kHsa) / 52;
-    return { cs, ks, cw, kw, cPreW, kPreW, cHsaW, kHsaW, cHsaEmployerA: evalF(cHsaEmployer), kHsaEmployerA: evalF(kHsaEmployer), c4w, k4w, c4preW, k4preW, c4roW, k4roW, cIraTradW, cIraRothW, kIraTradW, kIraRothW, cTxW, kTxW, fTax, mr, sd, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cPostDedW, kPostDedW, cPostSavW, kPostSavW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
+    return { cs, ks, cw, kw, cPreW, kPreW, cHsaW, kHsaW, cHsaEmployerA: evalF(cHsaEmployer), kHsaEmployerA: evalF(kHsaEmployer), c4w, k4w, c4preW, k4preW, c4roW, k4roW, cIraTradW, cIraRothW, kIraTradW, kIraRothW, cTxW, kTxW, fTax, mr, sd, dedResult, cFed, kFed, cSS, kSS, cMc, kMc, cCO, kCO, cStMR, kStMR, cFL, kFL, cTx, kTx, cPostW, kPostW, cPostDedW, kPostDedW, cPostSavW, kPostSavW, cNet, kNet, net: cNet + kNet, cMP, kMP, ssR, medR, eaipGross, eaipNet, cEaipGross, kEaipGross, cEaipNet, kEaipNet, cEaipTax, kEaipTax, cEaipFed, kEaipFed, cEaipSS, kEaipSS, cEaipMc, kEaipMc, cEaipSt, kEaipSt, cEaipFL, kEaipFL };
   }, [cSal, kSal, fil, preDed, postDed, c4pre, c4ro, k4pre, k4ro, tax, cEaip, kEaip, cIraTrad, cIraRoth, kIraTrad, kIraRoth, cHsa, kHsa, cHsaEmployer, kHsaEmployer]);
 
   const moC = v => v * 48 / 12, y4 = v => v * 48, y5 = v => v * 52;
