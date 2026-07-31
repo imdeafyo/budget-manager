@@ -4,6 +4,7 @@ import {
   monthlyExpenseForItems,
   emergencyTarget,
   houseFundTarget,
+  toggleExcluded,
 } from "./savingsTargets.js";
 
 describe("weeklyToMonthly", () => {
@@ -83,5 +84,33 @@ describe("houseFundTarget", () => {
     expect(houseFundTarget(0)).toBe(0);
     expect(houseFundTarget(750000, 0)).toBe(0);
     expect(houseFundTarget(undefined)).toBe(0);
+  });
+});
+
+describe("toggleExcluded", () => {
+  it("adds an id when absent", () => {
+    expect(toggleExcluded([], "i_a")).toEqual(["i_a"]);
+  });
+  it("removes an id when present", () => {
+    expect(toggleExcluded(["i_a", "i_b"], "i_a")).toEqual(["i_b"]);
+  });
+  it("round-trips: add then remove returns to empty (regression: checkbox unclick)", () => {
+    const once = toggleExcluded([], "i_a");
+    expect(once).toEqual(["i_a"]);
+    const twice = toggleExcluded(once, "i_a");
+    expect(twice).toEqual([]);
+  });
+  it("is a no-op for null/undefined id (id-less items never enter the set)", () => {
+    expect(toggleExcluded(["i_a"], undefined)).toEqual(["i_a"]);
+    expect(toggleExcluded(["i_a"], null)).toEqual(["i_a"]);
+  });
+  it("accepts a Set as input", () => {
+    expect(toggleExcluded(new Set(["i_a"]), "i_b").sort()).toEqual(["i_a", "i_b"]);
+  });
+  it("returns a new array (does not mutate input)", () => {
+    const input = ["i_a"];
+    const out = toggleExcluded(input, "i_b");
+    expect(input).toEqual(["i_a"]);
+    expect(out).not.toBe(input);
   });
 });

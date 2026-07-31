@@ -59,6 +59,21 @@ export function emergencyTarget(monthly, months = 6) {
   return m * n;
 }
 
+/* Toggle an item id in an exclusion list. Pure: takes the current list (or
+   Set), returns a NEW array with `id` added if absent or removed if present.
+   Null/undefined ids are a no-op (returns the list as an array unchanged) —
+   an item without a stable id must never enter the exclusion set, or it would
+   silently match every id-less item. This is the reducer behind the reserve
+   item-picker checkboxes; keeping it pure lets the component call it from
+   inside a functional state updater, avoiding the stale-snapshot bug where a
+   second click rebuilt the set from an out-of-date render value. */
+export function toggleExcluded(excludedIds, id) {
+  const next = new Set(excludedIds instanceof Set ? excludedIds : (excludedIds || []));
+  if (id == null) return [...next];
+  if (next.has(id)) next.delete(id); else next.add(id);
+  return [...next];
+}
+
 /* House maintenance fund target = home value × (percent / 100).
    Default percent 1.5 (mid-point of the 1–3% rule of thumb). Negative /
    non-finite inputs clamp to 0. */

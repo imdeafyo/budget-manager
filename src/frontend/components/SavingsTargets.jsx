@@ -29,6 +29,7 @@ import {
   monthlyExpenseForItems,
   emergencyTarget,
   houseFundTarget,
+  toggleExcluded,
 } from "../utils/savingsTargets.js";
 
 const numInputStyle = {
@@ -79,9 +80,11 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setTarge
 
   const set = (patch) => setTargets(prev => ({ ...(prev || {}), ...patch }));
   const toggleItem = (id) => {
-    const next = new Set(t.excludedIds || []);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    set({ excludedIds: [...next] });
+    if (id == null) return; // never toggle an item without a stable id
+    setTargets(prev => {
+      const p = prev || {};
+      return { ...p, excludedIds: toggleExcluded(p.excludedIds, id) };
+    });
   };
 
   if (t.show === false) {

@@ -429,8 +429,12 @@ Newest first, with commit hashes.
   not the 48-paycheck cadence — a reserve is calendar-real); the user can
   toggle individual items in/out (stored as an exclusion set of stable item
   ids) or override the monthly figure. New `utils/savingsTargets.js` (pure,
-  15 tests) + `components/SavingsTargets.jsx`; state persisted per-device via
-  `budget-savings-targets`. Combined target shown at the bottom. Commit: _pending_.
+  21 tests, incl. `toggleExcluded` reducer) + `components/SavingsTargets.jsx`;
+  state persisted per-device via `budget-savings-targets`. Combined target
+  shown at the bottom. Item-picker checkbox toggle computes inside a functional
+  state updater (via pure `toggleExcluded`) so a second click reliably unchecks
+  — the inline version rebuilt the exclusion set from a stale render snapshot.
+  Commit: _pending_.
 
 - **Itemized deductions — working-years tax** (commit 2 of 3) — `calc.js` /
   `useAppState.jsx` applied the standard deduction unconditionally, so a
