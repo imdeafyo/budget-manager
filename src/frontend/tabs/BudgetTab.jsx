@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Card, SH, CSH, NI, Row, ExpRowInner, SavRowInner } from "../components/ui.jsx";
+import SavingsTargets from "../components/SavingsTargets.jsx";
 import { evalF, fmt, fp, p2, toWk } from "../utils/calc.js";
 import { newItemId } from "../utils/itemIds.js";
 import log from "../utils/log.js";
@@ -133,7 +134,7 @@ export function BudgetToolbar({ mob, dk, waf, C, moC, y4, y5, tSavW, remY52, ban
   );
 }
 
-export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, retirementW = 0, totalAllSavingsW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, milestones, setMilestones, recalcMilestone }) {
+export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name, tax, preDed, postDed, showPerPerson, collapsed, toggleSec, necI, disI, savSorted, cats, savCats, updExp, updSav, rmExp, rmSav, tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, retirementW = 0, totalAllSavingsW, showAddItem, setShowAddItem, niN, setNiN, niC, setNiC, niT, setNiT, niS, setNiS, niP, setNiP, niV, setNiV, exp, setExp, sav, setSav, showBulkAdd, setShowBulkAdd, bulkName, setBulkName, bulkVal, setBulkVal, bulkPer, setBulkPer, bulkType, setBulkType, bulkSec, setBulkSec, bulkCat, setBulkCat, bulkTargets, setBulkTargets, milestones, setMilestones, recalcMilestone, savingsTargets, setSavingsTargets }) {
   return (
     <div>
 
@@ -307,6 +308,8 @@ export default function BudgetTab({ mob, C, moC, y4, y5, visCols, p1Name, p2Name
         </>}
 
       </Card>
+
+      <SavingsTargets necI={necI} disI={disI} targets={savingsTargets} setSavingsTargets={setSavingsTargets} />
 
       {/* Add item popup */}
       {showAddItem && (

@@ -422,6 +422,16 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 
 Newest first, with commit hashes.
 
+- **Savings target boxes (Budget → Live)** — two tweakable, hideable boxes:
+  an emergency reserve (monthly expenses × months, 3/6/9/12 quick-picks +
+  custom) and a house fund (home value × maintenance %, 1/1.5/2/3% quick-picks).
+  Monthly expenses default to all necessity items, calendar-monthly (× 52/12,
+  not the 48-paycheck cadence — a reserve is calendar-real); the user can
+  toggle individual items in/out (stored as an exclusion set of stable item
+  ids) or override the monthly figure. New `utils/savingsTargets.js` (pure,
+  15 tests) + `components/SavingsTargets.jsx`; state persisted per-device via
+  `budget-savings-targets`. Combined target shown at the bottom. Commit: _pending_.
+
 - **Itemized deductions — working-years tax** (commit 2 of 3) — `calc.js` /
   `useAppState.jsx` applied the standard deduction unconditionally, so a
   household that itemizes had its federal tax overstated and its take-home

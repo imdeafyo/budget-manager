@@ -285,6 +285,15 @@ export default function useAppState() {
     try { return localStorage.getItem("budget-chart-window") || "all"; } catch { return "all"; }
   });
   useEffect(() => { try { localStorage.setItem("budget-chart-window", chartTimeWindow); } catch {} }, [chartTimeWindow]);
+  /* Savings targets (Budget → Live) — emergency reserve + house fund boxes.
+     Persisted per-device (a planning preference, not core budget data).
+     excludedIds is a set of budget-item ids dropped from the reserve calc;
+     default empty = all necessities included. See utils/savingsTargets.js. */
+  const [savingsTargets, setSavingsTargets] = useState(() => {
+    try { const v = localStorage.getItem("budget-savings-targets"); return v ? JSON.parse(v) : { show: true, months: 6, excludedIds: [], overrideMonthly: false, maintPct: 1.5 }; }
+    catch { return { show: true, months: 6, excludedIds: [], overrideMonthly: false, maintPct: 1.5 }; }
+  });
+  useEffect(() => { try { localStorage.setItem("budget-savings-targets", JSON.stringify(savingsTargets)); } catch {} }, [savingsTargets]);
   const [msVisCols, setMsVisCols] = useState(() => { try { const v = localStorage.getItem("budget-milestone-cols") || localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
   const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
@@ -1447,7 +1456,7 @@ export default function useAppState() {
     PieTooltip,
     // calculations
     C, moC, y4, y5,
-    ewk, necI, disI, savSorted,
+    ewk, necI, disI, savSorted, savingsTargets, setSavingsTargets,
     tNW, tDW, tExpW, tSavW, remW, remY48, remY52, totalSavPlusRemW, retirementW, totalAllSavingsW,
     budgetTotal, allocatedTotal, unallocatedPct,
     catTot, typTot,
