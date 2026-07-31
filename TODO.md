@@ -428,13 +428,15 @@ Newest first, with commit hashes.
   Monthly expenses default to all necessity items, calendar-monthly (× 52/12,
   not the 48-paycheck cadence — a reserve is calendar-real); the user can
   toggle individual items in/out (stored as an exclusion set of stable item
-  ids) or override the monthly figure. New `utils/savingsTargets.js` (pure,
-  21 tests, incl. `toggleExcluded` reducer) + `components/SavingsTargets.jsx`;
-  state persisted per-device via `budget-savings-targets`. Combined target
-  shown at the bottom. Item-picker checkbox toggle computes inside a functional
-  state updater (via pure `toggleExcluded`) so a second click reliably unchecks
-  — the inline version rebuilt the exclusion set from a stale render snapshot.
-  Commit: _pending_.
+  keys) or override the monthly figure. New `utils/savingsTargets.js` (pure,
+  27 tests) + `components/SavingsTargets.jsx`; state persisted per-device via
+  `budget-savings-targets`. Combined target shown at the bottom. Item-picker
+  keys each row via `itemKey()` = stable `id` or `n:`-name fallback: live
+  budget items seeded from `DEF_EXP` carry NO id (the id backfill only runs on
+  the API load path, not on in-code defaults), so keying the checkbox on raw
+  `it.id` left `undefined` matching nothing and the box frozen. Toggle also
+  runs inside a functional state updater (pure `toggleExcluded`) to avoid a
+  stale-snapshot double-add. Commit: _pending_.
 
 - **Itemized deductions — working-years tax** (commit 2 of 3) — `calc.js` /
   `useAppState.jsx` applied the standard deduction unconditionally, so a

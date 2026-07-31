@@ -5,6 +5,7 @@ import {
   emergencyTarget,
   houseFundTarget,
   toggleExcluded,
+  itemKey,
 } from "./savingsTargets.js";
 
 describe("weeklyToMonthly", () => {
@@ -112,5 +113,39 @@ describe("toggleExcluded", () => {
     const out = toggleExcluded(input, "i_b");
     expect(input).toEqual(["i_a"]);
     expect(out).not.toBe(input);
+  });
+});
+
+describe("itemKey — fallback for id-less items (the DEF_EXP bug)", () => {
+  it("uses the stable id when present", () => {
+    expect(itemKey({ id: "i_a", n: "Rent", wk: 500 })).toBe("i_a");
+  });
+  it("falls back to n:name when id is missing (DEF_EXP defaults have no id)", () => {
+    expect(itemKey({ n: "Car Insurance", wk: 100 })).toBe("n:Car Insurance");
+  });
+  it("name fallback is stable across an amount edit", () => {
+    expect(itemKey({ n: "Gas", wk: 50 })).toBe(itemKey({ n: "Gas", wk: 90 }));
+  });
+  it("id and name-fallback keys never collide", () => {
+    expect(itemKey({ id: "i_x", n: "Gas" })).not.toBe(itemKey({ n: "Gas" }));
+  });
+});
+
+describe("exclusion works for id-less items via itemKey", () => {
+  // Regression: live budget items from DEF_EXP carry no id, so keying the
+  // checkbox on raw it.id froze it (undefined never matched). itemKey fixes it.
+  const idless = [
+    { n: "Rent", wk: 500 },
+    { n: "Groceries", wk: 200 },
+  ];
+  it("excludes an id-less item by its name key", () => {
+    const excluded = [itemKey(idless[1])]; // "n:Groceries"
+    expect(monthlyExpenseForItems(idless, excluded)).toBeCloseTo(500 * 52 / 12, 6);
+  });
+  it("toggle round-trips for an id-less item (checkbox unfreeze)", () => {
+    const k = itemKey(idless[0]); // "n:Rent"
+    const once = toggleExcluded([], k);
+    expect(once).toEqual([k]);
+    expect(toggleExcluded(once, k)).toEqual([]);
   });
 });

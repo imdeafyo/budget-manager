@@ -30,6 +30,7 @@ import {
   emergencyTarget,
   houseFundTarget,
   toggleExcluded,
+  itemKey,
 } from "../utils/savingsTargets.js";
 
 const numInputStyle = {
@@ -79,11 +80,11 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setTarge
   const houseTarget = houseFundTarget(homeValue, maintPct);
 
   const set = (patch) => setTargets(prev => ({ ...(prev || {}), ...patch }));
-  const toggleItem = (id) => {
-    if (id == null) return; // never toggle an item without a stable id
+  const toggleKey = (key) => {
+    if (!key) return;
     setTargets(prev => {
       const p = prev || {};
-      return { ...p, excludedIds: toggleExcluded(p.excludedIds, id) };
+      return { ...p, excludedIds: toggleExcluded(p.excludedIds, key) };
     });
   };
 
@@ -149,10 +150,11 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setTarge
                     <div style={{ fontSize: 9, fontWeight: 700, color: "var(--tx3,#aaa)", textTransform: "uppercase", letterSpacing: 1, margin: "4px 0 2px" }}>{grp}</div>
                     {list.length === 0 && <div style={{ fontSize: 11, color: "var(--tx3,#bbb)", padding: "2px 0" }}>none</div>}
                     {list.map(it => {
-                      const on = !excluded.has(it.id);
+                      const k = itemKey(it);
+                      const on = !excluded.has(k);
                       return (
-                        <label key={it.id || (it.n + "_" + it.idx)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", cursor: "pointer" }}>
-                          <input type="checkbox" checked={on} onChange={() => toggleItem(it.id)} />
+                        <label key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", cursor: "pointer" }}>
+                          <input type="checkbox" checked={on} onChange={() => toggleKey(k)} />
                           <span style={{ flex: 1, fontSize: 12, color: on ? "var(--tx,#333)" : "var(--tx3,#aaa)" }}>{it.n}</span>
                           <span style={{ fontSize: 11, color: "var(--tx3,#999)" }}>{fmt(it.wk * 52 / 12)}/mo</span>
                         </label>

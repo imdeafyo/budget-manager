@@ -35,14 +35,32 @@ export function weeklyToMonthly(wk) {
    excluded". Items without an id fall back to being keyed by their `n`+`wk`
    signature only for exclusion matching — but since necI carries ids in the
    live app, this is just defensive. */
+/* Resolve a stable key for a budget item's inclusion state. Prefers the
+   stable `id` (utils/itemIds.js); falls back to a name-based key when an item
+   predates the stable-IDs migration or comes from an in-code default that was
+   never id-backfilled (e.g. DEF_EXP). The `n:` prefix keeps the fallback from
+   ever colliding with a real id. Name is used (not name+amount) so the key
+   survives an amount edit — the picker should not silently re-include an item
+   just because its dollar value changed. */
+export function itemKey(it) {
+  if (!it) return "";
+  return it.id != null ? String(it.id) : `n:${it.n}`;
+}
+
+/* Sum the calendar-monthly expense for a set of budget items, skipping any
+   whose key is in `excluded`. Items are expected to carry `id` (stable, from
+   itemIds.js) and `wk` (weekly amount) — the shape of necI / disI. Falls back
+   to a name-based key for pre-migration / default items (see itemKey).
+
+   `excluded` may be a Set or an array of keys; anything falsy means "nothing
+   excluded". */
 export function monthlyExpenseForItems(items, excluded) {
   if (!Array.isArray(items)) return 0;
   const ex = excluded instanceof Set ? excluded : new Set(excluded || []);
   let wkTotal = 0;
   for (const it of items) {
     if (!it) continue;
-    const key = it.id != null ? it.id : `${it.n}\u0000${it.wk}`;
-    if (ex.has(key)) continue;
+    if (ex.has(itemKey(it))) continue;
     const wk = Number(it.wk);
     if (isFinite(wk)) wkTotal += wk;
   }
@@ -59,18 +77,18 @@ export function emergencyTarget(monthly, months = 6) {
   return m * n;
 }
 
-/* Toggle an item id in an exclusion list. Pure: takes the current list (or
-   Set), returns a NEW array with `id` added if absent or removed if present.
-   Null/undefined ids are a no-op (returns the list as an array unchanged) —
-   an item without a stable id must never enter the exclusion set, or it would
-   silently match every id-less item. This is the reducer behind the reserve
-   item-picker checkboxes; keeping it pure lets the component call it from
-   inside a functional state updater, avoiding the stale-snapshot bug where a
-   second click rebuilt the set from an out-of-date render value. */
-export function toggleExcluded(excludedIds, id) {
+/* Toggle an item key in an exclusion list. Pure: takes the current list (or
+   Set), returns a NEW array with `key` added if absent or removed if present.
+   Empty/null keys are a no-op — an item that can't produce a key must never
+   enter the set, or it would silently match other keyless items. Keys come
+   from itemKey(): a stable id, or an `n:`-prefixed name fallback. Keeping this
+   pure lets the component call it inside a functional state updater, avoiding
+   the stale-snapshot bug where a second click rebuilt the set from an
+   out-of-date render value. */
+export function toggleExcluded(excludedIds, key) {
   const next = new Set(excludedIds instanceof Set ? excludedIds : (excludedIds || []));
-  if (id == null) return [...next];
-  if (next.has(id)) next.delete(id); else next.add(id);
+  if (key == null || key === "") return [...next];
+  if (next.has(key)) next.delete(key); else next.add(key);
   return [...next];
 }
 
