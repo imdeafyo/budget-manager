@@ -422,6 +422,18 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 
 Newest first, with commit hashes.
 
+- **Savings targets sync across devices (Budget → Live)** — `savingsTargets`
+  was saved in its own per-device `localStorage` key (`budget-savings-targets`),
+  outside the server-synced `st` blob, so home value %, months, and exclusions
+  never crossed devices (re-entered on each device). Moved it into `st` (same
+  path `forecast`/`milestones` use): added to the `st` useMemo object + deps,
+  merge-on-load hydration after the forecast block (guards legacy saves missing
+  new fields against wiping defaults), and the old `localStorage` write effect
+  removed. The `localStorage` read stays as a one-time migration seed so existing
+  per-device values survive the first load, then ride the auto-saved blob.
+  Pure-util math untouched (27 tests still green); wiring change, verified in
+  browser. Commit: _pending_.
+
 - **Savings target boxes (Budget → Live)** — two tweakable, hideable boxes:
   an emergency reserve (monthly expenses × months, 3/6/9/12 quick-picks +
   custom) and a house fund (home value × maintenance %, 1/1.5/2/3% quick-picks).
@@ -429,8 +441,9 @@ Newest first, with commit hashes.
   not the 48-paycheck cadence — a reserve is calendar-real); the user can
   toggle individual items in/out (stored as an exclusion set of stable item
   keys) or override the monthly figure. New `utils/savingsTargets.js` (pure,
-  27 tests) + `components/SavingsTargets.jsx`; state persisted per-device via
-  `budget-savings-targets`. Combined target shown at the bottom.
+  27 tests) + `components/SavingsTargets.jsx`; state initially persisted
+  per-device via `budget-savings-targets` (later moved into the server-synced
+  `st` blob — see the sync entry above). Combined target shown at the bottom.
 
   Post-ship fix — every checkbox/field in the panel was frozen (writes silently
   threw): the parent passes the setter as `setSavingsTargets`, but the component

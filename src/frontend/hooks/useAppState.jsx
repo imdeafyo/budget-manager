@@ -286,14 +286,20 @@ export default function useAppState() {
   });
   useEffect(() => { try { localStorage.setItem("budget-chart-window", chartTimeWindow); } catch {} }, [chartTimeWindow]);
   /* Savings targets (Budget → Live) — emergency reserve + house fund boxes.
-     Persisted per-device (a planning preference, not core budget data).
-     excludedIds is a set of budget-item ids dropped from the reserve calc;
-     default empty = all necessities included. See utils/savingsTargets.js. */
+     Server-synced via the `st` blob so home value %, months, exclusions,
+     and show/override cross devices (home value and maint % are real inputs,
+     not throwaway view prefs). excludedIds is a set of budget-item ids
+     dropped from the reserve calc; default empty = all necessities included.
+     The localStorage read below is a ONE-TIME migration seed for devices
+     that saved under the old per-device key before this moved into st — on
+     first load the server value (if present) overrides it, then the merged
+     result rides the auto-saved st blob. No write effect here anymore;
+     persistence flows through st. See utils/savingsTargets.js. */
+  const SAVINGS_TARGETS_DEFAULT = { show: true, months: 6, excludedIds: [], overrideMonthly: false, maintPct: 1.5 };
   const [savingsTargets, setSavingsTargets] = useState(() => {
-    try { const v = localStorage.getItem("budget-savings-targets"); return v ? JSON.parse(v) : { show: true, months: 6, excludedIds: [], overrideMonthly: false, maintPct: 1.5 }; }
-    catch { return { show: true, months: 6, excludedIds: [], overrideMonthly: false, maintPct: 1.5 }; }
+    try { const v = localStorage.getItem("budget-savings-targets"); return v ? { ...SAVINGS_TARGETS_DEFAULT, ...JSON.parse(v) } : SAVINGS_TARGETS_DEFAULT; }
+    catch { return SAVINGS_TARGETS_DEFAULT; }
   });
-  useEffect(() => { try { localStorage.setItem("budget-savings-targets", JSON.stringify(savingsTargets)); } catch {} }, [savingsTargets]);
   const [msVisCols, setMsVisCols] = useState(() => { try { const v = localStorage.getItem("budget-milestone-cols") || localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
   const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
@@ -742,6 +748,15 @@ export default function useAppState() {
           });
           } // end if (false) — migration disabled
         }
+        /* savingsTargets: merge onto defaults so a save predating a newly-
+           added field (or the whole feature) fills holes from defaults
+           rather than overwriting them with undefined. Only applies when
+           the server actually has the key — otherwise the localStorage
+           migration seed set in useState stays and gets persisted on the
+           first auto-save. */
+        if (d.savingsTargets && typeof d.savingsTargets === "object") {
+          setSavingsTargets(prev => ({ ...SAVINGS_TARGETS_DEFAULT, ...prev, ...d.savingsTargets }));
+        }
       }
       setLoaded(true);
     } catch(e) {
@@ -749,7 +764,7 @@ export default function useAppState() {
       log.error("state.load.throw", { message: String(e?.message || e), reqId: e?.reqId });
     }
   })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast]);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets]);
   /* Auto-save with hash-based no-op guard.
      - Gated on `loaded` (silent-wipe fix from earlier session — don't push
        defaults if the load hasn't completed).
