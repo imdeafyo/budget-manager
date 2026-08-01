@@ -63,7 +63,11 @@ function TargetBox({ title, accent, target, children, open, onToggle }) {
   );
 }
 
-export default function SavingsTargets({ necI = [], disI = [], targets, setTargets }) {
+export default function SavingsTargets({ necI = [], disI = [], targets, setSavingsTargets, setTargets }) {
+  // The parent passes `setSavingsTargets`; accept `setTargets` too as an alias
+  // so either wiring works. Without this, the setter was undefined and every
+  // checkbox/field write silently threw — the whole panel was read-only.
+  const applyTargets = setSavingsTargets || setTargets;
   const t = targets || {};
   const [openEmg, setOpenEmg] = useState(false);
   const [openHouse, setOpenHouse] = useState(false);
@@ -79,10 +83,10 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setTarge
   const maintPct = t.maintPct != null ? t.maintPct : 1.5;
   const houseTarget = houseFundTarget(homeValue, maintPct);
 
-  const set = (patch) => setTargets(prev => ({ ...(prev || {}), ...patch }));
+  const set = (patch) => applyTargets(prev => ({ ...(prev || {}), ...patch }));
   const toggleKey = (key) => {
     if (!key) return;
-    setTargets(prev => {
+    applyTargets(prev => {
       const p = prev || {};
       return { ...p, excludedIds: toggleExcluded(p.excludedIds, key) };
     });

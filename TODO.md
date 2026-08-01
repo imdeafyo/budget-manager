@@ -430,13 +430,15 @@ Newest first, with commit hashes.
   toggle individual items in/out (stored as an exclusion set of stable item
   keys) or override the monthly figure. New `utils/savingsTargets.js` (pure,
   27 tests) + `components/SavingsTargets.jsx`; state persisted per-device via
-  `budget-savings-targets`. Combined target shown at the bottom. Item-picker
-  keys each row via `itemKey()` = stable `id` or `n:`-name fallback: live
-  budget items seeded from `DEF_EXP` carry NO id (the id backfill only runs on
-  the API load path, not on in-code defaults), so keying the checkbox on raw
-  `it.id` left `undefined` matching nothing and the box frozen. Toggle also
-  runs inside a functional state updater (pure `toggleExcluded`) to avoid a
-  stale-snapshot double-add. Commit: _pending_.
+  `budget-savings-targets`. Combined target shown at the bottom.
+
+  Post-ship fix — every checkbox/field in the panel was frozen (writes silently
+  threw): the parent passes the setter as `setSavingsTargets`, but the component
+  destructured `setTargets`, so the setter was `undefined`. Component now accepts
+  `setSavingsTargets` (with `setTargets` as an alias) and routes all writes
+  through it. Item rows also key via `itemKey()` (stable `id` or `n:`-name
+  fallback) because `DEF_EXP` defaults carry no id, and the toggle runs inside a
+  functional updater. Commit: _pending_.
 
 - **Itemized deductions — working-years tax** (commit 2 of 3) — `calc.js` /
   `useAppState.jsx` applied the standard deduction unconditionally, so a
