@@ -91,6 +91,10 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setSavin
       return { ...p, excludedIds: toggleExcluded(p.excludedIds, key) };
     });
   };
+  // Select all = include everything = clear the exclusion set.
+  const selectAll = () => set({ excludedIds: [] });
+  // Unselect all = exclude every currently-shown item's key.
+  const unselectAll = () => set({ excludedIds: [...necI, ...disI].map(itemKey).filter(Boolean) });
 
   if (t.show === false) {
     return (
@@ -147,7 +151,13 @@ export default function SavingsTargets({ necI = [], disI = [], targets, setSavin
 
           {!useOverride && (
             <div>
-              <div style={{ ...labelStyle, marginBottom: 4 }}>Include items (necessities on by default)</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, gap: 8, flexWrap: "wrap" }}>
+                <span style={labelStyle}>Include items (necessities on by default)</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={selectAll} style={{ fontSize: 10, fontWeight: 700, color: "#4ECDC4", background: "none", border: "2px solid #4ECDC4", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Select all</button>
+                  <button onClick={unselectAll} style={{ fontSize: 10, fontWeight: 700, color: "var(--tx3,#888)", background: "none", border: "2px solid var(--bdr,#ddd)", borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}>Unselect all</button>
+                </div>
+              </div>
               <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--bdr,#eee)", borderRadius: 8, padding: 6 }}>
                 {[["Necessities", necI], ["Discretionary", disI]].map(([grp, list]) => (
                   <div key={grp}>
