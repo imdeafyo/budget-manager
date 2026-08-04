@@ -29,18 +29,33 @@ const { logger } = require('./logger');
 
 /* ─────────────────────────── Config ─────────────────────────── */
 
-// Provider-neutral env var names. INSIGHTS_API_KEY is the single key the
-// server reads; INSIGHTS_MODEL overrides the default model string. Keeping
-// the key name provider-neutral means the same wiring works when OpenAI is
-// added — the adapter decides how to use it.
-const API_KEY = process.env.INSIGHTS_API_KEY || '';
+// Per-provider API keys. Each provider has its own env var, so you can wire
+// every key you have once and switch providers from Settings without
+// re-pasting keys. Ollama needs no key (local). Keys are read here on the
+// server and NEVER returned to the client.
+//   Claude  -> INSIGHTS_ANTHROPIC_API_KEY
+//   OpenAI  -> INSIGHTS_OPENAI_API_KEY   (used when the OpenAI adapter lands)
+//   Ollama  -> (no key; uses INSIGHTS_OLLAMA_URL when that adapter lands)
+const PROVIDER_KEYS = {
+  claude: process.env.INSIGHTS_ANTHROPIC_API_KEY || '',
+  openai: process.env.INSIGHTS_OPENAI_API_KEY || '',
+};
+// Providers that don't need a key to be considered "configured".
+const KEYLESS_PROVIDERS = new Set(['ollama']);
+
 const MODEL = process.env.INSIGHTS_MODEL || 'claude-sonnet-4-6';
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_TOOL_ROUNDS = 6; // hard ceiling on tool-use round-trips per question
 
-function insightsConfigured() {
-  return API_KEY.length > 0;
+function keyFor(provider) {
+  return PROVIDER_KEYS[provider] || '';
+}
+
+// A provider is configured if it's keyless (Ollama) or has its key wired.
+function insightsConfigured(provider = 'claude') {
+  if (KEYLESS_PROVIDERS.has(provider)) return true;
+  return keyFor(provider).length > 0;
 }
 
 /* ─────────────────────── Transaction query tool ───────────────────────
@@ -186,7 +201,7 @@ const claudeAdapter = {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': API_KEY,
+        'x-api-key': keyFor('claude'),
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify({
@@ -234,7 +249,7 @@ function getAdapter(provider) {
 async function runInsightsChat({ pool, userId, question, history = [], ctx = {}, provider = 'claude', adapter: adapterOverride = null }) {
   // adapterOverride lets tests inject a fake adapter (no network). In
   // production it's null and we select by provider name.
-  if (!adapterOverride && !insightsConfigured()) {
+  if (!adapterOverride && !insightsConfigured(provider)) {
     const err = new Error('Insights is not configured on the server (no API key).');
     err.code = 'NOT_CONFIGURED';
     throw err;

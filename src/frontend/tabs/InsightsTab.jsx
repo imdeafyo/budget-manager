@@ -107,7 +107,7 @@ export default function InsightsTab({ mob }) {
         <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
           {configured === false && (
             <div style={{ ...bubbleBase, alignSelf: "center", background: "rgba(232,169,59,0.15)", color: "var(--tx, #222)", maxWidth: "100%", textAlign: "center" }}>
-              Insights isn't configured on the server yet. An admin needs to set the <code>INSIGHTS_API_KEY</code> environment variable.
+              Insights isn't configured on the server yet. An admin needs to set the <code>INSIGHTS_ANTHROPIC_API_KEY</code> environment variable.
             </div>
           )}
 

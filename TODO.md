@@ -420,7 +420,8 @@ The adapter interface exists (`src/lib/insights.js`, `getAdapter`); only the
 Claude adapter is implemented. Add OpenAI and Ollama adapters (translate the
 neutral `{system, messages, tools}` shape + tool-use format per provider) and
 a Settings card to pick the provider (a name, not a secret). Keys stay
-server-side env vars (`INSIGHTS_API_KEY`; OpenAI key when added). Ollama URL is
+server-side env vars, one per provider (`INSIGHTS_ANTHROPIC_API_KEY`,
+`INSIGHTS_OPENAI_API_KEY`; Ollama is keyless, uses a URL). Ollama URL is
 non-secret and can live in Settings. Note Ollama tool-use needs a tool-trained
 model (Llama 3.1+/Qwen) and is lower quality.
 
@@ -478,7 +479,8 @@ Newest first, with commit hashes.
   `POST /api/insights` (assembles context from `budget_state`, delegates to the
   loop) and `GET /api/insights/status` (so the UI shows a "not configured" hint
   instead of erroring). The API key is read server-side from the
-  `INSIGHTS_API_KEY` env var and never reaches the frontend; `INSIGHTS_MODEL`
+  `INSIGHTS_ANTHROPIC_API_KEY` env var and never reaches the frontend;
+  `INSIGHTS_MODEL`
   overrides the model (defaults to `claude-sonnet-4-6`). Frontend: new
   `tabs/InsightsTab.jsx` chat UI (ephemeral — sends `history` each turn),
   `"insights"` added to `VALID_TABS`, gated on a new `isDeploy` flag so it never
@@ -486,7 +488,10 @@ Newest first, with commit hashes.
   query builder, row-cap, ABS filter, tool dispatch, tool loop, direct-answer,
   not-configured) via injected fake adapter/pool — no network, no DB. All
   1521 frontend + 16 server tests green; generic build still builds clean (tab
-  absent there). Helm env wiring (map the Secret → `INSIGHTS_API_KEY`) is
+  absent there). Keys are per-provider from day one so multi-provider needs no
+  rename later: `INSIGHTS_ANTHROPIC_API_KEY` (Claude), `INSIGHTS_OPENAI_API_KEY`
+  (OpenAI, when its adapter lands), Ollama keyless. Helm env wiring (map the
+  Secret → `INSIGHTS_ANTHROPIC_API_KEY`) is
   handled by Corey in the GitOps repo — not in this repo. Commit: _pending_.
 
 - **Savings targets sync across devices (Budget → Live)** — `savingsTargets`

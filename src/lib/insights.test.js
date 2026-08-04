@@ -144,16 +144,23 @@ test('runInsightsChat answers directly when no tool is needed', async () => {
   assert.strictEqual(pool.calls.length, 0); // no DB touched
 });
 
-test('runInsightsChat throws NOT_CONFIGURED when no key and no injected adapter', async () => {
-  const saved = process.env.INSIGHTS_API_KEY;
-  delete process.env.INSIGHTS_API_KEY;
+test('runInsightsChat throws NOT_CONFIGURED for a keyless provider with no injected adapter', async () => {
+  // Keys are captured at module load. The test process starts with no
+  // INSIGHTS_ANTHROPIC_API_KEY, so the default 'claude' provider is
+  // unconfigured. (Setting process.env here would not help — it's already
+  // been read.) The injected-adapter tests above cover the configured path.
   const pool = fakePool(() => ({ rows: [] }));
-  try {
-    await assert.rejects(
-      () => runInsightsChat({ pool, userId: 'default', question: 'hi' }),
-      (e) => e.code === 'NOT_CONFIGURED'
-    );
-  } finally {
-    if (saved !== undefined) process.env.INSIGHTS_API_KEY = saved;
-  }
+  await assert.rejects(
+    () => runInsightsChat({ pool, userId: 'default', question: 'hi' }),
+    (e) => e.code === 'NOT_CONFIGURED'
+  );
+});
+
+test('insightsConfigured is per-provider; ollama is keyless', () => {
+  const { insightsConfigured } = require('./insights');
+  // No anthropic/openai key in the test env → those are unconfigured...
+  assert.strictEqual(insightsConfigured('claude'), false);
+  assert.strictEqual(insightsConfigured('openai'), false);
+  // ...but ollama needs no key, so it's always considered configured.
+  assert.strictEqual(insightsConfigured('ollama'), true);
 });
