@@ -60,9 +60,74 @@ function SectionHeader({ title, hint, mob }) {
   );
 }
 
+/* ── InsightsProviderCard ──
+   Picks which LLM backend answers in the Insights tab. The choice is a synced
+   preference (rides the st blob). Fetches per-provider server status so
+   unconfigured providers are shown as such — the key/URL lives server-side,
+   this only selects a name. Deploy-only (the parent gates on isDeploy). */
+const PROVIDER_LABELS = {
+  claude: "Claude (Anthropic API)",
+  ollama: "Ollama (self-hosted, local)",
+  openai: "OpenAI (ChatGPT API)",
+};
+function InsightsProviderCard({ provider, setProvider, mob }) {
+  const [status, setStatus] = useState(null); // { providers: {claude:bool,...} }
+  useEffect(() => {
+    let alive = true;
+    apiFetch("/api/insights/status")
+      .then(r => r.ok ? r.json() : { providers: {} })
+      .then(d => { if (alive) setStatus(d); })
+      .catch(() => { if (alive) setStatus({ providers: {} }); });
+    return () => { alive = false; };
+  }, []);
+
+  const providers = (status && status.providers) || {};
+  // Show the providers the server knows about; fall back to a sensible list.
+  const known = Object.keys(providers).length ? Object.keys(providers) : ["claude", "ollama"];
+
+  return (
+    <Card>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--tx, #333)", marginBottom: 4 }}>Provider</div>
+      <div style={{ fontSize: 12, color: "var(--tx3, #888)", marginBottom: 12 }}>
+        The model that answers in the Insights tab. API keys and the Ollama URL are configured on the server; this only chooses which one to use.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {known.map(p => {
+          const ready = !!providers[p];
+          const active = provider === p;
+          return (
+            <label key={p} style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "10px 12px", borderRadius: 10,
+              border: active ? "2px solid var(--accent, #2f6f4f)" : "2px solid var(--bdr2, #e8e8e8)",
+              cursor: "pointer", background: active ? "rgba(47,111,79,0.06)" : "transparent",
+            }}>
+              <input
+                type="radio"
+                name="insights-provider"
+                checked={active}
+                onChange={() => setProvider(p)}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--tx, #333)" }}>
+                  {PROVIDER_LABELS[p] || p}
+                </div>
+                <div style={{ fontSize: 11, color: ready ? "#2f8f5f" : "#c67" }}>
+                  {status === null ? "checking…" : ready ? "configured on server" : "not configured on server"}
+                </div>
+              </div>
+            </label>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsTab(props) {
   const {
     mob,
+    isDeploy, insightsProvider, setInsightsProvider,
     transactionColumns, setTransactionColumns,
     hiddenColumns, setHiddenColumns,
     rowCapWarn, setRowCapWarn,
@@ -243,6 +308,13 @@ export default function SettingsTab(props) {
         <h2 style={{ margin: "0 0 8px", fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: mob ? 20 : 26, color: "var(--tx, #333)" }}>Settings</h2>
         <div style={{ fontSize: 12, color: "var(--tx3, #999)" }}>Preferences for transaction handling and display.</div>
       </Card>
+
+      {isDeploy && (
+        <>
+          <SectionHeader title="Insights" hint="Which AI model answers questions in the Insights tab." mob={mob} />
+          <InsightsProviderCard provider={insightsProvider} setProvider={setInsightsProvider} mob={mob} />
+        </>
+      )}
 
       <SectionHeader title="Transactions" hint="How the transactions table looks and behaves." mob={mob} />
 

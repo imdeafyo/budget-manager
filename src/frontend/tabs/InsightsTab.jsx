@@ -18,7 +18,7 @@ import { apiFetch } from "../utils/apiFetch.js";
    We keep only plain user/assistant text turns in history (tool round-trips
    happen server-side and are not surfaced here). */
 
-export default function InsightsTab({ mob }) {
+export default function InsightsTab({ mob, provider = "claude" }) {
   const [messages, setMessages] = useState([]); // { role, content }
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -26,16 +26,16 @@ export default function InsightsTab({ mob }) {
   const [error, setError] = useState("");
   const scrollRef = useRef(null);
 
-  // Probe whether the server has a provider key wired. Shows a friendly hint
-  // instead of a failed send when it's not.
+  // Probe whether the *selected* provider is configured server-side. Re-checks
+  // when the provider changes so switching in Settings updates the hint.
   useEffect(() => {
     let alive = true;
     apiFetch("/api/insights/status")
-      .then(r => r.ok ? r.json() : { configured: false })
-      .then(d => { if (alive) setConfigured(!!d.configured); })
+      .then(r => r.ok ? r.json() : { providers: {} })
+      .then(d => { if (alive) setConfigured(!!(d.providers && d.providers[provider])); })
       .catch(() => { if (alive) setConfigured(false); });
     return () => { alive = false; };
-  }, []);
+  }, [provider]);
 
   // Autoscroll to newest message.
   useEffect(() => {
@@ -55,7 +55,7 @@ export default function InsightsTab({ mob }) {
       const res = await apiFetch("/api/insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, history: messages }),
+        body: JSON.stringify({ question: q, history: messages, provider }),
       });
       if (!res.ok) {
         let msg = "Something went wrong reaching the insights service.";
@@ -74,7 +74,7 @@ export default function InsightsTab({ mob }) {
     } finally {
       setBusy(false);
     }
-  }, [input, busy, messages]);
+  }, [input, busy, messages, provider]);
 
   const onKeyDown = (e) => {
     // Enter sends; Shift+Enter inserts a newline.
@@ -107,7 +107,7 @@ export default function InsightsTab({ mob }) {
         <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
           {configured === false && (
             <div style={{ ...bubbleBase, alignSelf: "center", background: "rgba(232,169,59,0.15)", color: "var(--tx, #222)", maxWidth: "100%", textAlign: "center" }}>
-              Insights isn't configured on the server yet. An admin needs to set the <code>INSIGHTS_ANTHROPIC_API_KEY</code> environment variable.
+              The selected provider (<b>{provider}</b>) isn't configured on the server. Pick a different provider in Settings → Insights, or have an admin configure it{provider === "ollama" ? " (set INSIGHTS_OLLAMA_URL)" : " (set its API key)"}.
             </div>
           )}
 

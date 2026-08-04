@@ -210,6 +210,26 @@ function buildSystemPrompt(ctx = {}) {
  * Translates the neutral { system, messages, tools } shape to the Anthropic
  * Messages API and back. Uses global fetch (Node 18+).
  */
+
+// The neutral message blocks may carry internal bookkeeping fields (prefixed
+// with "_", e.g. _toolName used by the Ollama adapter). Anthropic rejects
+// unknown fields on content blocks, so strip them before sending.
+function stripInternalFields(messages) {
+  return messages.map(m => {
+    if (typeof m.content === 'string') return m;
+    return {
+      ...m,
+      content: m.content.map(block => {
+        const clean = {};
+        for (const k of Object.keys(block)) {
+          if (!k.startsWith('_')) clean[k] = block[k];
+        }
+        return clean;
+      }),
+    };
+  });
+}
+
 const claudeAdapter = {
   name: 'claude',
   async createMessage({ system, messages, tools }) {
@@ -224,7 +244,7 @@ const claudeAdapter = {
         model: modelFor('claude'),
         max_tokens: 1024,
         system,
-        messages,
+        messages: stripInternalFields(messages),
         tools,
       }),
     });
@@ -245,13 +265,137 @@ const claudeAdapter = {
 };
 
 function getAdapter(provider) {
-  // Only Claude in this slice. The switch is the seam OpenAI/Ollama slot into.
   switch (provider) {
+    case 'ollama':
+      return ollamaAdapter;
     case 'claude':
     default:
       return claudeAdapter;
   }
 }
+
+/* ─────────────────────────── Ollama adapter ───────────────────────────
+ * Talks to a local Ollama server's POST /api/chat (stream:false). Ollama is
+ * keyless — it uses INSIGHTS_OLLAMA_URL instead of an API key.
+ *
+ * The hard part is translation. The tool loop works in the NEUTRAL shape,
+ * which mirrors Anthropic:
+ *   assistant tool call -> { type:'tool_use', id, name, input }
+ *   tool result         -> user turn w/ { type:'tool_result', tool_use_id, content }
+ * Ollama's wire format is different:
+ *   assistant tool call -> message.tool_calls[].function.{name, arguments(obj)}
+ *   tool result         -> { role:'tool', tool_name, content } message
+ * There are also no tool-call IDs in Ollama. So this adapter translates the
+ * ENTIRE messages array outbound (neutral -> Ollama) and translates the reply
+ * inbound (Ollama -> neutral) so the loop stays provider-agnostic.
+ */
+const OLLAMA_VERSION = '2023-06-01'; // unused; kept for symmetry/no-op
+
+// neutral tools -> Ollama tools ([{type:'function', function:{name,description,parameters}}])
+function toolsToOllama(tools) {
+  return tools.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
+  }));
+}
+
+// neutral messages -> Ollama messages. Neutral content is either a plain
+// string (normal turn) or an array of blocks (tool_use / tool_result). We
+// flatten each into Ollama's shape.
+function messagesToOllama(system, messages) {
+  const out = [{ role: 'system', content: system }];
+  for (const m of messages) {
+    if (typeof m.content === 'string') {
+      out.push({ role: m.role, content: m.content });
+      continue;
+    }
+    if (m.role === 'assistant') {
+      // May contain text blocks and/or tool_use blocks.
+      const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      const toolCalls = m.content
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({ function: { name: b.name, arguments: b.input || {} } }));
+      const msg = { role: 'assistant', content: text };
+      if (toolCalls.length) msg.tool_calls = toolCalls;
+      out.push(msg);
+    } else {
+      // user turn: either normal text (handled above) or tool_result blocks.
+      const results = m.content.filter(b => b.type === 'tool_result');
+      if (results.length) {
+        for (const r of results) {
+          out.push({ role: 'tool', tool_name: r._toolName || undefined, content: r.content });
+        }
+      } else {
+        const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+        out.push({ role: 'user', content: text });
+      }
+    }
+  }
+  return out;
+}
+
+// Ollama reply message -> neutral content blocks. Synthesizes tool-call IDs
+// (Ollama doesn't provide them) so the neutral loop can pair results to calls.
+let _ollamaCallSeq = 0;
+function ollamaReplyToNeutral(message) {
+  const blocks = [];
+  if (message.content && message.content.trim()) {
+    blocks.push({ type: 'text', text: message.content });
+  }
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const c of calls) {
+    const fn = c.function || {};
+    // arguments may be an object (typical) or a JSON string; normalize to object.
+    let input = fn.arguments;
+    if (typeof input === 'string') {
+      try { input = JSON.parse(input); } catch { input = {}; }
+    }
+    blocks.push({
+      type: 'tool_use',
+      id: `ollama_${++_ollamaCallSeq}`,
+      name: fn.name,
+      input: input || {},
+      _toolName: fn.name, // carried so the tool_result can echo tool_name back
+    });
+  }
+  return blocks;
+}
+
+const ollamaAdapter = {
+  name: 'ollama',
+  async createMessage({ system, messages, tools }) {
+    const base = (process.env.INSIGHTS_OLLAMA_URL || 'http://localhost:11434').replace(/\/+$/, '');
+    const res = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: modelFor('ollama'),
+        stream: false,
+        messages: messagesToOllama(system, messages),
+        tools: toolsToOllama(tools),
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const err = new Error(`provider error ${res.status}`);
+      err.status = res.status;
+      err.body = body.slice(0, 500);
+      throw err;
+    }
+
+    const data = await res.json();
+    const content = ollamaReplyToNeutral(data.message || {});
+    // Ollama has no explicit stop reason; infer from whether it asked for tools.
+    const stopReason = content.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn';
+    return { content, stopReason };
+  },
+};
+void OLLAMA_VERSION;
 
 /* ─────────────────────────── Chat loop ───────────────────────────
  * Runs the tool-use loop: send messages, if the model asks for a tool, run
@@ -313,6 +457,7 @@ async function runInsightsChat({ pool, userId, question, history = [], ctx = {},
         type: 'tool_result',
         tool_use_id: tu.id,
         content: JSON.stringify(result),
+        _toolName: tu.name, // used by the Ollama adapter's role:'tool' echo; ignored by Claude
       });
     }
     messages.push({ role: 'user', content: toolResults });
@@ -325,9 +470,21 @@ async function runInsightsChat({ pool, userId, question, history = [], ctx = {},
   };
 }
 
+// Providers this server knows how to talk to (an adapter exists). Used to
+// validate the client's requested provider and to advertise availability.
+const KNOWN_PROVIDERS = ['claude', 'ollama'];
+
+function providerStatus() {
+  const out = {};
+  for (const p of KNOWN_PROVIDERS) out[p] = insightsConfigured(p);
+  return out;
+}
+
 module.exports = {
   runInsightsChat,
   insightsConfigured,
+  providerStatus,
+  KNOWN_PROVIDERS,
   buildSystemPrompt,
   queryTransactions,
   TOOLS,
@@ -336,4 +493,7 @@ module.exports = {
   // exported for tests:
   _getAdapter: getAdapter,
   _runTool: runTool,
+  _messagesToOllama: messagesToOllama,
+  _ollamaReplyToNeutral: ollamaReplyToNeutral,
+  _stripInternalFields: stripInternalFields,
 };

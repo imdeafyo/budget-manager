@@ -179,7 +179,7 @@ function App() {
         {S.tab === "cats" && <CategoriesTab mob={S.mob} cats={S.cats} setCats={S.setCats} newCat={S.newCat} setNewCat={S.setNewCat} savCats={S.savCats} setSavCats={S.setSavCats} transferCats={S.transferCats} setTransferCats={S.setTransferCats} incomeCats={S.incomeCats} setIncomeCats={S.setIncomeCats} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} transactions={S.transactions} setTransactions={S.setTransactions} />}
 
         {/* ═══ INSIGHTS (deploy-only) ═══ */}
-        {S.isDeploy && S.tab === "insights" && <InsightsTab mob={S.mob} />}
+        {S.isDeploy && S.tab === "insights" && <InsightsTab mob={S.mob} provider={S.insightsProvider} />}
 
         {/* ═══ BUDGET — Live subtab ═══ */}
         {S.tab === "budget" && S.budgetSubtab === "live" && <BudgetTab mob={S.mob} C={S.C} moC={S.moC} y4={S.y4} y5={S.y5} visCols={S.visCols} p1Name={S.p1Name} p2Name={S.p2Name} tax={S.tax} preDed={S.preDed} postDed={S.postDed} showPerPerson={S.showPerPerson} collapsed={S.collapsed} toggleSec={S.toggleSec} necI={S.necI} disI={S.disI} savSorted={S.savSorted} cats={S.cats} savCats={S.savCats} updExp={S.updExp} updSav={S.updSav} rmExp={S.rmExp} rmSav={S.rmSav} tNW={S.tNW} tDW={S.tDW} tExpW={S.tExpW} tSavW={S.tSavW} remW={S.remW} remY48={S.remY48} remY52={S.remY52} totalSavPlusRemW={S.totalSavPlusRemW} retirementW={S.retirementW} totalAllSavingsW={S.totalAllSavingsW} showAddItem={S.showAddItem} setShowAddItem={S.setShowAddItem} niN={S.niN} setNiN={S.setNiN} niC={S.niC} setNiC={S.setNiC} niT={S.niT} setNiT={S.setNiT} niS={S.niS} setNiS={S.setNiS} niP={S.niP} setNiP={S.setNiP} niV={S.niV} setNiV={S.setNiV} exp={S.exp} setExp={S.setExp} sav={S.sav} setSav={S.setSav} showBulkAdd={S.showBulkAdd} setShowBulkAdd={S.setShowBulkAdd} bulkName={S.bulkName} setBulkName={S.setBulkName} bulkVal={S.bulkVal} setBulkVal={S.setBulkVal} bulkPer={S.bulkPer} setBulkPer={S.setBulkPer} bulkType={S.bulkType} setBulkType={S.setBulkType} bulkSec={S.bulkSec} setBulkSec={S.setBulkSec} bulkCat={S.bulkCat} setBulkCat={S.setBulkCat} bulkTargets={S.bulkTargets} setBulkTargets={S.setBulkTargets} milestones={S.milestones} setMilestones={S.setMilestones} recalcMilestone={S.recalcMilestone} savingsTargets={S.savingsTargets} setSavingsTargets={S.setSavingsTargets} />}
@@ -283,6 +283,9 @@ function App() {
         {/* ═══ SETTINGS (prefs) ═══ */}
         {S.tab === "prefs" && <SettingsTab
           mob={S.mob}
+          isDeploy={S.isDeploy}
+          insightsProvider={S.insightsProvider}
+          setInsightsProvider={S.setInsightsProvider}
           transactionColumns={S.transactionColumns}
           setTransactionColumns={S.setTransactionColumns}
           hiddenColumns={S.hiddenColumns}

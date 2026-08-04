@@ -6,7 +6,7 @@ const { Pool } = require('pg');
 const { logger, wrapPoolWithSlowQueryLog } = require('./lib/logger');
 const { requestId } = require('./lib/requestId');
 const { httpLog } = require('./lib/httpLog');
-const { runInsightsChat, insightsConfigured } = require('./lib/insights');
+const { runInsightsChat, insightsConfigured, providerStatus, KNOWN_PROVIDERS } = require('./lib/insights');
 
 const app = express();
 // Request-id + per-request child logger must come before anything that might
@@ -500,16 +500,26 @@ function buildInsightsContext(state) {
   return { contextBlock: parts.length ? parts.join(' ') : '' };
 }
 
-// Lightweight status endpoint so the UI can show a "not configured" hint
-// instead of failing a chat call when no key is wired.
+// Status endpoint: reports which providers are configured so the UI can show
+// the picker with the right options enabled and a "not configured" hint.
 app.get('/api/insights/status', (req, res) => {
-  res.json({ configured: insightsConfigured() });
+  const providers = providerStatus();
+  res.json({
+    providers,
+    configured: Object.values(providers).some(Boolean), // any provider ready
+  });
 });
 
 app.post('/api/insights{/:userId}', async (req, res) => {
   const userId = req.params.userId || 'default';
-  if (!insightsConfigured()) {
-    return res.status(503).json({ error: 'Insights is not configured on this server.', code: 'NOT_CONFIGURED' });
+
+  // Provider selection comes from the client (Settings picker). Validate it
+  // against the known list; default to claude. The key/URL stays server-side.
+  let provider = (req.body && typeof req.body.provider === 'string') ? req.body.provider : 'claude';
+  if (!KNOWN_PROVIDERS.includes(provider)) provider = 'claude';
+
+  if (!insightsConfigured(provider)) {
+    return res.status(503).json({ error: `The "${provider}" provider is not configured on this server.`, code: 'NOT_CONFIGURED' });
   }
   const question = (req.body && typeof req.body.question === 'string') ? req.body.question.trim() : '';
   if (!question) return res.status(400).json({ error: 'question is required' });
@@ -522,11 +532,11 @@ app.post('/api/insights{/:userId}', async (req, res) => {
     const state = stateRes.rows[0] ? stateRes.rows[0].state : null;
     const ctx = buildInsightsContext(state);
 
-    const { answer, rounds } = await runInsightsChat({ pool, userId, question, history, ctx });
-    req.log.info({ event: 'insights.chat', userId, rounds, qlen: question.length }, 'insights.chat');
+    const { answer, rounds } = await runInsightsChat({ pool, userId, question, history, ctx, provider });
+    req.log.info({ event: 'insights.chat', userId, provider, rounds, qlen: question.length }, 'insights.chat');
     res.json({ answer });
   } catch (err) {
-    req.log.error({ event: 'insights.chat.error', userId, err: err.message, status: err.status, body: err.body }, 'insights.chat failed');
+    req.log.error({ event: 'insights.chat.error', userId, provider, err: err.message, status: err.status, body: err.body }, 'insights.chat failed');
     if (err.code === 'NOT_CONFIGURED') {
       return res.status(503).json({ error: 'Insights is not configured on this server.', code: 'NOT_CONFIGURED' });
     }

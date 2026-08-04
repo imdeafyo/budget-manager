@@ -173,3 +173,114 @@ test('modelFor returns a distinct default per provider', () => {
   // Unknown provider falls back to the Claude default rather than undefined.
   assert.match(modelFor('nope'), /^claude-/);
 });
+
+/* ─────────────────── Ollama adapter translation ─────────────────── */
+
+const {
+  _messagesToOllama, _ollamaReplyToNeutral, _stripInternalFields,
+  providerStatus, KNOWN_PROVIDERS, TOOLS,
+} = require('./insights');
+
+test('messagesToOllama: plain turns pass through with a system message first', () => {
+  const out = _messagesToOllama('SYS', [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'hi there' },
+  ]);
+  assert.deepStrictEqual(out[0], { role: 'system', content: 'SYS' });
+  assert.deepStrictEqual(out[1], { role: 'user', content: 'hello' });
+  assert.deepStrictEqual(out[2], { role: 'assistant', content: 'hi there' });
+});
+
+test('messagesToOllama: assistant tool_use -> tool_calls; tool_result -> role:tool', () => {
+  const neutral = [
+    { role: 'user', content: 'How much dining?' },
+    { role: 'assistant', content: [
+      { type: 'text', text: 'Let me check.' },
+      { type: 'tool_use', id: 'ollama_1', name: 'query_transactions', input: { category: 'Dining' } },
+    ] },
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'ollama_1', content: '{"totalMatching":3}', _toolName: 'query_transactions' },
+    ] },
+  ];
+  const out = _messagesToOllama('SYS', neutral);
+  // assistant turn carries tool_calls in Ollama shape
+  const asst = out.find(m => m.role === 'assistant');
+  assert.strictEqual(asst.tool_calls[0].function.name, 'query_transactions');
+  assert.deepStrictEqual(asst.tool_calls[0].function.arguments, { category: 'Dining' });
+  // tool result becomes a role:'tool' message echoing tool_name
+  const toolMsg = out.find(m => m.role === 'tool');
+  assert.strictEqual(toolMsg.tool_name, 'query_transactions');
+  assert.match(toolMsg.content, /totalMatching/);
+});
+
+test('ollamaReplyToNeutral: text + tool_calls -> neutral blocks with synthesized ids', () => {
+  const blocks = _ollamaReplyToNeutral({
+    content: 'Checking that.',
+    tool_calls: [{ function: { name: 'query_transactions', arguments: { category: 'Dining' } } }],
+  });
+  const text = blocks.find(b => b.type === 'text');
+  const call = blocks.find(b => b.type === 'tool_use');
+  assert.strictEqual(text.text, 'Checking that.');
+  assert.strictEqual(call.name, 'query_transactions');
+  assert.deepStrictEqual(call.input, { category: 'Dining' });
+  assert.match(call.id, /^ollama_/); // synthesized id
+});
+
+test('ollamaReplyToNeutral: string arguments are parsed to an object', () => {
+  const blocks = _ollamaReplyToNeutral({
+    content: '',
+    tool_calls: [{ function: { name: 'query_transactions', arguments: '{"limit":5}' } }],
+  });
+  const call = blocks.find(b => b.type === 'tool_use');
+  assert.deepStrictEqual(call.input, { limit: 5 });
+});
+
+test('stripInternalFields removes _-prefixed keys (Anthropic rejects unknown fields)', () => {
+  const cleaned = _stripInternalFields([
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'x', content: '{}', _toolName: 'query_transactions' },
+    ] },
+  ]);
+  const block = cleaned[0].content[0];
+  assert.strictEqual(block._toolName, undefined);
+  assert.strictEqual(block.tool_use_id, 'x'); // real fields kept
+});
+
+test('providerStatus reports every known provider; KNOWN_PROVIDERS includes claude+ollama', () => {
+  const st = providerStatus();
+  for (const p of KNOWN_PROVIDERS) assert.ok(p in st);
+  assert.ok(KNOWN_PROVIDERS.includes('claude'));
+  assert.ok(KNOWN_PROVIDERS.includes('ollama'));
+  assert.strictEqual(st.ollama, true); // keyless → always ready
+});
+
+test('full loop through an Ollama-shaped fake adapter grounds the answer in a tool call', async () => {
+  const { runInsightsChat } = require('./insights');
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 3, total: -150 }] };
+    return { rows: [] };
+  });
+
+  // A fake adapter mimicking the Ollama adapter's neutral output: first turn
+  // returns a tool_use block (id synthesized), second returns text.
+  let call = 0;
+  const fakeOllama = {
+    name: 'ollama',
+    async createMessage({ messages }) {
+      call++;
+      if (call === 1) {
+        return {
+          content: [{ type: 'tool_use', id: 'ollama_1', name: 'query_transactions', input: { category: 'Dining' }, _toolName: 'query_transactions' }],
+          stopReason: 'tool_use',
+        };
+      }
+      const last = messages[messages.length - 1];
+      assert.strictEqual(last.content[0].type, 'tool_result');
+      return { content: [{ type: 'text', text: 'Dining totaled $150 over 3 charges.' }], stopReason: 'end_turn' };
+    },
+  };
+
+  const out = await runInsightsChat({ pool, userId: 'default', question: 'dining?', provider: 'ollama', adapter: fakeOllama });
+  assert.strictEqual(out.rounds, 2);
+  assert.match(out.answer, /\$150/);
+});

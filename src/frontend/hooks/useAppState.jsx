@@ -301,6 +301,10 @@ export default function useAppState() {
     catch { return SAVINGS_TARGETS_DEFAULT; }
   });
   const [msVisCols, setMsVisCols] = useState(() => { try { const v = localStorage.getItem("budget-milestone-cols") || localStorage.getItem("budget-snap-cols"); return v ? JSON.parse(v) : { wk: true, mo: true, y48: true, y52: true }; } catch { return { wk: true, mo: true, y48: true, y52: true }; } });
+  /* Insights LLM provider selection. Synced via the st blob (cross-device),
+     not localStorage — it's a real preference the user sets once. Just a
+     provider name; keys/URLs stay server-side. Defaults to claude. */
+  const [insightsProvider, setInsightsProvider] = useState("claude");
   const DEF_CHART_ORDER = ["pieCategory", "pieNecDis", "budgetVsSalary", "necVsDis", "netSalary", "grossSalary", "incomeHistory", "budgetHistory"];
   const [chartOrder, setChartOrder] = useState(() => { try { const v = localStorage.getItem("budget-chart-order"); return v ? JSON.parse(v) : DEF_CHART_ORDER; } catch { return DEF_CHART_ORDER; } });
   const [dragChart, setDragChart] = useState(null);
@@ -757,6 +761,11 @@ export default function useAppState() {
         if (d.savingsTargets && typeof d.savingsTargets === "object") {
           setSavingsTargets(prev => ({ ...SAVINGS_TARGETS_DEFAULT, ...prev, ...d.savingsTargets }));
         }
+        /* insightsProvider: a simple synced string. Only accept known values
+           so a malformed blob can't wedge the picker. */
+        if (typeof d.insightsProvider === "string" && ["claude", "ollama", "openai"].includes(d.insightsProvider)) {
+          setInsightsProvider(d.insightsProvider);
+        }
       }
       setLoaded(true);
     } catch(e) {
@@ -764,7 +773,7 @@ export default function useAppState() {
       log.error("state.load.throw", { message: String(e?.message || e), reqId: e?.reqId });
     }
   })(); }, []);
-  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets]);
+  const st = useMemo(() => ({cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets,insightsProvider}), [cSal,kSal,fil,cEaip,kEaip,preDed,postDed,c4pre,c4ro,k4pre,k4ro,cIraTrad,cIraRoth,kIraTrad,kIraRoth,cHsa,kHsa,cHsaEmployer,kHsaEmployer,exp,sav,cats,savCats,transferCats,incomeCats,tax,sortBy,sortDir,hlThresh,hlPeriod,appTitle,customIcon,customTaxDB,milestones,p1Name,p2Name,transactionColumns,importProfiles,categoryAliases,transactionRules,rowCapWarn,rowCapThreshold,hiddenColumns,defaultTxPageSize,transferToleranceAmount,transferToleranceDays,transferConfidenceThreshold,treatRefundsAsNetting,dupScanDayWindow,dupScanAmountTolerance,dupScanDescriptionMode,dupScanFirstWordCount,dupScanCrossAccount,showExcludedDuplicates,outlierSettings,diagnostics,forecast,savingsTargets,insightsProvider]);
   /* Auto-save with hash-based no-op guard.
      - Gated on `loaded` (silent-wipe fix from earlier session — don't push
        defaults if the load hasn't completed).
@@ -1419,6 +1428,8 @@ export default function useAppState() {
     mob,
     // deploy vs generic build (Insights is deploy-only)
     isDeploy: MODE === "deploy",
+    // insights provider selection (synced)
+    insightsProvider, setInsightsProvider,
     // tabs
     tab, setTab,
     budgetSubtab, setBudgetSubtab, chartsSubtab, setChartsSubtab,

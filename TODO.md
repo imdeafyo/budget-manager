@@ -415,15 +415,15 @@ Thin slice ships one tool (`query_transactions`). Add `get_category_totals`
 (period rollups) and an anomaly/overspend surfacing path so "any unusual
 charges?" is answered from real aggregates, not row-scanning.
 
-### OpenAI + Ollama adapters + Settings provider picker — `ready` (after thin slice)
-The adapter interface exists (`src/lib/insights.js`, `getAdapter`); only the
-Claude adapter is implemented. Add OpenAI and Ollama adapters (translate the
-neutral `{system, messages, tools}` shape + tool-use format per provider) and
-a Settings card to pick the provider (a name, not a secret). Keys stay
-server-side env vars, one per provider (`INSIGHTS_ANTHROPIC_API_KEY`,
-`INSIGHTS_OPENAI_API_KEY`; Ollama is keyless, uses a URL). Ollama URL is
-non-secret and can live in Settings. Note Ollama tool-use needs a tool-trained
-model (Llama 3.1+/Qwen) and is lower quality.
+### OpenAI adapter — `ready`
+Claude and Ollama adapters exist behind the interface (`src/lib/insights.js`,
+`getAdapter`), and the Settings provider picker shipped. Remaining: add the
+OpenAI adapter (translate the neutral `{system, messages, tools}` shape +
+tool-use format — OpenAI uses `tool_calls` with a JSON-string `arguments` and
+`role:'tool'` result messages, similar to Ollama but not identical). Key stays
+a server-side env var (`INSIGHTS_OPENAI_API_KEY`). Add `'openai'` to
+`KNOWN_PROVIDERS` and the `getAdapter` switch; the picker already renders any
+provider the status endpoint reports.
 
 ### FIRE/forecast tool for live-projection coaching — `parked`
 Add `get_forecast_summary` so FIRE coaching pulls live projection numbers
@@ -466,6 +466,31 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **LLM Insights — Ollama adapter + Settings provider picker** — added a second
+  backend so Insights runs with no API key against a self-hosted Ollama server.
+  `src/lib/insights.js` gained an `ollamaAdapter` that talks to
+  `{INSIGHTS_OLLAMA_URL}/api/chat` (stream:false, keyless) and does the
+  bidirectional translation the loop needs: neutral (Anthropic-shaped)
+  `tool_use`/`tool_result` blocks ⇄ Ollama's `message.tool_calls` +
+  `role:'tool'` messages, with synthesized tool-call IDs (Ollama gives none).
+  Model via `INSIGHTS_OLLAMA_MODEL` (default `llama3.1`). `getAdapter` now
+  switches claude/ollama; `KNOWN_PROVIDERS` + a new `providerStatus()` report
+  per-provider readiness. `/api/insights` accepts and validates a `provider`
+  from the client; `/api/insights/status` returns `{providers:{claude,ollama}}`.
+  Frontend: a synced `insightsProvider` field (rides the `st` blob, merge-on-
+  load, cross-device), a deploy-only "Insights" provider picker card in
+  Settings (radio list showing each provider's server config status), and
+  `InsightsTab` now sends the selected provider + shows a provider-aware
+  not-configured hint. Also fixed: the Claude adapter now strips internal
+  `_`-prefixed bookkeeping fields before calling Anthropic (which rejects
+  unknown block fields) — needed once tool_result blocks carried a `_toolName`
+  for the Ollama echo. 8 new server tests (Ollama message/tool translation,
+  reply→neutral, arg-string parsing, strip helper, providerStatus, full loop
+  through an Ollama-shaped fake adapter). 25 server + 1521 frontend tests green;
+  generic build still clean (Insights + the picker are deploy-only, absent
+  there). To use: set `INSIGHTS_OLLAMA_URL`, pull a tool-capable model
+  (llama3.1/Qwen), pick Ollama in Settings. Commit: _pending_.
 
 - **LLM Insights — thin end-to-end slice (deploy-only)** — free-form chat that
   answers questions grounded in the real transaction history. Server: new
