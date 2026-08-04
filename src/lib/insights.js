@@ -43,13 +43,29 @@ const PROVIDER_KEYS = {
 // Providers that don't need a key to be considered "configured".
 const KEYLESS_PROVIDERS = new Set(['ollama']);
 
-const MODEL = process.env.INSIGHTS_MODEL || 'claude-sonnet-4-6';
+// Per-provider model strings. Each provider names its models differently, so
+// a single shared model string would break on switch. Each has its own env
+// override with a sensible default (Ollama has no universal default — it
+// depends on what the user has pulled locally, so it must be set).
+//   Claude  -> INSIGHTS_ANTHROPIC_MODEL
+//   OpenAI  -> INSIGHTS_OPENAI_MODEL   (used when the OpenAI adapter lands)
+//   Ollama  -> INSIGHTS_OLLAMA_MODEL   (used when the Ollama adapter lands)
+const PROVIDER_MODELS = {
+  claude: process.env.INSIGHTS_ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+  openai: process.env.INSIGHTS_OPENAI_MODEL || 'gpt-4o',
+  ollama: process.env.INSIGHTS_OLLAMA_MODEL || 'llama3.1',
+};
+
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_TOOL_ROUNDS = 6; // hard ceiling on tool-use round-trips per question
 
 function keyFor(provider) {
   return PROVIDER_KEYS[provider] || '';
+}
+
+function modelFor(provider) {
+  return PROVIDER_MODELS[provider] || PROVIDER_MODELS.claude;
 }
 
 // A provider is configured if it's keyless (Ollama) or has its key wired.
@@ -205,7 +221,7 @@ const claudeAdapter = {
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: modelFor('claude'),
         max_tokens: 1024,
         system,
         messages,
@@ -315,7 +331,8 @@ module.exports = {
   buildSystemPrompt,
   queryTransactions,
   TOOLS,
-  MODEL,
+  MODEL: PROVIDER_MODELS.claude, // back-comparable default; per-provider via modelFor
+  modelFor,
   // exported for tests:
   _getAdapter: getAdapter,
   _runTool: runTool,

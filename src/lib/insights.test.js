@@ -164,3 +164,12 @@ test('insightsConfigured is per-provider; ollama is keyless', () => {
   // ...but ollama needs no key, so it's always considered configured.
   assert.strictEqual(insightsConfigured('ollama'), true);
 });
+
+test('modelFor returns a distinct default per provider', () => {
+  const { modelFor } = require('./insights');
+  assert.match(modelFor('claude'), /^claude-/);
+  assert.match(modelFor('openai'), /^gpt-/);
+  assert.strictEqual(modelFor('ollama'), 'llama3.1');
+  // Unknown provider falls back to the Claude default rather than undefined.
+  assert.match(modelFor('nope'), /^claude-/);
+});

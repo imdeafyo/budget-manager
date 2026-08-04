@@ -480,7 +480,7 @@ Newest first, with commit hashes.
   loop) and `GET /api/insights/status` (so the UI shows a "not configured" hint
   instead of erroring). The API key is read server-side from the
   `INSIGHTS_ANTHROPIC_API_KEY` env var and never reaches the frontend;
-  `INSIGHTS_MODEL`
+  `INSIGHTS_ANTHROPIC_MODEL`
   overrides the model (defaults to `claude-sonnet-4-6`). Frontend: new
   `tabs/InsightsTab.jsx` chat UI (ephemeral — sends `history` each turn),
   `"insights"` added to `VALID_TABS`, gated on a new `isDeploy` flag so it never
