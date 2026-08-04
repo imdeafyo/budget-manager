@@ -19,7 +19,7 @@ const MODE = "deploy";
 /* ══════════════════════════ useAppState ══════════════════════════ */
 export default function useAppState() {
   const mob = useM();
-  const VALID_TABS = ["budget","taxes","settings","charts","cats","transactions","prefs"];
+  const VALID_TABS = ["budget","taxes","settings","charts","cats","transactions","insights","prefs"];
   // Subtabs per top-level tab. Only Budget and Charts have subtabs; others are ignored.
   // Defaults: budget→live, charts→trends. Forecast is now charts/forecast (no longer top-level).
   // Hash format:
@@ -1417,6 +1417,8 @@ export default function useAppState() {
   return {
     // mobile
     mob,
+    // deploy vs generic build (Insights is deploy-only)
+    isDeploy: MODE === "deploy",
     // tabs
     tab, setTab,
     budgetSubtab, setBudgetSubtab, chartsSubtab, setChartsSubtab,

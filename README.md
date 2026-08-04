@@ -85,6 +85,7 @@ Frontend, under `src/frontend/`:
 | Advanced per-account forecast | `tabs/AdvancedForecastTab.jsx` |
 | Loans subtab | `tabs/LoansTab.jsx` |
 | Categories tab (`#cats`) | `tabs/CategoriesTab.jsx` |
+| Insights chat tab (`#insights`, deploy-only) | `tabs/InsightsTab.jsx` |
 | Settings tab (`#prefs`) | `tabs/SettingsTab.jsx` |
 
 Server, under `src/`:
@@ -92,6 +93,7 @@ Server, under `src/`:
 | Concern | File |
 | --- | --- |
 | Express app, Postgres pool, all `/api/*` endpoints | `server.js` |
+| LLM Insights adapter layer + tool loop + transaction-query tool | `lib/insights.js` |
 | Pino logger + slow-query pool wrapper | `lib/logger.js` |
 | X-Request-Id middleware + per-request child logger | `lib/requestId.js` |
 | HTTP access-log middleware | `lib/httpLog.js` |

@@ -6,6 +6,7 @@ const { Pool } = require('pg');
 const { logger, wrapPoolWithSlowQueryLog } = require('./lib/logger');
 const { requestId } = require('./lib/requestId');
 const { httpLog } = require('./lib/httpLog');
+const { runInsightsChat, insightsConfigured } = require('./lib/insights');
 
 const app = express();
 // Request-id + per-request child logger must come before anything that might
@@ -469,6 +470,68 @@ app.delete('/api/transactions{/:userId}', async (req, res) => {
 // Query builder endpoint — Phase 4c. Stub returns a helpful error for now.
 app.post('/api/transactions/query{/:userId}', (req, res) => {
   res.status(501).json({ error: 'Query builder lands in Phase 4c.' });
+});
+
+/* ══════════════════════════ LLM Insights ══════════════════════════
+   Free-form financial-insights chat. The provider (Claude today) is selected
+   behind an adapter in lib/insights.js; the API key is read server-side from
+   env and never returned to the client. This route only assembles compact
+   household context from the saved state, then delegates to the tool-use loop.
+
+   Deploy-only feature: there is no generic-build counterpart (no server). */
+
+// Build a small, non-sensitive household-context block from the saved state
+// for the system prompt (RAG-lite — no embeddings). Defensive: state shape
+// varies across versions, so every field is optional.
+function buildInsightsContext(state) {
+  if (!state || typeof state !== 'object') return {};
+  const parts = [];
+  const p1 = state.p1Name || 'Person 1';
+  const p2 = state.p2Name || 'Person 2';
+  if (state.cSal || state.kSal) {
+    parts.push(`Two earners (${p1}, ${p2}). Paid weekly (52/yr), budgeted on 48 paychecks.`);
+  }
+  const f = state.forecast;
+  if (f && typeof f === 'object') {
+    if (f.fireEnabled) parts.push('FIRE planning is enabled.');
+    if (f.fireMultiplier) parts.push(`FIRE target multiplier: ${f.fireMultiplier}x annual expenses.`);
+    if (f.horizon) parts.push(`Forecast horizon: ${f.horizon} years.`);
+  }
+  return { contextBlock: parts.length ? parts.join(' ') : '' };
+}
+
+// Lightweight status endpoint so the UI can show a "not configured" hint
+// instead of failing a chat call when no key is wired.
+app.get('/api/insights/status', (req, res) => {
+  res.json({ configured: insightsConfigured() });
+});
+
+app.post('/api/insights{/:userId}', async (req, res) => {
+  const userId = req.params.userId || 'default';
+  if (!insightsConfigured()) {
+    return res.status(503).json({ error: 'Insights is not configured on this server.', code: 'NOT_CONFIGURED' });
+  }
+  const question = (req.body && typeof req.body.question === 'string') ? req.body.question.trim() : '';
+  if (!question) return res.status(400).json({ error: 'question is required' });
+  // History is the prior conversation in neutral role/content shape. Ephemeral
+  // in this slice — the client sends it; nothing is persisted.
+  const history = Array.isArray(req.body.history) ? req.body.history : [];
+
+  try {
+    const stateRes = await pool.query('SELECT state FROM budget_state WHERE user_id = $1', [userId]);
+    const state = stateRes.rows[0] ? stateRes.rows[0].state : null;
+    const ctx = buildInsightsContext(state);
+
+    const { answer, rounds } = await runInsightsChat({ pool, userId, question, history, ctx });
+    req.log.info({ event: 'insights.chat', userId, rounds, qlen: question.length }, 'insights.chat');
+    res.json({ answer });
+  } catch (err) {
+    req.log.error({ event: 'insights.chat.error', userId, err: err.message, status: err.status, body: err.body }, 'insights.chat failed');
+    if (err.code === 'NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'Insights is not configured on this server.', code: 'NOT_CONFIGURED' });
+    }
+    res.status(502).json({ error: 'The insights provider could not be reached.' });
+  }
 });
 
 /* ══════════════════════════ Backup History ══════════════════════════

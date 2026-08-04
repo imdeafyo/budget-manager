@@ -395,6 +395,50 @@ with daily rotation, 30-day retention. Subdirs reserved: `logs/`, `uploads/`,
 
 ---
 
+## Insights & LLM
+
+Deploy-only feature (no generic build — no server there). Free-form chat that
+answers ad-hoc questions, flags anomalies/overspending, coaches FIRE, and
+proposes budget/category changes as text for manual approval. Provider runs
+behind a server-side adapter; the API key stays in server env and never
+reaches the frontend. Math stays in SQL/`calc.js` — the LLM interprets, it
+does not compute.
+
+### Persist chat history in Postgres — `ready` (after thin slice, which shipped)
+Chat is ephemeral today (client sends `history` each turn; nothing survives a
+reload). Persist per-user conversation following the `st`-blob / cross-device
+merge pattern so history crosses devices. Proxy contract to `/api/insights`
+doesn't change — this is additive behind it.
+
+### More tools: category totals + anomaly surfacing — `ready` (after thin slice)
+Thin slice ships one tool (`query_transactions`). Add `get_category_totals`
+(period rollups) and an anomaly/overspend surfacing path so "any unusual
+charges?" is answered from real aggregates, not row-scanning.
+
+### OpenAI + Ollama adapters + Settings provider picker — `ready` (after thin slice)
+The adapter interface exists (`src/lib/insights.js`, `getAdapter`); only the
+Claude adapter is implemented. Add OpenAI and Ollama adapters (translate the
+neutral `{system, messages, tools}` shape + tool-use format per provider) and
+a Settings card to pick the provider (a name, not a secret). Keys stay
+server-side env vars (`INSIGHTS_API_KEY`; OpenAI key when added). Ollama URL is
+non-secret and can live in Settings. Note Ollama tool-use needs a tool-trained
+model (Llama 3.1+/Qwen) and is lower quality.
+
+### FIRE/forecast tool for live-projection coaching — `parked`
+Add `get_forecast_summary` so FIRE coaching pulls live projection numbers
+rather than talking in generalities. Wants the forecast math surfaced through a
+tool. Don't lose sight of this — it's the difference between real coaching and
+platitudes.
+
+### Apply proposed changes to state — `blocked: budget items have no stable IDs`
+Let the model's proposed budget/category changes be applied with one click
+instead of hand-editing. Blocked: `exp`/`sav` are positional arrays keyed by
+index, so an apply-by-position write breaks when a row above moves. Needs the
+stable-IDs work (see Core architecture) first. Propose-as-text is the safe
+interim and already works.
+
+---
+
 ## Mobile & UX
 
 ### Mobile / tablet responsiveness triage — `blocked: needs the app open on real devices`
@@ -421,6 +465,29 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **LLM Insights — thin end-to-end slice (deploy-only)** — free-form chat that
+  answers questions grounded in the real transaction history. Server: new
+  `src/lib/insights.js` holds a provider-neutral adapter layer (Claude adapter
+  only for now, selected behind `getAdapter` so OpenAI/Ollama slot in later as
+  adapters, not a refactor), a `query_transactions` tool that runs a scoped
+  parameterized SELECT (indexed date/category/account filters, row cap 200,
+  returns count+sum so the model knows truncation), a tool-use loop
+  (`runInsightsChat`, 6-round ceiling), and a RAG-lite system prompt built from
+  compact household context (no embeddings). New routes in `server.js`:
+  `POST /api/insights` (assembles context from `budget_state`, delegates to the
+  loop) and `GET /api/insights/status` (so the UI shows a "not configured" hint
+  instead of erroring). The API key is read server-side from the
+  `INSIGHTS_API_KEY` env var and never reaches the frontend; `INSIGHTS_MODEL`
+  overrides the model (defaults to `claude-sonnet-4-6`). Frontend: new
+  `tabs/InsightsTab.jsx` chat UI (ephemeral — sends `history` each turn),
+  `"insights"` added to `VALID_TABS`, gated on a new `isDeploy` flag so it never
+  renders in the generic build. 8 new server-side tests (`insights.test.js`:
+  query builder, row-cap, ABS filter, tool dispatch, tool loop, direct-answer,
+  not-configured) via injected fake adapter/pool — no network, no DB. All
+  1521 frontend + 16 server tests green; generic build still builds clean (tab
+  absent there). Helm env wiring (map the Secret → `INSIGHTS_API_KEY`) is
+  handled by Corey in the GitOps repo — not in this repo. Commit: _pending_.
 
 - **Savings targets sync across devices (Budget → Live)** — `savingsTargets`
   was saved in its own per-device `localStorage` key (`budget-savings-targets`),
