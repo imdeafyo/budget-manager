@@ -59,7 +59,7 @@ test('queryTransactions caps limit at the hard row cap', async () => {
     return { rows: [] };
   });
   await queryTransactions(pool, 'default', { limit: 99999 });
-  assert.strictEqual(rowLimit, 200); // QUERY_ROW_CAP
+  assert.strictEqual(rowLimit, 500); // QUERY_ROW_CAP (raised from 200)
 });
 
 test('minAbsAmount uses ABS() so it catches large txns of either sign', async () => {
@@ -283,4 +283,110 @@ test('full loop through an Ollama-shaped fake adapter grounds the answer in a to
   const out = await runInsightsChat({ pool, userId: 'default', question: 'dining?', provider: 'ollama', adapter: fakeOllama });
   assert.strictEqual(out.rounds, 2);
   assert.match(out.answer, /\$150/);
+});
+
+/* ─────────────────── sort + aggregates (correctness fixes) ─────────────────── */
+
+const { getAggregates } = require('./insights');
+
+test('queryTransactions sorts by amount asc when asked (biggest expense first)', async () => {
+  let orderClause = null;
+  const pool = fakePool((sql, params) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 3, total: -100 }] };
+    const m = sql.match(/ORDER BY ([^\n]+)/);
+    orderClause = m ? m[1].trim() : null;
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', { sortBy: 'amount', sortDir: 'asc' });
+  assert.match(orderClause, /^amount ASC/);
+});
+
+test('queryTransactions rejects an unknown sort column (whitelist -> date)', async () => {
+  let orderClause = null;
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 1, total: 0 }] };
+    const m = sql.match(/ORDER BY ([^\n]+)/);
+    orderClause = m ? m[1].trim() : null;
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', { sortBy: 'amount); DROP TABLE transactions;--' });
+  assert.match(orderClause, /^date DESC/); // fell back to safe default, no injection
+});
+
+test('queryTransactions emits a loud note when the list is truncated', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 5000, total: -1 }] };
+    return { rows: [{ date: '2026-01-01', amount: '-1', description: 'X', category: 'A', account: 'B' }] };
+  });
+  const out = await queryTransactions(pool, 'default', { limit: 1 });
+  assert.strictEqual(out.truncated, true);
+  assert.match(out.note, /Only 1 of 5000/);
+  assert.match(out.note, /get_aggregates/); // steers to the exact-answer tool
+});
+
+test('getAggregates returns exact scalars + the actual largest expense/income rows', async () => {
+  // Query order: [0] scalar aggregates, [1] min row, [2] max row.
+  let call = 0;
+  const pool = fakePool(() => {
+    call++;
+    if (call === 1) return { rows: [{ count: 25011, sum: -120000, avg: -4.8, min: -5257.34, max: 1921.14 }] };
+    if (call === 2) return { rows: [{ date: new Date('2026-03-15'), amount: '-5257.34', description: 'ROCKET MORTGAGE', category: 'Housing', account: 'Joint' }] };
+    return { rows: [{ date: '2026-06-01', amount: '1921.14', description: 'PAYCHECK', category: 'Income', account: 'Checking' }] };
+  });
+  const out = await getAggregates(pool, 'default', {});
+  assert.strictEqual(out.count, 25011);
+  assert.strictEqual(out.min, -5257.34);
+  assert.strictEqual(out.largestExpense.description, 'ROCKET MORTGAGE');
+  assert.strictEqual(out.largestExpense.amount, -5257.34);
+  assert.strictEqual(out.largestIncome.amount, 1921.14);
+});
+
+test('getAggregates groups by category and orders by spend', async () => {
+  let groupedSql = null;
+  const pool = fakePool((sql) => {
+    groupedSql = sql;
+    return { rows: [
+      { grp: 'Housing', count: 12, sum: -63088, avg: -5257, min: -5257, max: -5257 },
+      { grp: 'Groceries', count: 200, sum: -8000, avg: -40, min: -120, max: -2 },
+    ] };
+  });
+  const out = await getAggregates(pool, 'default', { groupBy: 'category' });
+  assert.strictEqual(out.groupedBy, 'category');
+  assert.match(groupedSql, /GROUP BY category/);
+  assert.strictEqual(out.groups[0].group, 'Housing');
+  assert.strictEqual(out.groups[0].sum, -63088);
+});
+
+test('getAggregates groupBy whitelist ignores an unknown dimension (falls to scalar path)', async () => {
+  let call = 0;
+  const pool = fakePool(() => {
+    call++;
+    if (call === 1) return { rows: [{ count: 1, sum: -5, avg: -5, min: -5, max: -5 }] };
+    return { rows: [{ date: '2026-01-01', amount: '-5', description: 'X', category: 'A', account: 'B' }] };
+  });
+  const out = await getAggregates(pool, 'default', { groupBy: 'ssn' });
+  assert.strictEqual(out.groups, undefined); // not grouped
+  assert.strictEqual(out.count, 1);          // scalar path ran
+});
+
+test('_runTool dispatches get_aggregates', async () => {
+  let call = 0;
+  const pool = fakePool(() => {
+    call++;
+    if (call === 1) return { rows: [{ count: 2, sum: -10, avg: -5, min: -6, max: -4 }] };
+    return { rows: [{ date: '2026-01-01', amount: '-6', description: 'X', category: 'A', account: 'B' }] };
+  });
+  const { _runTool } = require('./insights');
+  const out = await _runTool(pool, 'default', 'get_aggregates', {});
+  assert.strictEqual(out.count, 2);
+});
+
+test('sign filter narrows to expenses', async () => {
+  let whereSql = null;
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) { whereSql = sql; return { rows: [{ n: 0, total: 0 }] }; }
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', { sign: 'expense' });
+  assert.match(whereSql, /amount < 0/);
 });

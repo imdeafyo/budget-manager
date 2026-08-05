@@ -410,10 +410,13 @@ reload). Persist per-user conversation following the `st`-blob / cross-device
 merge pattern so history crosses devices. Proxy contract to `/api/insights`
 doesn't change — this is additive behind it.
 
-### More tools: category totals + anomaly surfacing — `ready` (after thin slice)
-Thin slice ships one tool (`query_transactions`). Add `get_category_totals`
-(period rollups) and an anomaly/overspend surfacing path so "any unusual
-charges?" is answered from real aggregates, not row-scanning.
+### Anomaly / overspend surfacing — `ready`
+Exact aggregates shipped (`get_aggregates`: sum/avg/min/max/count over all rows,
+plus groupBy category/account/merchant — this covers category rollups). Still
+open: a purpose-built anomaly path so "any unusual charges?" surfaces outliers
+(e.g. transactions far above a category's normal, or new/rare merchants)
+computed in SQL rather than by the model scanning rows. Could be a
+`find_anomalies` tool or a stats-augmented aggregate (per-category stddev).
 
 ### OpenAI adapter — `ready`
 Claude and Ollama adapters exist behind the interface (`src/lib/insights.js`,
@@ -466,6 +469,27 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **LLM Insights — exact aggregates + sortable queries (correctness fix)** —
+  fixed the class of bug where "what's my most expensive purchase" returned a
+  wrong answer because `query_transactions` could only sort by date and capped
+  silently, so the model eyeballed a partial, date-ordered slice. Changes in
+  `src/lib/insights.js`: (1) extracted a shared `buildWhere` filter builder;
+  (2) `query_transactions` gained `sortBy` (date/amount/absamount, whitelisted
+  so nothing reaches SQL unsanitized), `sortDir`, and a `sign` (expense/income)
+  filter; row cap raised 200→500; truncation is now LOUD — a `note` states the
+  true total and tells the model to use aggregates for superlatives instead of
+  reasoning over a partial list; (3) new `get_aggregates` tool computes exact
+  count/sum/avg/min/max over ALL matching rows (no cap — the DB does the math),
+  returns the actual `largestExpense`/`largestIncome` rows, and supports
+  `groupBy` category/account/merchant for per-group totals (covers category
+  rollups). System prompt now directs the model to get_aggregates for any
+  most/least/total/average question and to respect truncation. Principle: no
+  question with a single correct answer is capped; only raw row-listing is
+  bounded, and transparently. Server-only change (no frontend). 8 new tests
+  (sort applied, injection-safe whitelist fallback, loud truncation note,
+  exact aggregates + extreme rows, grouped totals, groupBy whitelist, tool
+  dispatch, sign filter); 33 server tests green. Commit: _pending_.
 
 - **LLM Insights — Ollama adapter + Settings provider picker** — added a second
   backend so Insights runs with no API key against a self-hosted Ollama server.

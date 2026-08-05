@@ -74,19 +74,28 @@ function insightsConfigured(provider = 'claude') {
   return keyFor(provider).length > 0;
 }
 
-/* ─────────────────────── Transaction query tool ───────────────────────
- * The one tool in this slice. Runs a parameterized SELECT against the
- * transactions table. Filters map to indexed columns (date, category,
- * account) so it stays fast at scale. Returns a capped list of rows plus a
- * total count so the model knows if it's seeing a truncated set.
+/* ─────────────────────── Transaction query tools ───────────────────────
+ * Two tools share one filter builder:
+ *   - query_transactions: list matching rows (bounded, but honest about the
+ *     true total — never silently truncates).
+ *   - get_aggregates: exact MIN/MAX/SUM/COUNT/AVG computed in SQL over ALL
+ *     matching rows, so superlatives ("biggest purchase") and totals are
+ *     exact and unlimited — the database does the math, not the model.
  *
  * `pool` is injected so this module has no direct DB dependency and stays
  * unit-testable with a fake pool.
  */
 
-const QUERY_ROW_CAP = 200; // never hand the model more than this many rows at once
+// Generous cap on how many rows we hand the model at once. This bounds only
+// row *listing* (to protect the context window / cost), never aggregate
+// answers, which are computed over the full table. When a list is truncated,
+// the result says so loudly and the model is told to surface it.
+const QUERY_ROW_CAP = 500;
 
-async function queryTransactions(pool, userId, filters = {}) {
+// Build the shared WHERE clause + params from a filter object. Returns
+// { whereSql, params, nextIndex } so callers can append their own clauses
+// (e.g. LIMIT) continuing the $N numbering.
+function buildWhere(userId, filters = {}) {
   const where = ['user_id = $1'];
   const params = [userId];
   let i = 2;
@@ -104,10 +113,34 @@ async function queryTransactions(pool, userId, filters = {}) {
   if (typeof filters.minAmount === 'number') { where.push(`amount >= $${i++}`); params.push(filters.minAmount); }
   if (typeof filters.maxAmount === 'number') { where.push(`amount <= $${i++}`); params.push(filters.maxAmount); }
   if (typeof filters.minAbsAmount === 'number') { where.push(`ABS(amount) >= $${i++}`); params.push(filters.minAbsAmount); }
+  // Restrict to expenses (amount < 0) or income (amount > 0) when asked.
+  if (filters.sign === 'expense') { where.push(`amount < 0`); }
+  else if (filters.sign === 'income') { where.push(`amount > 0`); }
 
-  const whereSql = where.join(' AND ');
+  return { whereSql: where.join(' AND '), params, nextIndex: i };
+}
 
-  // Total count first (so the model knows if the row list is truncated).
+function rowToLite(r) {
+  return {
+    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
+    amount: Number(r.amount),
+    description: r.description,
+    category: r.category,
+    account: r.account,
+  };
+}
+
+// Whitelist for the sort column so nothing user/model-supplied reaches SQL.
+const SORT_COLUMNS = {
+  date: 'date',
+  amount: 'amount',
+  absamount: 'ABS(amount)',
+};
+
+async function queryTransactions(pool, userId, filters = {}) {
+  const { whereSql, params, nextIndex } = buildWhere(userId, filters);
+
+  // Total count + sum over ALL matching rows (cheap aggregate, always exact).
   const countRes = await pool.query(
     `SELECT COUNT(*)::int AS n, COALESCE(SUM(amount), 0)::float AS total
        FROM transactions WHERE ${whereSql}`,
@@ -116,44 +149,134 @@ async function queryTransactions(pool, userId, filters = {}) {
   const totalCount = countRes.rows[0].n;
   const totalAmount = countRes.rows[0].total;
 
+  // Sort: whitelisted column + direction. Default date DESC (most recent).
+  const col = SORT_COLUMNS[String(filters.sortBy || 'date').toLowerCase()] || 'date';
+  const dir = String(filters.sortDir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
   const limit = Math.min(Number(filters.limit) || 50, QUERY_ROW_CAP);
   const rowsRes = await pool.query(
     `SELECT date, amount, description, category, account
        FROM transactions WHERE ${whereSql}
-       ORDER BY date DESC, created_at DESC
-       LIMIT $${i}`,
+       ORDER BY ${col} ${dir}, created_at DESC
+       LIMIT $${nextIndex}`,
     [...params, limit]
   );
 
-  const rows = rowsRes.rows.map(r => ({
-    date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
-    amount: Number(r.amount),
-    description: r.description,
-    category: r.category,
-    account: r.account,
-  }));
+  const rows = rowsRes.rows.map(rowToLite);
+  const truncated = totalCount > rows.length;
 
-  return {
+  const result = {
     totalMatching: totalCount,
     sumOfMatching: Math.round(totalAmount * 100) / 100,
     returned: rows.length,
-    truncated: totalCount > rows.length,
+    truncated,
     transactions: rows,
+  };
+  // Loud, explicit note when the list is partial — the model is instructed to
+  // relay this rather than imply it saw everything. For superlatives/totals it
+  // should use get_aggregates instead of a row list.
+  if (truncated) {
+    result.note =
+      `Only ${rows.length} of ${totalCount} matching transactions are shown ` +
+      `(sorted by ${col} ${dir}). This is NOT the full set. For an exact ` +
+      `largest/smallest/total/average answer, call get_aggregates instead of ` +
+      `reasoning over this partial list.`;
+  }
+  return result;
+}
+
+/* get_aggregates — exact math over ALL matching rows. No row cap applies; the
+ * database computes the answer and returns a compact summary. For min/max it
+ * also returns the actual extreme transaction so "biggest purchase" yields the
+ * full row, not just a number. Optionally groups by a dimension. */
+const GROUP_COLUMNS = {
+  category: 'category',
+  account: 'account',
+  merchant: 'description',
+};
+
+async function getAggregates(pool, userId, args = {}) {
+  const { whereSql, params } = buildWhere(userId, args);
+
+  // Grouped path: totals per category/account/merchant, ordered by spend.
+  if (args.groupBy && GROUP_COLUMNS[String(args.groupBy).toLowerCase()]) {
+    const gcol = GROUP_COLUMNS[String(args.groupBy).toLowerCase()];
+    const limit = Math.min(Number(args.groupLimit) || 20, 100);
+    const res = await pool.query(
+      `SELECT ${gcol} AS grp,
+              COUNT(*)::int AS count,
+              COALESCE(SUM(amount), 0)::float AS sum,
+              COALESCE(AVG(amount), 0)::float AS avg,
+              COALESCE(MIN(amount), 0)::float AS min,
+              COALESCE(MAX(amount), 0)::float AS max
+         FROM transactions WHERE ${whereSql}
+         GROUP BY ${gcol}
+         ORDER BY SUM(amount) ASC
+         LIMIT ${limit}`,
+      params
+    );
+    return {
+      groupedBy: String(args.groupBy).toLowerCase(),
+      groups: res.rows.map(r => ({
+        group: r.grp,
+        count: r.count,
+        sum: Math.round(r.sum * 100) / 100,
+        avg: Math.round(r.avg * 100) / 100,
+        min: Math.round(r.min * 100) / 100,
+        max: Math.round(r.max * 100) / 100,
+      })),
+    };
+  }
+
+  // Ungrouped path: scalar aggregates over the whole matching set.
+  const aggRes = await pool.query(
+    `SELECT COUNT(*)::int AS count,
+            COALESCE(SUM(amount), 0)::float AS sum,
+            COALESCE(AVG(amount), 0)::float AS avg,
+            MIN(amount)::float AS min,
+            MAX(amount)::float AS max
+       FROM transactions WHERE ${whereSql}`,
+    params
+  );
+  const a = aggRes.rows[0];
+
+  // Also fetch the actual min (most negative = biggest expense) and max
+  // (most positive = biggest income) rows, so the model can name them.
+  const minRowRes = await pool.query(
+    `SELECT date, amount, description, category, account FROM transactions
+       WHERE ${whereSql} ORDER BY amount ASC, created_at DESC LIMIT 1`,
+    params
+  );
+  const maxRowRes = await pool.query(
+    `SELECT date, amount, description, category, account FROM transactions
+       WHERE ${whereSql} ORDER BY amount DESC, created_at DESC LIMIT 1`,
+    params
+  );
+
+  return {
+    count: a.count,
+    sum: a.sum == null ? 0 : Math.round(a.sum * 100) / 100,
+    avg: a.avg == null ? 0 : Math.round(a.avg * 100) / 100,
+    min: a.min == null ? null : Math.round(a.min * 100) / 100,
+    max: a.max == null ? null : Math.round(a.max * 100) / 100,
+    largestExpense: minRowRes.rows[0] ? rowToLite(minRowRes.rows[0]) : null,
+    largestIncome: maxRowRes.rows[0] ? rowToLite(maxRowRes.rows[0]) : null,
   };
 }
 
-// Tool schema advertised to the model. Provider-neutral (Anthropic tool
-// format; the OpenAI adapter will translate this shape when added).
+// Tool schemas advertised to the model. Provider-neutral (Anthropic tool
+// format; adapters translate the shape per provider).
 const TOOLS = [
   {
     name: 'query_transactions',
     description:
-      'Query the user\'s real transaction history from the database. Use this ' +
-      'whenever a question needs actual spending/income data — amounts, dates, ' +
-      'merchants, categories. Amounts are signed: expenses are negative, income ' +
-      'positive. Returns matching rows (capped) plus the total count and sum so ' +
-      'you know if results were truncated. Prefer narrow filters and use the ' +
-      'sum/count for totals rather than adding rows yourself.',
+      'List the user\'s real transactions matching filters. Amounts are signed: ' +
+      'expenses negative, income positive. Returns matching rows plus the exact ' +
+      'total count and sum over ALL matches. Use sortBy to order (e.g. sortBy ' +
+      '"amount" sortDir "asc" surfaces the biggest expenses first). If the ' +
+      'result says truncated:true, you did NOT receive every row — say so, and ' +
+      'for any largest/smallest/total/average question call get_aggregates ' +
+      'instead of reasoning over a partial list.',
     input_schema: {
       type: 'object',
       properties: {
@@ -165,7 +288,34 @@ const TOOLS = [
         minAmount: { type: 'number', description: 'Signed amount lower bound' },
         maxAmount: { type: 'number', description: 'Signed amount upper bound' },
         minAbsAmount: { type: 'number', description: 'Absolute-value lower bound, for "large" transactions of either sign' },
-        limit: { type: 'number', description: 'Max rows to return (default 50, hard cap 200)' },
+        sign: { type: 'string', enum: ['expense', 'income'], description: 'Restrict to expenses (amount<0) or income (amount>0)' },
+        sortBy: { type: 'string', enum: ['date', 'amount', 'absamount'], description: 'Sort column (default date)' },
+        sortDir: { type: 'string', enum: ['asc', 'desc'], description: 'Sort direction (default desc). For biggest expense use amount asc.' },
+        limit: { type: 'number', description: 'Max rows to return (default 50, hard cap 500)' },
+      },
+    },
+  },
+  {
+    name: 'get_aggregates',
+    description:
+      'Compute EXACT statistics over ALL matching transactions (no row limit) — ' +
+      'use this for any superlative or total: most/least expensive, total spent, ' +
+      'average, count. Returns count, sum, avg, min, max, plus the actual ' +
+      'largestExpense and largestIncome rows. Set groupBy to "category", ' +
+      '"account", or "merchant" for per-group totals (e.g. spending by category). ' +
+      'Always prefer this over adding up rows yourself.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive lower bound' },
+        endDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive upper bound' },
+        category: { type: 'string', description: 'Exact category match' },
+        account: { type: 'string', description: 'Exact account match' },
+        descriptionContains: { type: 'string', description: 'Case-insensitive merchant/description substring' },
+        minAbsAmount: { type: 'number', description: 'Absolute-value lower bound' },
+        sign: { type: 'string', enum: ['expense', 'income'], description: 'Restrict to expenses or income' },
+        groupBy: { type: 'string', enum: ['category', 'account', 'merchant'], description: 'Return per-group totals instead of one overall summary' },
+        groupLimit: { type: 'number', description: 'Max groups to return when groupBy is set (default 20, cap 100)' },
       },
     },
   },
@@ -176,6 +326,9 @@ const TOOLS = [
 async function runTool(pool, userId, name, input) {
   if (name === 'query_transactions') {
     return queryTransactions(pool, userId, input || {});
+  }
+  if (name === 'get_aggregates') {
+    return getAggregates(pool, userId, input || {});
   }
   return { error: `unknown tool: ${name}` };
 }
@@ -194,8 +347,10 @@ function buildSystemPrompt(ctx = {}) {
     'You help by answering questions about spending and budget, surfacing anomalies or overspending, and coaching toward the household\'s FIRE (financial independence) goals. You may also give general personal-finance guidance when asked.',
     '',
     'Rules:',
-    '- Ground every claim about the user\'s money in real data. When a question needs actual numbers, call query_transactions rather than guessing.',
-    '- Do not do financial arithmetic in your head over lists of transactions; rely on the sum/count the tool returns.',
+    '- Ground every claim about the user\'s money in real data. When a question needs actual numbers, call a tool rather than guessing.',
+    '- For ANY superlative or total — most/least expensive, biggest purchase, total spent, average, how many — call get_aggregates. It computes the exact answer over ALL matching transactions. NEVER answer these by listing rows and eyeballing them; a row list can be incomplete.',
+    '- Use query_transactions when the user wants to SEE individual transactions. If the result has truncated:true, tell the user you are showing only part of the set (state the true total) and do not imply it is complete.',
+    '- Do not add up or rank transactions yourself over a row list; rely on get_aggregates for math and on sortBy for ordering.',
     '- Amounts are signed: expenses negative, income positive.',
     '- You may PROPOSE budget or category changes as text for the user to apply manually. You cannot and must not claim to have changed anything — you have no write access.',
     '- Be concise and concrete. Prefer specific figures and short actionable takeaways.',
@@ -487,6 +642,7 @@ module.exports = {
   KNOWN_PROVIDERS,
   buildSystemPrompt,
   queryTransactions,
+  getAggregates,
   TOOLS,
   MODEL: PROVIDER_MODELS.claude, // back-comparable default; per-provider via modelFor
   modelFor,
