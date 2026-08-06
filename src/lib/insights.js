@@ -202,6 +202,50 @@ const SORT_COLUMNS = {
   absamount: 'ABS(amount)',
 };
 
+/* Detect exclude-filter values that don't correspond to any real category or
+ * account for this user. The model sometimes guesses a name ("Brokerage") that
+ * isn't literally what's stored; a NOT IN on a non-existent value silently
+ * excludes nothing, so the answer looks like it honored the exclusion when it
+ * didn't. We check existence up front and, for any value that matches zero
+ * rows, return a loud note so the caller/model can't quietly ignore it.
+ *
+ * One cheap query per dimension that was actually used. Case-insensitive so a
+ * casing mismatch ("dining" vs "Dining") is treated as a match, not a miss —
+ * the SQL filters are exact/ILIKE and this is only about "does such a value
+ * exist at all", not re-implementing the filter.
+ */
+async function unmatchedExclusions(pool, userId, filters = {}) {
+  const warnings = [];
+
+  async function checkColumn(values, column, label) {
+    const list = Array.isArray(values)
+      ? values.filter(v => typeof v === 'string' && v.length)
+      : [];
+    if (!list.length) return;
+    // Existing distinct values in this column for this user (lower-cased).
+    const res = await pool.query(
+      `SELECT DISTINCT lower(${column}) AS v FROM transactions
+         WHERE user_id = $1 AND ${column} IS NOT NULL AND ${column} <> ''`,
+      [userId]
+    );
+    const existing = new Set(res.rows.map(r => r.v));
+    for (const val of list) {
+      if (!existing.has(val.toLowerCase())) {
+        warnings.push(
+          `You asked to exclude the ${label} "${val}", but no ${label} by that ` +
+          `name exists in the data — nothing was excluded on that value. Call ` +
+          `get_aggregates with groupBy "${label}" to see the real ${label} ` +
+          `names, then retry with an exact one.`
+        );
+      }
+    }
+  }
+
+  await checkColumn(filters.excludeCategories, 'category', 'category');
+  await checkColumn(filters.excludeAccounts, 'account', 'account');
+  return warnings;
+}
+
 async function queryTransactions(pool, userId, filters = {}) {
   const { whereSql, params, nextIndex } = buildWhere(userId, filters);
 
@@ -247,6 +291,13 @@ async function queryTransactions(pool, userId, filters = {}) {
       `largest/smallest/total/average answer, call get_aggregates instead of ` +
       `reasoning over this partial list.`;
   }
+  // Loud warning if an exclusion value matched nothing (guessed a bad name) —
+  // otherwise the exclusion silently no-ops and the answer looks honored.
+  const exWarnings = await unmatchedExclusions(pool, userId, filters);
+  if (exWarnings.length) {
+    result.warnings = exWarnings;
+    result.note = [result.note, ...exWarnings].filter(Boolean).join(' ');
+  }
   return result;
 }
 
@@ -274,6 +325,17 @@ const TIME_GROUPS = {
 async function getAggregates(pool, userId, args = {}) {
   const { whereSql, params } = buildWhere(userId, args);
 
+  // Loud warning if an exclusion value matched nothing (guessed a bad name).
+  // Computed once and attached to whichever result path returns.
+  const exWarnings = await unmatchedExclusions(pool, userId, args);
+  const attach = (obj) => {
+    if (exWarnings.length) {
+      obj.warnings = exWarnings;
+      obj.note = [obj.note, ...exWarnings].filter(Boolean).join(' ');
+    }
+    return obj;
+  };
+
   // Time-grouped path: totals per period ("spending each month"), ordered
   // chronologically (NOT by spend — a trend needs time order). Takes priority
   // when groupBy names a time grain.
@@ -294,7 +356,7 @@ async function getAggregates(pool, userId, args = {}) {
          LIMIT ${limit}`,
       params
     );
-    return {
+    return attach({
       groupedBy: gkey,
       groups: res.rows.map(r => ({
         period: r.grp,
@@ -304,7 +366,7 @@ async function getAggregates(pool, userId, args = {}) {
         min: Math.round(r.min * 100) / 100,
         max: Math.round(r.max * 100) / 100,
       })),
-    };
+    });
   }
 
   // Grouped path: totals per category/account/merchant, ordered by spend.
@@ -334,7 +396,7 @@ async function getAggregates(pool, userId, args = {}) {
          LIMIT ${limit}`,
       params
     );
-    return {
+    return attach({
       groupedBy: String(args.groupBy).toLowerCase(),
       groups: res.rows.map(r => ({
         group: r.grp,
@@ -344,7 +406,7 @@ async function getAggregates(pool, userId, args = {}) {
         min: Math.round(r.min * 100) / 100,
         max: Math.round(r.max * 100) / 100,
       })),
-    };
+    });
   }
 
   // Ungrouped path: scalar aggregates over the whole matching set.
@@ -372,7 +434,7 @@ async function getAggregates(pool, userId, args = {}) {
     params
   );
 
-  return {
+  return attach({
     count: a.count,
     sum: a.sum == null ? 0 : Math.round(a.sum * 100) / 100,
     avg: a.avg == null ? 0 : Math.round(a.avg * 100) / 100,
@@ -380,37 +442,71 @@ async function getAggregates(pool, userId, args = {}) {
     max: a.max == null ? null : Math.round(a.max * 100) / 100,
     largestExpense: minRowRes.rows[0] ? rowToLite(minRowRes.rows[0]) : null,
     largestIncome: maxRowRes.rows[0] ? rowToLite(maxRowRes.rows[0]) : null,
-  };
+  });
 }
 
 /* find_recurring — surface likely subscriptions / recurring charges
  * ("what am I paying for every month?"). A subscription is a merchant that
- * recurs at a roughly monthly cadence with a stable amount — distinct from a
- * merchant you simply visit often (Starbucks) where amount and timing vary.
+ * recurs at a roughly monthly cadence, with a stable amount, and is STILL
+ * active — distinct from a merchant you simply visit often (Starbucks, whose
+ * amount and timing vary) and from a charge that recurred years ago and
+ * stopped (an old loan, a cancelled service).
  *
  * All of the discrimination happens in SQL so the model never eyeballs rows:
  *   - occurrences        COUNT(*) per merchant
  *   - span in months     from first to last charge date
- *   - amount stability    STDDEV of the amount; a subscription's is near zero
+ *   - amount stability    coefficient of variation (stddev / |avg|); a real
+ *                         subscription's is near zero. Proportional, so it does
+ *                         not wave a $5.5k mortgage through just because $800 of
+ *                         swing is "only 15%".
  *   - monthly cadence      distinct year-month buckets ≈ span months (roughly
  *                          one hit per month, not many in one month)
- * We keep candidates with enough occurrences AND low amount variance AND a
- * cadence that looks monthly, then report each with its typical amount and an
- * estimated monthly cost. Defaults to expenses (sign 'expense') since that is
- * what "paying for" means, but callers can override.
+ *   - recency             last charge within activeWithinMonths of today, so
+ *                          "what am I paying for" means CURRENTLY, not in 2017.
+ * Reports each survivor with its typical amount and an estimated monthly cost.
+ * Defaults to expenses (sign 'expense') since that is what "paying for" means,
+ * but callers can override.
  */
 async function findRecurring(pool, userId, args = {}) {
   // Default to expenses unless the caller explicitly overrides sign.
   const filters = { ...args };
   if (filters.sign !== 'income') filters.sign = 'expense';
-  const { whereSql, params } = buildWhere(userId, filters);
+  const { whereSql, params, nextIndex } = buildWhere(userId, filters);
 
   const minOccurrences = Math.max(2, Math.min(Number(args.minOccurrences) || 3, 60));
   const limit = Math.min(Number(args.limit) || 40, 100);
 
+  // Recency window: the last charge must be within this many months of today
+  // for the merchant to count as still-active. Default 3 months. 0 disables the
+  // recency gate (for "what did I USED to pay for" style questions). Anchored to
+  // args.today when provided (tests pin it) else real server time — same pattern
+  // as the system-prompt date anchor, never letting the model guess the year.
+  const rawWithin = args.activeWithinMonths;
+  const activeWithinMonths = rawWithin === 0 || rawWithin === '0'
+    ? 0
+    : Math.max(0, Math.min(Number(rawWithin) || 3, 120));
+  const today = args.today || new Date().toISOString().slice(0, 10);
+  // Compute the cutoff date in JS (not SQL interval math on interpolated N) and
+  // pass it as a bound param so nothing numeric reaches SQL as text.
+  let recencyClause = '';
+  const outerParams = [...params];
+  if (activeWithinMonths > 0) {
+    const d = new Date(today + 'T00:00:00Z');
+    d.setUTCMonth(d.getUTCMonth() - activeWithinMonths);
+    const cutoff = d.toISOString().slice(0, 10);
+    recencyClause = `AND last_date >= $${nextIndex}`;
+    outerParams.push(cutoff);
+  }
+
+  // Amount-stability tolerance as a coefficient of variation (stddev / |avg|),
+  // plus a tiny absolute floor so a perfectly-flat cheap charge with a few
+  // cents of rounding still passes. Default CV cap 0.08 (8%): Netflix at $15.99
+  // ± pennies passes; a refinanced mortgage swinging hundreds of dollars fails.
+  const cvMax = Math.max(0.01, Math.min(Number(args.maxAmountVariation) || 0.08, 1));
+
   // Per-merchant stats. distinct_months counts the year-months a merchant
   // appears in; span_months is the calendar distance first→last. A monthly
-  // subscription has distinct_months ≈ span_months + 1 and low stddev.
+  // subscription has distinct_months ≈ span_months + 1 and low CV.
   const res = await pool.query(
     `WITH per_merchant AS (
        SELECT description AS merchant,
@@ -429,19 +525,25 @@ async function findRecurring(pool, userId, args = {}) {
      )
      SELECT * FROM per_merchant
       WHERE distinct_months >= ${minOccurrences}
-        -- amount stability: stddev within ~15% of the typical amount (or tiny
-        -- in absolute terms), so variable-amount merchants are dropped.
-        AND ABS(std_amount) <= GREATEST(ABS(avg_amount) * 0.15, 1)
+        -- amount stability as coefficient of variation: stddev must be within
+        -- cvMax of the typical amount (with a small absolute floor). Because it
+        -- is proportional, large-but-variable charges (refinanced mortgages,
+        -- variable loan servicing) are dropped, not waved through.
+        AND ABS(std_amount) <= GREATEST(ABS(avg_amount) * ${cvMax}, 1)
         -- monthly cadence: appears in most of the months it spans (allows a
         -- couple of gaps), i.e. not many charges bunched in one month.
         AND distinct_months >= GREATEST(span_months, 1) * 0.7
+        -- recency: last charge recent enough to still be "what I'm paying for".
+        ${recencyClause}
       ORDER BY ABS(avg_amount) * distinct_months DESC
       LIMIT ${limit}`,
-    params
+    outerParams
   );
 
   return {
     minOccurrences,
+    activeWithinMonths,
+    maxAmountVariation: cvMax,
     candidates: res.rows.map(r => {
       const typical = Math.round(r.avg_amount * 100) / 100;
       return {
@@ -550,6 +652,8 @@ const TOOLS = [
         excludeCategories: { type: 'array', items: { type: 'string' }, description: 'Categories to EXCLUDE (e.g. Transfers).' },
         sign: { type: 'string', enum: ['expense', 'income'], description: 'Which side to scan; defaults to expense ("paying for").' },
         minOccurrences: { type: 'number', description: 'Minimum times a merchant must appear to be considered recurring (default 3, min 2, cap 60).' },
+        activeWithinMonths: { type: 'number', description: 'Only count merchants whose LAST charge is within this many months of today — i.e. still active. Default 3. Pass 0 to include charges that stopped long ago (for "what did I USED to pay for").' },
+        maxAmountVariation: { type: 'number', description: 'Max coefficient of variation (stddev/|avg|) for the amount to count as "stable". Default 0.08 (8%). Lower is stricter. Raise it to catch charges whose price drifts.' },
         limit: { type: 'number', description: 'Max candidates to return (default 40, cap 100).' },
       },
     },
@@ -594,10 +698,10 @@ function buildSystemPrompt(ctx = {}) {
     '- For ANY superlative or total — most/least expensive, biggest purchase, total spent, average, how many — call get_aggregates. It computes the exact answer over ALL matching transactions. NEVER answer these by listing rows and eyeballing them; a row list can be incomplete.',
     '- Use query_transactions when the user wants to SEE individual transactions. If the result has truncated:true, tell the user you are showing only part of the set (state the true total) and do not imply it is complete.',
     '- Do not add up or rank transactions yourself over a row list; rely on get_aggregates for math and on sortBy for ordering.',
-    '- To EXCLUDE things ("not transfers", "excluding securities trades"), pass excludeCategories / excludeAccounts / descriptionExcludes on the SAME tool call — do not filter by hand and do not report an empty result when the tool actually supports the exclusion. If you are unsure which category or account names exist, call get_aggregates with groupBy "category" (or "account") first to see the real names, then filter by those exact names.',
+    '- To EXCLUDE things ("not transfers", "excluding securities trades"), pass excludeCategories / excludeAccounts / descriptionExcludes on the SAME tool call — do not filter by hand and do not report an empty result when the tool actually supports the exclusion. If you are unsure which category or account names exist, call get_aggregates with groupBy "category" (or "account") first to see the real names, then filter by those exact names. If a tool result includes a "warnings" field saying an excluded category/account name did not exist, you MUST tell the user the exclusion did not apply and did not silently drop anything — never present such a result as if the exclusion worked.',
     '- For "each month / per week / over time / trend" questions, call get_aggregates with groupBy "month" (or "week"/"year") — it returns one exact row per period in chronological order. Do NOT list transactions and bucket them yourself.',
     '- To match several categories or accounts at once ("Dining or Groceries"), pass categories:[...] or accounts:[...] in ONE call rather than making separate calls and adding the results by hand. For "uncategorized" transactions pass uncategorized:true.',
-    '- For "what am I paying for every month", "which subscriptions do I have", or recurring-charge questions, call find_recurring — it detects merchants that repeat at a monthly cadence with a stable amount and returns their monthly cost. Do NOT list transactions and guess what repeats.',
+    '- For "what am I paying for every month", "which subscriptions do I have", or recurring-charge questions, call find_recurring — it detects merchants that repeat at a monthly cadence with a stable amount AND are still active (a charge within the last 3 months by default), and returns their monthly cost. It deliberately excludes charges that stopped long ago and merchants whose amount varies too much to be a subscription. Do NOT list transactions and guess what repeats. For "what did I USED to pay for" pass activeWithinMonths:0.',
     '- For "merchants (or categories/accounts) I used more than N times", call get_aggregates with the matching groupBy and minCount:N — it keeps only groups above that count and orders by frequency. Do NOT list rows and tally by hand.',
     '- Amounts are signed: expenses negative, income positive.',
     '- You may PROPOSE budget or category changes as text for the user to apply manually. You cannot and must not claim to have changed anything — you have no write access.',

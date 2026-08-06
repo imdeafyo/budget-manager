@@ -117,6 +117,8 @@ test('exclusion filters ignore empty/non-string entries without emitting SQL', a
 
 test('get_aggregates honors exclusion filters', async () => {
   const pool = fakePool((sql) => {
+    if (/DISTINCT lower\(category\)/.test(sql)) return { rows: [{ v: 'transfers' }] };
+    if (/DISTINCT lower\(account\)/.test(sql)) return { rows: [] };
     if (/GROUP BY/.test(sql)) return { rows: [] };
     if (/ORDER BY amount ASC/.test(sql)) return { rows: [] };
     if (/ORDER BY amount DESC/.test(sql)) return { rows: [] };
@@ -125,8 +127,11 @@ test('get_aggregates honors exclusion filters', async () => {
   await _runTool(pool, 'default', 'get_aggregates', {
     sign: 'expense', excludeCategories: ['Transfers'],
   });
-  assert.match(pool.calls[0].sql, /category IS NULL OR category NOT IN/);
-  assert.ok(pool.calls[0].params.includes('Transfers'));
+  // The exclusion WHERE lands on the scalar aggregate call (not the existence
+  // probe), so find the call that carries the exclusion clause.
+  const aggCall = pool.calls.find(c => /category IS NULL OR category NOT IN/.test(c.sql));
+  assert.ok(aggCall, 'an aggregate query with the exclusion clause was issued');
+  assert.ok(aggCall.params.includes('Transfers'));
 });
 
 test('categories/accounts emit IN lists (OR match)', async () => {
@@ -574,7 +579,7 @@ test('find_recurring detects monthly subscriptions with stable amounts (gap 4)',
         avg_amount: -15.99, std_amount: 0, first_date: '2025-01-05', last_date: '2025-12-05' },
     ] };
   });
-  const out = await _runTool(pool, 'default', 'find_recurring', {});
+  const out = await _runTool(pool, 'default', 'find_recurring', { today: '2026-02-01' });
   // Defaults to expenses.
   assert.match(recurringSql, /amount < 0/);
   // Cadence + stability discrimination is done in SQL, not by the model.
@@ -589,10 +594,42 @@ test('find_recurring detects monthly subscriptions with stable amounts (gap 4)',
   assert.strictEqual(c.firstDate, '2025-01-05');
 });
 
+test('find_recurring applies a recency window by default (last charge cutoff)', async () => {
+  let recurringSql = null;
+  let recurringParams = null;
+  const pool = fakePool((sql, params) => { recurringSql = sql; recurringParams = params; return { rows: [] }; });
+  await _runTool(pool, 'default', 'find_recurring', { today: '2026-08-05' });
+  // Default 3-month window: a last_date >= cutoff clause is added...
+  assert.match(recurringSql, /last_date >= \$/);
+  // ...and the cutoff param is 3 months before today (2026-05-05), computed
+  // server-side, not interpolated into SQL.
+  assert.ok(recurringParams.includes('2026-05-05'));
+});
+
+test('find_recurring activeWithinMonths:0 disables the recency gate', async () => {
+  let recurringSql = null;
+  const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
+  const out = await _runTool(pool, 'default', 'find_recurring', { activeWithinMonths: 0, today: '2026-08-05' });
+  assert.doesNotMatch(recurringSql, /last_date >= \$/); // no recency clause
+  assert.strictEqual(out.activeWithinMonths, 0);
+});
+
+test('find_recurring stability is a coefficient of variation, tightened from 15%', async () => {
+  let recurringSql = null;
+  const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
+  // default cvMax 0.08
+  await _runTool(pool, 'default', 'find_recurring', { today: '2026-08-05' });
+  assert.match(recurringSql, /ABS\(avg_amount\) \* 0\.08/);
+  assert.doesNotMatch(recurringSql, /ABS\(avg_amount\) \* 0\.15/); // old loose bound gone
+  // overridable
+  await _runTool(pool, 'default', 'find_recurring', { maxAmountVariation: 0.03, today: '2026-08-05' });
+  assert.match(recurringSql, /ABS\(avg_amount\) \* 0\.03/);
+});
+
 test('find_recurring honors minOccurrences (clamped) and income override', async () => {
   let recurringSql = null;
   const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
-  await _runTool(pool, 'default', 'find_recurring', { minOccurrences: 6, sign: 'income' });
+  await _runTool(pool, 'default', 'find_recurring', { minOccurrences: 6, sign: 'income', today: '2026-08-05' });
   assert.match(recurringSql, /HAVING COUNT\(\*\) >= 6/);
   assert.match(recurringSql, /amount > 0/); // income override respected
 });
@@ -602,10 +639,53 @@ test('find_recurring is dispatched and exported', async () => {
   assert.strictEqual(typeof findRecurring, 'function');
 });
 
-test('buildSystemPrompt steers recurring + count-threshold questions', () => {
+test('getAggregates warns loudly when an excluded account name matches nothing', async () => {
+  // The exclusion existence check runs a DISTINCT lower(account) probe; return
+  // only real account names, none matching the guessed "Brokerage".
+  const pool = fakePool((sql) => {
+    if (/DISTINCT lower\(account\)/.test(sql)) {
+      return { rows: [{ v: 'joint checking' }, { v: 'house vault' }] };
+    }
+    if (/DISTINCT lower\(category\)/.test(sql)) return { rows: [] };
+    // scalar aggregate + min/max rows
+    if (/ORDER BY amount/.test(sql)) return { rows: [] };
+    return { rows: [{ count: 5, sum: -100, avg: -20, min: -50, max: -5 }] };
+  });
+  const out = await getAggregates(pool, 'default', { excludeAccounts: ['Brokerage'], sign: 'expense' });
+  assert.ok(Array.isArray(out.warnings) && out.warnings.length === 1);
+  assert.match(out.warnings[0], /Brokerage/);
+  assert.match(out.warnings[0], /no account by that name exists/);
+  assert.match(out.note, /Brokerage/); // folded into note too
+});
+
+test('getAggregates does NOT warn when the excluded account exists (case-insensitive)', async () => {
+  const pool = fakePool((sql) => {
+    if (/DISTINCT lower\(account\)/.test(sql)) return { rows: [{ v: 'brokerage' }] };
+    if (/DISTINCT lower\(category\)/.test(sql)) return { rows: [] };
+    if (/ORDER BY amount/.test(sql)) return { rows: [] };
+    return { rows: [{ count: 0, sum: 0, avg: 0, min: null, max: null }] };
+  });
+  const out = await getAggregates(pool, 'default', { excludeAccounts: ['Brokerage'] });
+  assert.strictEqual(out.warnings, undefined); // 'brokerage' matches 'Brokerage'
+});
+
+test('queryTransactions warns when an excluded category matches nothing', async () => {
+  const pool = fakePool((sql) => {
+    if (/DISTINCT lower\(category\)/.test(sql)) return { rows: [{ v: 'dining' }] };
+    if (/DISTINCT lower\(account\)/.test(sql)) return { rows: [] };
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  const out = await queryTransactions(pool, 'default', { excludeCategories: ['Securities Trades'] });
+  assert.ok(out.warnings && /Securities Trades/.test(out.warnings[0]));
+});
+
+test('buildSystemPrompt steers recurring + count-threshold + unmatched-exclusion', () => {
   const sys = buildSystemPrompt({ today: '2026-08-05' });
   assert.match(sys, /find_recurring/);
   assert.match(sys, /minCount/);
+  assert.match(sys, /activeWithinMonths:0/);      // recency steer
+  assert.match(sys, /warnings/);                   // relay unmatched-exclusion
 });
 
 test('sign filter narrows to expenses', async () => {

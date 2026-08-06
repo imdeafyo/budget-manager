@@ -410,6 +410,33 @@ reload). Persist per-user conversation following the `st`-blob / cross-device
 merge pattern so history crosses devices. Proxy contract to `/api/insights`
 doesn't change — this is additive behind it.
 
+### Retirement/savings classification across Insights reports — `ready: design first`
+Real-data test surfaced this: retirement/investment contributions are stored as
+transactions and dominate frequency + "expense" reports (e.g. "Global Ex-us
+Equity Index Fund" as a top merchant, retirement contributions as the biggest
+"expenses"). They're conceptually savings, not spending — but they should still
+be *reportable*. Decide how Insights treats them:
+- What defines a retirement/savings flow? A category set? Specific accounts? A
+  flag? (Corey: "make sure retirement accounts are always treated separately for
+  these reports, but also always reported — they're really a savings account,
+  not an expense.")
+- Where does the boundary live so it's consistent across `get_aggregates`,
+  `find_recurring`, and count queries — a reusable filter (e.g. a
+  `spendingOnly`/`excludeSavings` flag on the tools) plus prompt steering, so
+  "my biggest expenses" and "merchants I use most" default to real spending but
+  the model can still pull savings/retirement when asked.
+Start at the design step — this is a modeling decision, not a mechanical filter.
+
+### Same-merchant identity / refi grouping in find_recurring — `parked: needs fuzzy matching`
+Real-data test: a refinanced mortgage shows up as two separate "subscriptions"
+(Loancare then Lakeview) because they're distinct description strings that start
+and stop around the refi. `find_recurring` groups by exact `description`, so it
+can't see that these are the same obligation over time. Fixing this needs some
+form of merchant-identity resolution (normalization/aliasing, or detecting a
+hand-off where one recurring charge stops as another of similar amount begins).
+Genuinely harder than a filter — park until the classification work above lands,
+since it may inform how merchants are canonicalized.
+
 ### Anomaly / overspend surfacing — `ready`
 Exact aggregates shipped (`get_aggregates`: sum/avg/min/max/count over all rows,
 plus groupBy category/account/merchant — this covers category rollups).
@@ -472,19 +499,37 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 
 Newest first, with commit hashes.
 
+- **LLM Insights — find_recurring hardening + loud unmatched-exclusion warnings** —
+  `[commit hash]` — real-data testing exposed three defects; fixed the two
+  mechanical ones (retirement classification + merchant/refi identity went to
+  TODO as design work). All in `src/lib/insights.js` (+ tests, verified failing
+  pre-fix):
+  - Recency: `activeWithinMonths` (default 3) requires the last charge to be
+    recent, so charges that stopped years ago no longer show as active. Cutoff
+    computed server-side from `today`, passed as a bound param. `0` disables it.
+  - Stability now a coefficient of variation (`stddev/|avg|`, default cap 0.08,
+    via `maxAmountVariation`) — a refinanced mortgage swinging hundreds of
+    dollars is dropped, not waved through as a "subscription". Replaces the flat
+    15% bound.
+  - Loud unmatched-exclusion warnings: when `excludeCategories`/`excludeAccounts`
+    names a value that doesn't exist (model guessed "Brokerage"), NOT IN silently
+    excluded nothing and the answer looked honored. New `unmatchedExclusions`
+    existence probe (case-insensitive) attaches a `warnings` array + folds into
+    `note` on both tools; prompt requires the model to relay it. Root cause of
+    the "excluded brokerage but got all trades" bug.
+  Deploy-only; no generic build touched.
+
 - **LLM Insights — recurring/subscription detection + count-threshold grouping** —
-  `[commit hash]` — closed the last two query-expressiveness gaps (4 and 7). All
-  in `src/lib/insights.js` (+ tests in `src/lib/insights.test.js`, verified
-  failing pre-fix):
+  `873e4e0` — closed query-expressiveness gaps 4 and 7. All in
+  `src/lib/insights.js` (+ tests, verified failing pre-fix):
   - `find_recurring` tool answers "what am I paying for every month?" — a SQL
     CTE per merchant computes occurrences, distinct-months, span, avg and
-    STDDEV_POP of amount, then keeps only merchants with a monthly cadence and a
-    stable amount (stddev within ~15% of typical), returning typical amount +
-    estimatedMonthlyCost. Defaults to expenses; the model never eyeballs rows.
-  - `get_aggregates` gains `minCount` on the category/account/merchant groupBy:
+    STDDEV_POP of amount, keeping merchants with a monthly cadence and stable
+    amount. Returns typical amount + estimatedMonthlyCost. (Stability + recency
+    hardened in the follow-up entry above.)
+  - `get_aggregates` `minCount` on category/account/merchant groupBy:
     `HAVING COUNT(*) > N` ordered by frequency — "merchants I visited more than
-    N times". Floored positive int only; non-numeric input drops the clause (no
-    injection). Ungrouped/time paths unaffected.
+    N times". Floored positive int only; non-numeric input drops the clause.
   System prompt steers both. Deploy-only; no generic build touched.
 
 - **LLM Insights — query-expressiveness gaps (exclusion, IN-lists, time grouping, notes, dates)** —
