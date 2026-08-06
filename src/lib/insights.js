@@ -311,6 +311,15 @@ async function getAggregates(pool, userId, args = {}) {
   if (args.groupBy && GROUP_COLUMNS[String(args.groupBy).toLowerCase()]) {
     const gcol = GROUP_COLUMNS[String(args.groupBy).toLowerCase()];
     const limit = Math.min(Number(args.groupLimit) || 20, 100);
+    // minCount: HAVING COUNT(*) > N — answers "groups with more than N rows"
+    // ("merchants I visited more than 5 times"). The threshold is strict (>),
+    // matching "more than N". Ordered by count DESC when a count floor is set
+    // (the question is about frequency, not spend); otherwise by spend.
+    const minCount = Number.isFinite(Number(args.minCount)) && Number(args.minCount) > 0
+      ? Math.floor(Number(args.minCount))
+      : null;
+    const havingSql = minCount != null ? `HAVING COUNT(*) > ${minCount}` : '';
+    const orderSql = minCount != null ? 'ORDER BY COUNT(*) DESC' : 'ORDER BY SUM(amount) ASC';
     const res = await pool.query(
       `SELECT ${gcol} AS grp,
               COUNT(*)::int AS count,
@@ -320,7 +329,8 @@ async function getAggregates(pool, userId, args = {}) {
               COALESCE(MAX(amount), 0)::float AS max
          FROM transactions WHERE ${whereSql}
          GROUP BY ${gcol}
-         ORDER BY SUM(amount) ASC
+         ${havingSql}
+         ${orderSql}
          LIMIT ${limit}`,
       params
     );
@@ -370,6 +380,83 @@ async function getAggregates(pool, userId, args = {}) {
     max: a.max == null ? null : Math.round(a.max * 100) / 100,
     largestExpense: minRowRes.rows[0] ? rowToLite(minRowRes.rows[0]) : null,
     largestIncome: maxRowRes.rows[0] ? rowToLite(maxRowRes.rows[0]) : null,
+  };
+}
+
+/* find_recurring — surface likely subscriptions / recurring charges
+ * ("what am I paying for every month?"). A subscription is a merchant that
+ * recurs at a roughly monthly cadence with a stable amount — distinct from a
+ * merchant you simply visit often (Starbucks) where amount and timing vary.
+ *
+ * All of the discrimination happens in SQL so the model never eyeballs rows:
+ *   - occurrences        COUNT(*) per merchant
+ *   - span in months     from first to last charge date
+ *   - amount stability    STDDEV of the amount; a subscription's is near zero
+ *   - monthly cadence      distinct year-month buckets ≈ span months (roughly
+ *                          one hit per month, not many in one month)
+ * We keep candidates with enough occurrences AND low amount variance AND a
+ * cadence that looks monthly, then report each with its typical amount and an
+ * estimated monthly cost. Defaults to expenses (sign 'expense') since that is
+ * what "paying for" means, but callers can override.
+ */
+async function findRecurring(pool, userId, args = {}) {
+  // Default to expenses unless the caller explicitly overrides sign.
+  const filters = { ...args };
+  if (filters.sign !== 'income') filters.sign = 'expense';
+  const { whereSql, params } = buildWhere(userId, filters);
+
+  const minOccurrences = Math.max(2, Math.min(Number(args.minOccurrences) || 3, 60));
+  const limit = Math.min(Number(args.limit) || 40, 100);
+
+  // Per-merchant stats. distinct_months counts the year-months a merchant
+  // appears in; span_months is the calendar distance first→last. A monthly
+  // subscription has distinct_months ≈ span_months + 1 and low stddev.
+  const res = await pool.query(
+    `WITH per_merchant AS (
+       SELECT description AS merchant,
+              COUNT(*)::int AS occurrences,
+              COUNT(DISTINCT date_trunc('month', date))::int AS distinct_months,
+              MIN(date) AS first_date,
+              MAX(date) AS last_date,
+              COALESCE(AVG(amount), 0)::float AS avg_amount,
+              COALESCE(STDDEV_POP(amount), 0)::float AS std_amount,
+              (EXTRACT(YEAR FROM AGE(MAX(date), MIN(date))) * 12
+               + EXTRACT(MONTH FROM AGE(MAX(date), MIN(date))))::int AS span_months
+         FROM transactions
+        WHERE ${whereSql} AND description <> ''
+        GROUP BY description
+       HAVING COUNT(*) >= ${minOccurrences}
+     )
+     SELECT * FROM per_merchant
+      WHERE distinct_months >= ${minOccurrences}
+        -- amount stability: stddev within ~15% of the typical amount (or tiny
+        -- in absolute terms), so variable-amount merchants are dropped.
+        AND ABS(std_amount) <= GREATEST(ABS(avg_amount) * 0.15, 1)
+        -- monthly cadence: appears in most of the months it spans (allows a
+        -- couple of gaps), i.e. not many charges bunched in one month.
+        AND distinct_months >= GREATEST(span_months, 1) * 0.7
+      ORDER BY ABS(avg_amount) * distinct_months DESC
+      LIMIT ${limit}`,
+    params
+  );
+
+  return {
+    minOccurrences,
+    candidates: res.rows.map(r => {
+      const typical = Math.round(r.avg_amount * 100) / 100;
+      return {
+        merchant: r.merchant,
+        occurrences: r.occurrences,
+        distinctMonths: r.distinct_months,
+        spanMonths: r.span_months,
+        typicalAmount: typical,
+        // Estimated monthly cost: the typical charge (magnitude), since these
+        // are ~monthly. Positive number for readability regardless of sign.
+        estimatedMonthlyCost: Math.abs(typical),
+        firstDate: r.first_date instanceof Date ? r.first_date.toISOString().slice(0, 10) : r.first_date,
+        lastDate: r.last_date instanceof Date ? r.last_date.toISOString().slice(0, 10) : r.last_date,
+      };
+    }),
   };
 }
 
@@ -439,6 +526,31 @@ const TOOLS = [
         sign: { type: 'string', enum: ['expense', 'income'], description: 'Restrict to expenses or income' },
         groupBy: { type: 'string', enum: ['category', 'account', 'merchant', 'month', 'week', 'year', 'day'], description: 'Per-group totals instead of one summary. category/account/merchant order by spend; month/week/year/day are TIME buckets ordered chronologically (use these for "spending each month" / trends) and return a "period" label per row.' },
         groupLimit: { type: 'number', description: 'Max groups to return when groupBy is set (dimensions: default 20, cap 100; time: default 60, cap 366)' },
+        minCount: { type: 'number', description: 'With a category/account/merchant groupBy, keep only groups with MORE THAN this many transactions and order by frequency — for "merchants I visited more than N times". Ignored for time groupings.' },
+      },
+    },
+  },
+  {
+    name: 'find_recurring',
+    description:
+      'Detect likely recurring charges / subscriptions ("what am I paying for ' +
+      'every month?"). Returns merchants that recur at a roughly monthly ' +
+      'cadence with a STABLE amount — real subscriptions, not merchants you ' +
+      'just visit often (whose amounts vary). Each candidate includes its ' +
+      'typical amount, an estimatedMonthlyCost, occurrence count, and the ' +
+      'first/last charge dates. Defaults to expenses. Use this instead of ' +
+      'listing rows and guessing what repeats.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        startDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive lower bound' },
+        endDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive upper bound' },
+        account: { type: 'string', description: 'Restrict to one account' },
+        accounts: { type: 'array', items: { type: 'string' }, description: 'Restrict to any of these accounts (OR).' },
+        excludeCategories: { type: 'array', items: { type: 'string' }, description: 'Categories to EXCLUDE (e.g. Transfers).' },
+        sign: { type: 'string', enum: ['expense', 'income'], description: 'Which side to scan; defaults to expense ("paying for").' },
+        minOccurrences: { type: 'number', description: 'Minimum times a merchant must appear to be considered recurring (default 3, min 2, cap 60).' },
+        limit: { type: 'number', description: 'Max candidates to return (default 40, cap 100).' },
       },
     },
   },
@@ -452,6 +564,9 @@ async function runTool(pool, userId, name, input) {
   }
   if (name === 'get_aggregates') {
     return getAggregates(pool, userId, input || {});
+  }
+  if (name === 'find_recurring') {
+    return findRecurring(pool, userId, input || {});
   }
   return { error: `unknown tool: ${name}` };
 }
@@ -482,6 +597,8 @@ function buildSystemPrompt(ctx = {}) {
     '- To EXCLUDE things ("not transfers", "excluding securities trades"), pass excludeCategories / excludeAccounts / descriptionExcludes on the SAME tool call — do not filter by hand and do not report an empty result when the tool actually supports the exclusion. If you are unsure which category or account names exist, call get_aggregates with groupBy "category" (or "account") first to see the real names, then filter by those exact names.',
     '- For "each month / per week / over time / trend" questions, call get_aggregates with groupBy "month" (or "week"/"year") — it returns one exact row per period in chronological order. Do NOT list transactions and bucket them yourself.',
     '- To match several categories or accounts at once ("Dining or Groceries"), pass categories:[...] or accounts:[...] in ONE call rather than making separate calls and adding the results by hand. For "uncategorized" transactions pass uncategorized:true.',
+    '- For "what am I paying for every month", "which subscriptions do I have", or recurring-charge questions, call find_recurring — it detects merchants that repeat at a monthly cadence with a stable amount and returns their monthly cost. Do NOT list transactions and guess what repeats.',
+    '- For "merchants (or categories/accounts) I used more than N times", call get_aggregates with the matching groupBy and minCount:N — it keeps only groups above that count and orders by frequency. Do NOT list rows and tally by hand.',
     '- Amounts are signed: expenses negative, income positive.',
     '- You may PROPOSE budget or category changes as text for the user to apply manually. You cannot and must not claim to have changed anything — you have no write access.',
     '- Be concise and concrete. Prefer specific figures and short actionable takeaways.',
@@ -774,6 +891,7 @@ module.exports = {
   buildSystemPrompt,
   queryTransactions,
   getAggregates,
+  findRecurring,
   TOOLS,
   MODEL: PROVIDER_MODELS.claude, // back-comparable default; per-provider via modelFor
   modelFor,

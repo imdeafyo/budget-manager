@@ -412,11 +412,13 @@ doesn't change — this is additive behind it.
 
 ### Anomaly / overspend surfacing — `ready`
 Exact aggregates shipped (`get_aggregates`: sum/avg/min/max/count over all rows,
-plus groupBy category/account/merchant — this covers category rollups). Still
-open: a purpose-built anomaly path so "any unusual charges?" surfaces outliers
-(e.g. transactions far above a category's normal, or new/rare merchants)
-computed in SQL rather than by the model scanning rows. Could be a
-`find_anomalies` tool or a stats-augmented aggregate (per-category stddev).
+plus groupBy category/account/merchant — this covers category rollups).
+Recurring-charge detection now has its own `find_recurring` tool (see Done), so
+this item is narrowed to true outlier surfacing. Still open: a purpose-built
+anomaly path so "any unusual charges?" surfaces outliers (e.g. transactions far
+above a category's normal, or new/rare merchants) computed in SQL rather than by
+the model scanning rows. Could be a `find_anomalies` tool or a stats-augmented
+aggregate (per-category stddev).
 
 ### OpenAI adapter — `ready`
 Claude and Ollama adapters exist behind the interface (`src/lib/insights.js`,
@@ -469,6 +471,21 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **LLM Insights — recurring/subscription detection + count-threshold grouping** —
+  `[commit hash]` — closed the last two query-expressiveness gaps (4 and 7). All
+  in `src/lib/insights.js` (+ tests in `src/lib/insights.test.js`, verified
+  failing pre-fix):
+  - `find_recurring` tool answers "what am I paying for every month?" — a SQL
+    CTE per merchant computes occurrences, distinct-months, span, avg and
+    STDDEV_POP of amount, then keeps only merchants with a monthly cadence and a
+    stable amount (stddev within ~15% of typical), returning typical amount +
+    estimatedMonthlyCost. Defaults to expenses; the model never eyeballs rows.
+  - `get_aggregates` gains `minCount` on the category/account/merchant groupBy:
+    `HAVING COUNT(*) > N` ordered by frequency — "merchants I visited more than
+    N times". Floored positive int only; non-numeric input drops the clause (no
+    injection). Ungrouped/time paths unaffected.
+  System prompt steers both. Deploy-only; no generic build touched.
 
 - **LLM Insights — query-expressiveness gaps (exclusion, IN-lists, time grouping, notes, dates)** —
   `[commit hash]` — closed a cluster of query-layer gaps where natural basic

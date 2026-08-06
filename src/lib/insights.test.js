@@ -529,6 +529,85 @@ test('_runTool dispatches get_aggregates', async () => {
   assert.strictEqual(out.count, 2);
 });
 
+test('getAggregates minCount adds a HAVING floor and orders by frequency (gap 7)', async () => {
+  let groupedSql = null;
+  const pool = fakePool((sql) => {
+    groupedSql = sql;
+    return { rows: [
+      { grp: 'Starbucks', count: 40, sum: -200, avg: -5, min: -8, max: -2 },
+      { grp: 'Chipotle', count: 12, sum: -144, avg: -12, min: -20, max: -8 },
+    ] };
+  });
+  const out = await getAggregates(pool, 'default', { groupBy: 'merchant', minCount: 5 });
+  assert.match(groupedSql, /HAVING COUNT\(\*\) > 5/);
+  assert.match(groupedSql, /ORDER BY COUNT\(\*\) DESC/);
+  assert.strictEqual(out.groups[0].group, 'Starbucks');
+  assert.strictEqual(out.groups[0].count, 40);
+});
+
+test('getAggregates without minCount keeps the spend ordering and no HAVING', async () => {
+  let groupedSql = null;
+  const pool = fakePool((sql) => {
+    groupedSql = sql;
+    return { rows: [{ grp: 'Housing', count: 12, sum: -63088, avg: -5257, min: -5257, max: -5257 }] };
+  });
+  await getAggregates(pool, 'default', { groupBy: 'category' });
+  assert.doesNotMatch(groupedSql, /HAVING/);
+  assert.match(groupedSql, /ORDER BY SUM\(amount\) ASC/);
+});
+
+test('getAggregates minCount coerces to a floored positive int (no injection)', async () => {
+  let groupedSql = null;
+  const pool = fakePool((sql) => { groupedSql = sql; return { rows: [] }; });
+  await getAggregates(pool, 'default', { groupBy: 'merchant', minCount: '5); DROP TABLE transactions;--' });
+  // Non-numeric string -> Number(...) is NaN -> no HAVING clause at all.
+  assert.doesNotMatch(groupedSql, /DROP TABLE/);
+  assert.doesNotMatch(groupedSql, /HAVING/);
+});
+
+test('find_recurring detects monthly subscriptions with stable amounts (gap 4)', async () => {
+  let recurringSql = null;
+  const pool = fakePool((sql) => {
+    recurringSql = sql;
+    return { rows: [
+      { merchant: 'Netflix', occurrences: 12, distinct_months: 12, span_months: 11,
+        avg_amount: -15.99, std_amount: 0, first_date: '2025-01-05', last_date: '2025-12-05' },
+    ] };
+  });
+  const out = await _runTool(pool, 'default', 'find_recurring', {});
+  // Defaults to expenses.
+  assert.match(recurringSql, /amount < 0/);
+  // Cadence + stability discrimination is done in SQL, not by the model.
+  assert.match(recurringSql, /date_trunc\('month', date\)/);
+  assert.match(recurringSql, /STDDEV_POP\(amount\)/);
+  assert.match(recurringSql, /HAVING COUNT\(\*\) >= 3/);
+  const c = out.candidates[0];
+  assert.strictEqual(c.merchant, 'Netflix');
+  assert.strictEqual(c.typicalAmount, -15.99);
+  assert.strictEqual(c.estimatedMonthlyCost, 15.99); // magnitude, readable
+  assert.strictEqual(c.occurrences, 12);
+  assert.strictEqual(c.firstDate, '2025-01-05');
+});
+
+test('find_recurring honors minOccurrences (clamped) and income override', async () => {
+  let recurringSql = null;
+  const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
+  await _runTool(pool, 'default', 'find_recurring', { minOccurrences: 6, sign: 'income' });
+  assert.match(recurringSql, /HAVING COUNT\(\*\) >= 6/);
+  assert.match(recurringSql, /amount > 0/); // income override respected
+});
+
+test('find_recurring is dispatched and exported', async () => {
+  const { findRecurring } = require('./insights');
+  assert.strictEqual(typeof findRecurring, 'function');
+});
+
+test('buildSystemPrompt steers recurring + count-threshold questions', () => {
+  const sys = buildSystemPrompt({ today: '2026-08-05' });
+  assert.match(sys, /find_recurring/);
+  assert.match(sys, /minCount/);
+});
+
 test('sign filter narrows to expenses', async () => {
   let whereSql = null;
   const pool = fakePool((sql) => {
