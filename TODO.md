@@ -470,6 +470,26 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 
 Newest first, with commit hashes.
 
+- **LLM Insights — query-expressiveness gaps (exclusion, IN-lists, time grouping, notes, dates)** —
+  `[commit hash]` — closed a cluster of query-layer gaps where natural basic
+  questions were unexpressible, so the model returned empty/wrong sets and
+  rationalized them. All in `src/lib/insights.js` (+ tests in
+  `src/lib/insights.test.js`, verified failing pre-fix):
+  - Exclusion: `excludeCategories` (NOT IN; NULL-category rows kept),
+    `excludeAccounts` (NOT IN), `descriptionExcludes` (NOT ILIKE per substring)
+    — answers "not transfers or securities trades", "excluding brokerage".
+  - Multi-value inclusion: `categories:[...]` / `accounts:[...]` (IN / OR) so
+    "Dining or Groceries" is one call, not a hand-summed pair.
+  - `uncategorized:true` — rows with NULL/empty category ("what's uncategorized").
+  - `notesContains` filter + `notes` returned in row output (omitted when empty).
+  - Time trends: `get_aggregates` `groupBy` gains `month`/`week`/`year`/`day`
+    (date_trunc buckets, ordered chronologically, `period` label per row) so
+    "spending each month" is exact SQL, not row-eyeballing.
+  - Date anchor: system prompt now stamps the real server-side current date and
+    instructs the model to resolve relative ranges ("last month") against it and
+    pass explicit startDate/endDate — never assume the year.
+  System prompt updated to steer the model to all of the above.
+
 - **LLM Insights — exact aggregates + sortable queries (correctness fix)** —
   fixed the class of bug where "what's my most expensive purchase" returned a
   wrong answer because `query_transactions` could only sort by date and capped

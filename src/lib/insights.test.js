@@ -71,6 +71,154 @@ test('minAbsAmount uses ABS() so it catches large txns of either sign', async ()
   assert.match(pool.calls[0].sql, /ABS\(amount\) >=/);
 });
 
+test('excludeCategories emits NOT IN and keeps NULL-category rows', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 5, total: -500 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', {
+    sortBy: 'amount', sortDir: 'asc', limit: 5,
+    excludeCategories: ['Transfers', 'Securities Trades'],
+  });
+  const countSql = pool.calls[0].sql;
+  // NULL categories are preserved; named categories are dropped.
+  assert.match(countSql, /category IS NULL OR category NOT IN/);
+  assert.ok(pool.calls[0].params.includes('Transfers'));
+  assert.ok(pool.calls[0].params.includes('Securities Trades'));
+});
+
+test('descriptionExcludes emits a NOT ILIKE per substring', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', {
+    descriptionExcludes: ['transfer', 'vanguard'],
+  });
+  const sql = pool.calls[0].sql;
+  assert.strictEqual((sql.match(/NOT ILIKE/g) || []).length, 2);
+  assert.ok(pool.calls[0].params.includes('%transfer%'));
+  assert.ok(pool.calls[0].params.includes('%vanguard%'));
+});
+
+test('exclusion filters ignore empty/non-string entries without emitting SQL', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', {
+    excludeCategories: ['', null, 42],
+    descriptionExcludes: ['', undefined],
+  });
+  const sql = pool.calls[0].sql;
+  assert.doesNotMatch(sql, /NOT IN/);
+  assert.doesNotMatch(sql, /NOT ILIKE/);
+});
+
+test('get_aggregates honors exclusion filters', async () => {
+  const pool = fakePool((sql) => {
+    if (/GROUP BY/.test(sql)) return { rows: [] };
+    if (/ORDER BY amount ASC/.test(sql)) return { rows: [] };
+    if (/ORDER BY amount DESC/.test(sql)) return { rows: [] };
+    return { rows: [{ count: 3, sum: -300, avg: -100, min: -200, max: -20 }] };
+  });
+  await _runTool(pool, 'default', 'get_aggregates', {
+    sign: 'expense', excludeCategories: ['Transfers'],
+  });
+  assert.match(pool.calls[0].sql, /category IS NULL OR category NOT IN/);
+  assert.ok(pool.calls[0].params.includes('Transfers'));
+});
+
+test('categories/accounts emit IN lists (OR match)', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', {
+    categories: ['Dining', 'Groceries'],
+    accounts: ['Checking'],
+  });
+  const sql = pool.calls[0].sql;
+  assert.match(sql, /category IN \(/);
+  assert.match(sql, /account IN \(/);
+  assert.ok(pool.calls[0].params.includes('Dining'));
+  assert.ok(pool.calls[0].params.includes('Groceries'));
+  assert.ok(pool.calls[0].params.includes('Checking'));
+});
+
+test('uncategorized flag matches NULL or empty category', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', { uncategorized: true });
+  assert.match(pool.calls[0].sql, /category IS NULL OR category = ''/);
+});
+
+test('excludeAccounts emits NOT IN over account', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    return { rows: [] };
+  });
+  await queryTransactions(pool, 'default', { excludeAccounts: ['Brokerage'] });
+  assert.match(pool.calls[0].sql, /account NOT IN \(/);
+  assert.ok(pool.calls[0].params.includes('Brokerage'));
+});
+
+test('notesContains filters on notes and rows return notes when present', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 1, total: -20 }] };
+    return { rows: [{ date: '2025-01-05', amount: '-20', description: 'X', category: 'Y', account: 'A', notes: 'reimbursable' }] };
+  });
+  const out = await queryTransactions(pool, 'default', { notesContains: 'reimburs' });
+  assert.match(pool.calls[0].sql, /notes ILIKE/);
+  assert.ok(pool.calls[0].params.includes('%reimburs%'));
+  assert.strictEqual(out.transactions[0].notes, 'reimbursable');
+});
+
+test('rowToLite omits notes when absent/empty', async () => {
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 1, total: -20 }] };
+    return { rows: [{ date: '2025-01-05', amount: '-20', description: 'X', category: 'Y', account: 'A', notes: '' }] };
+  });
+  const out = await queryTransactions(pool, 'default', {});
+  assert.ok(!('notes' in out.transactions[0]));
+});
+
+test('get_aggregates groupBy month buckets by date_trunc, ordered chronologically', async () => {
+  const pool = fakePool((sql) => {
+    assert.match(sql, /date_trunc\('month', date\)/);
+    assert.match(sql, /ORDER BY date_trunc\('month', date\) ASC/);
+    return { rows: [
+      { grp: '2025-01-01', count: 3, sum: -300, avg: -100, min: -200, max: -20 },
+      { grp: '2025-02-01', count: 2, sum: -150, avg: -75, min: -100, max: -50 },
+    ] };
+  });
+  const out = await _runTool(pool, 'default', 'get_aggregates', { groupBy: 'month', sign: 'expense' });
+  assert.strictEqual(out.groupedBy, 'month');
+  assert.strictEqual(out.groups[0].period, '2025-01-01');
+  assert.strictEqual(out.groups[1].sum, -150);
+});
+
+test('get_aggregates rejects an unknown time grain and falls through to dimension whitelist', async () => {
+  // 'decade' is neither a TIME_GROUP nor a GROUP_COLUMN -> scalar path.
+  const pool = fakePool((sql) => {
+    if (/date_trunc/.test(sql)) throw new Error('should not time-group');
+    if (/GROUP BY/.test(sql)) throw new Error('should not dimension-group');
+    if (/ORDER BY amount/.test(sql)) return { rows: [] };
+    return { rows: [{ count: 0, sum: 0, avg: 0, min: null, max: null }] };
+  });
+  const out = await _runTool(pool, 'default', 'get_aggregates', { groupBy: 'decade' });
+  assert.ok('count' in out); // scalar summary, not grouped
+});
+
+test('buildSystemPrompt stamps today and steers relative dates + trends', () => {
+  const sys = buildSystemPrompt({ today: '2026-08-05' });
+  assert.match(sys, /Today's date is 2026-08-05/);
+  assert.match(sys, /groupBy "month"/);
+  assert.match(sys, /categories:\[\.\.\.\]/);
+});
+
 test('_runTool dispatches query_transactions and rejects unknown tools', async () => {
   const pool = fakePool((sql) => {
     if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 1, total: -9 }] };

@@ -108,6 +108,67 @@ function buildWhere(userId, filters = {}) {
     where.push(`description ILIKE $${i++}`);
     params.push('%' + filters.descriptionContains + '%');
   }
+  if (filters.notesContains) {
+    // notes is nullable; ILIKE on NULL is NULL (row excluded), which is right —
+    // a row with no note cannot match a note substring.
+    where.push(`notes ILIKE $${i++}`);
+    params.push('%' + filters.notesContains + '%');
+  }
+  // Multi-value inclusion (IN lists) — the OR mirror of the single `category` /
+  // `account` exact match. Lets "Dining or Groceries" be one query instead of
+  // two the model would be tempted to add up by hand.
+  const inCats = Array.isArray(filters.categories)
+    ? filters.categories.filter(c => typeof c === 'string' && c.length)
+    : [];
+  if (inCats.length) {
+    const ph = inCats.map(() => `$${i++}`).join(', ');
+    where.push(`category IN (${ph})`);
+    params.push(...inCats);
+  }
+  const inAccts = Array.isArray(filters.accounts)
+    ? filters.accounts.filter(a => typeof a === 'string' && a.length)
+    : [];
+  if (inAccts.length) {
+    const ph = inAccts.map(() => `$${i++}`).join(', ');
+    where.push(`account IN (${ph})`);
+    params.push(...inAccts);
+  }
+  // Uncategorized: rows with no category. Postgres stores these as NULL; some
+  // imports use empty string, so treat both as uncategorized.
+  if (filters.uncategorized === true) {
+    where.push(`(category IS NULL OR category = '')`);
+  }
+  // Exclusion filters — the inverse of category / descriptionContains. Let the
+  // model answer "... that are NOT transfers or securities trades" by naming
+  // categories to drop and/or description substrings to exclude. Without these
+  // an exclusion request is unexpressible and silently returns the wrong set.
+  const excludeCats = Array.isArray(filters.excludeCategories)
+    ? filters.excludeCategories.filter(c => typeof c === 'string' && c.length)
+    : [];
+  if (excludeCats.length) {
+    // NOT IN drops the named categories. NULL categories are kept (NULL is
+    // never IN a list), which is the intended behavior — an untagged row is
+    // not "a transfer" just because it lacks a category.
+    const ph = excludeCats.map(() => `$${i++}`).join(', ');
+    where.push(`(category IS NULL OR category NOT IN (${ph}))`);
+    params.push(...excludeCats);
+  }
+  const excludeDesc = Array.isArray(filters.descriptionExcludes)
+    ? filters.descriptionExcludes.filter(s => typeof s === 'string' && s.length)
+    : [];
+  for (const sub of excludeDesc) {
+    where.push(`description NOT ILIKE $${i++}`);
+    params.push('%' + sub + '%');
+  }
+  const excludeAccts = Array.isArray(filters.excludeAccounts)
+    ? filters.excludeAccounts.filter(a => typeof a === 'string' && a.length)
+    : [];
+  if (excludeAccts.length) {
+    // account is NOT NULL (defaults to '') so a plain NOT IN is safe here.
+    const ph = excludeAccts.map(() => `$${i++}`).join(', ');
+    where.push(`account NOT IN (${ph})`);
+    params.push(...excludeAccts);
+  }
   // amount filters. Transactions store signed amounts; callers can ask by
   // absolute magnitude via minAbsAmount (useful for "large" spend/income).
   if (typeof filters.minAmount === 'number') { where.push(`amount >= $${i++}`); params.push(filters.minAmount); }
@@ -121,13 +182,17 @@ function buildWhere(userId, filters = {}) {
 }
 
 function rowToLite(r) {
-  return {
+  const lite = {
     date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : r.date,
     amount: Number(r.amount),
     description: r.description,
     category: r.category,
     account: r.account,
   };
+  // Only surface notes when present — keeps the row compact and avoids feeding
+  // the model a wall of nulls. Rows are selected with notes below.
+  if (r.notes != null && r.notes !== '') lite.notes = r.notes;
+  return lite;
 }
 
 // Whitelist for the sort column so nothing user/model-supplied reaches SQL.
@@ -155,7 +220,7 @@ async function queryTransactions(pool, userId, filters = {}) {
 
   const limit = Math.min(Number(filters.limit) || 50, QUERY_ROW_CAP);
   const rowsRes = await pool.query(
-    `SELECT date, amount, description, category, account
+    `SELECT date, amount, description, category, account, notes
        FROM transactions WHERE ${whereSql}
        ORDER BY ${col} ${dir}, created_at DESC
        LIMIT $${nextIndex}`,
@@ -195,8 +260,52 @@ const GROUP_COLUMNS = {
   merchant: 'description',
 };
 
+// Time buckets for trend questions ("spending each month"). Maps the requested
+// grain to a date_trunc unit; the grouped SELECT formats the bucket as an ISO
+// day string so the model gets stable, sortable period labels. Whitelisted so
+// nothing user/model-supplied reaches date_trunc.
+const TIME_GROUPS = {
+  month: 'month',
+  week: 'week',
+  year: 'year',
+  day: 'day',
+};
+
 async function getAggregates(pool, userId, args = {}) {
   const { whereSql, params } = buildWhere(userId, args);
+
+  // Time-grouped path: totals per period ("spending each month"), ordered
+  // chronologically (NOT by spend — a trend needs time order). Takes priority
+  // when groupBy names a time grain.
+  const gkey = String(args.groupBy || '').toLowerCase();
+  if (args.groupBy && TIME_GROUPS[gkey]) {
+    const unit = TIME_GROUPS[gkey];
+    const limit = Math.min(Number(args.groupLimit) || 60, 366);
+    const res = await pool.query(
+      `SELECT to_char(date_trunc('${unit}', date), 'YYYY-MM-DD') AS grp,
+              COUNT(*)::int AS count,
+              COALESCE(SUM(amount), 0)::float AS sum,
+              COALESCE(AVG(amount), 0)::float AS avg,
+              COALESCE(MIN(amount), 0)::float AS min,
+              COALESCE(MAX(amount), 0)::float AS max
+         FROM transactions WHERE ${whereSql}
+         GROUP BY date_trunc('${unit}', date)
+         ORDER BY date_trunc('${unit}', date) ASC
+         LIMIT ${limit}`,
+      params
+    );
+    return {
+      groupedBy: gkey,
+      groups: res.rows.map(r => ({
+        period: r.grp,
+        count: r.count,
+        sum: Math.round(r.sum * 100) / 100,
+        avg: Math.round(r.avg * 100) / 100,
+        min: Math.round(r.min * 100) / 100,
+        max: Math.round(r.max * 100) / 100,
+      })),
+    };
+  }
 
   // Grouped path: totals per category/account/merchant, ordered by spend.
   if (args.groupBy && GROUP_COLUMNS[String(args.groupBy).toLowerCase()]) {
@@ -243,12 +352,12 @@ async function getAggregates(pool, userId, args = {}) {
   // Also fetch the actual min (most negative = biggest expense) and max
   // (most positive = biggest income) rows, so the model can name them.
   const minRowRes = await pool.query(
-    `SELECT date, amount, description, category, account FROM transactions
+    `SELECT date, amount, description, category, account, notes FROM transactions
        WHERE ${whereSql} ORDER BY amount ASC, created_at DESC LIMIT 1`,
     params
   );
   const maxRowRes = await pool.query(
-    `SELECT date, amount, description, category, account FROM transactions
+    `SELECT date, amount, description, category, account, notes FROM transactions
        WHERE ${whereSql} ORDER BY amount DESC, created_at DESC LIMIT 1`,
     params
   );
@@ -282,9 +391,16 @@ const TOOLS = [
       properties: {
         startDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive lower bound' },
         endDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive upper bound' },
-        category: { type: 'string', description: 'Exact category match' },
-        account: { type: 'string', description: 'Exact account match' },
+        category: { type: 'string', description: 'Exact category match (single). For several, use categories.' },
+        categories: { type: 'array', items: { type: 'string' }, description: 'Match ANY of these categories (OR), e.g. ["Dining","Groceries"].' },
+        excludeCategories: { type: 'array', items: { type: 'string' }, description: 'Categories to EXCLUDE, e.g. ["Transfers","Securities Trades"] for "not transfers or trades". Rows with no category are kept.' },
+        uncategorized: { type: 'boolean', description: 'When true, only rows with NO category (NULL or empty) — for "what is uncategorized".' },
+        account: { type: 'string', description: 'Exact account match (single). For several, use accounts.' },
+        accounts: { type: 'array', items: { type: 'string' }, description: 'Match ANY of these accounts (OR).' },
+        excludeAccounts: { type: 'array', items: { type: 'string' }, description: 'Accounts to EXCLUDE, e.g. a brokerage account.' },
         descriptionContains: { type: 'string', description: 'Case-insensitive substring of the description/merchant' },
+        descriptionExcludes: { type: 'array', items: { type: 'string' }, description: 'Description/merchant substrings to EXCLUDE (case-insensitive). Use to drop e.g. "transfer" or a broker name.' },
+        notesContains: { type: 'string', description: 'Case-insensitive substring of the transaction note. Rows without a note never match. Returned rows include notes when present.' },
         minAmount: { type: 'number', description: 'Signed amount lower bound' },
         maxAmount: { type: 'number', description: 'Signed amount upper bound' },
         minAbsAmount: { type: 'number', description: 'Absolute-value lower bound, for "large" transactions of either sign' },
@@ -309,13 +425,20 @@ const TOOLS = [
       properties: {
         startDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive lower bound' },
         endDate: { type: 'string', description: 'ISO date YYYY-MM-DD, inclusive upper bound' },
-        category: { type: 'string', description: 'Exact category match' },
-        account: { type: 'string', description: 'Exact account match' },
+        category: { type: 'string', description: 'Exact category match (single). For several, use categories.' },
+        categories: { type: 'array', items: { type: 'string' }, description: 'Match ANY of these categories (OR).' },
+        excludeCategories: { type: 'array', items: { type: 'string' }, description: 'Categories to EXCLUDE, e.g. ["Transfers","Securities Trades"]. Rows with no category are kept.' },
+        uncategorized: { type: 'boolean', description: 'When true, only rows with NO category (NULL or empty).' },
+        account: { type: 'string', description: 'Exact account match (single). For several, use accounts.' },
+        accounts: { type: 'array', items: { type: 'string' }, description: 'Match ANY of these accounts (OR).' },
+        excludeAccounts: { type: 'array', items: { type: 'string' }, description: 'Accounts to EXCLUDE.' },
         descriptionContains: { type: 'string', description: 'Case-insensitive merchant/description substring' },
+        descriptionExcludes: { type: 'array', items: { type: 'string' }, description: 'Description/merchant substrings to EXCLUDE (case-insensitive).' },
+        notesContains: { type: 'string', description: 'Case-insensitive substring of the transaction note. Rows without a note never match.' },
         minAbsAmount: { type: 'number', description: 'Absolute-value lower bound' },
         sign: { type: 'string', enum: ['expense', 'income'], description: 'Restrict to expenses or income' },
-        groupBy: { type: 'string', enum: ['category', 'account', 'merchant'], description: 'Return per-group totals instead of one overall summary' },
-        groupLimit: { type: 'number', description: 'Max groups to return when groupBy is set (default 20, cap 100)' },
+        groupBy: { type: 'string', enum: ['category', 'account', 'merchant', 'month', 'week', 'year', 'day'], description: 'Per-group totals instead of one summary. category/account/merchant order by spend; month/week/year/day are TIME buckets ordered chronologically (use these for "spending each month" / trends) and return a "period" label per row.' },
+        groupLimit: { type: 'number', description: 'Max groups to return when groupBy is set (dimensions: default 20, cap 100; time: default 60, cap 366)' },
       },
     },
   },
@@ -342,8 +465,13 @@ async function runTool(pool, userId, name, input) {
  * FIRE target, goals). It is intentionally compact.
  */
 function buildSystemPrompt(ctx = {}) {
+  // Stamp the real current date (server-side) so the model resolves relative
+  // ranges ("last month", "this year", "past 90 days") against reality instead
+  // of guessing a year. Tests may pin it via ctx.today.
+  const today = ctx.today || new Date().toISOString().slice(0, 10);
   const lines = [
     'You are a financial insights assistant embedded in a personal budgeting app for a dual-income household.',
+    `Today's date is ${today}. Resolve any relative date range ("last month", "this year", "past 90 days") against this date and pass explicit startDate/endDate to the tools — never assume the year.`,
     'You help by answering questions about spending and budget, surfacing anomalies or overspending, and coaching toward the household\'s FIRE (financial independence) goals. You may also give general personal-finance guidance when asked.',
     '',
     'Rules:',
@@ -351,6 +479,9 @@ function buildSystemPrompt(ctx = {}) {
     '- For ANY superlative or total — most/least expensive, biggest purchase, total spent, average, how many — call get_aggregates. It computes the exact answer over ALL matching transactions. NEVER answer these by listing rows and eyeballing them; a row list can be incomplete.',
     '- Use query_transactions when the user wants to SEE individual transactions. If the result has truncated:true, tell the user you are showing only part of the set (state the true total) and do not imply it is complete.',
     '- Do not add up or rank transactions yourself over a row list; rely on get_aggregates for math and on sortBy for ordering.',
+    '- To EXCLUDE things ("not transfers", "excluding securities trades"), pass excludeCategories / excludeAccounts / descriptionExcludes on the SAME tool call — do not filter by hand and do not report an empty result when the tool actually supports the exclusion. If you are unsure which category or account names exist, call get_aggregates with groupBy "category" (or "account") first to see the real names, then filter by those exact names.',
+    '- For "each month / per week / over time / trend" questions, call get_aggregates with groupBy "month" (or "week"/"year") — it returns one exact row per period in chronological order. Do NOT list transactions and bucket them yourself.',
+    '- To match several categories or accounts at once ("Dining or Groceries"), pass categories:[...] or accounts:[...] in ONE call rather than making separate calls and adding the results by hand. For "uncategorized" transactions pass uncategorized:true.',
     '- Amounts are signed: expenses negative, income positive.',
     '- You may PROPOSE budget or category changes as text for the user to apply manually. You cannot and must not claim to have changed anything — you have no write access.',
     '- Be concise and concrete. Prefer specific figures and short actionable takeaways.',
