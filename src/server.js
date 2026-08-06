@@ -6,7 +6,7 @@ const { Pool } = require('pg');
 const { logger, wrapPoolWithSlowQueryLog } = require('./lib/logger');
 const { requestId } = require('./lib/requestId');
 const { httpLog } = require('./lib/httpLog');
-const { runInsightsChat, insightsConfigured, providerStatus, KNOWN_PROVIDERS } = require('./lib/insights');
+const { runInsightsChat, insightsConfigured, providerStatus, KNOWN_PROVIDERS, savingsCategoriesFromState } = require('./lib/insights');
 
 const app = express();
 // Request-id + per-request child logger must come before anything that might
@@ -484,7 +484,7 @@ app.post('/api/transactions/query{/:userId}', (req, res) => {
 // for the system prompt (RAG-lite — no embeddings). Defensive: state shape
 // varies across versions, so every field is optional.
 function buildInsightsContext(state) {
-  if (!state || typeof state !== 'object') return {};
+  if (!state || typeof state !== 'object') return { savingsCategories: [] };
   const parts = [];
   const p1 = state.p1Name || 'Person 1';
   const p2 = state.p2Name || 'Person 2';
@@ -497,7 +497,14 @@ function buildInsightsContext(state) {
     if (f.fireMultiplier) parts.push(`FIRE target multiplier: ${f.fireMultiplier}x annual expenses.`);
     if (f.horizon) parts.push(`Forecast horizon: ${f.horizon} years.`);
   }
-  return { contextBlock: parts.length ? parts.join(' ') : '' };
+  // Savings-category names, read from the budget's savings line items (no
+  // hardcoding). The chat loop uses these to exclude savings contributions from
+  // expense / merchant / recurring queries by default (opt-in via includeSavings).
+  const savingsCategories = savingsCategoriesFromState(state);
+  return {
+    contextBlock: parts.length ? parts.join(' ') : '',
+    savingsCategories,
+  };
 }
 
 // Status endpoint: reports which providers are configured so the UI can show

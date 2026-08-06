@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { queryTransactions, buildSystemPrompt, _runTool, runInsightsChat } = require('./insights');
+const { queryTransactions, buildSystemPrompt, _runTool, runInsightsChat, savingsCategoriesFromState, withSavingsExclusion } = require('./insights');
 
 /* A fake pg pool that records the SQL + params it was asked to run and
    returns canned rows. Lets us assert the query builder without a database. */
@@ -570,28 +570,52 @@ test('getAggregates minCount coerces to a floored positive int (no injection)', 
   assert.doesNotMatch(groupedSql, /HAVING/);
 });
 
-test('find_recurring detects monthly subscriptions with stable amounts (gap 4)', async () => {
+test('find_recurring detects a cadence via gap analysis and returns fixed list', async () => {
   let recurringSql = null;
   const pool = fakePool((sql) => {
     recurringSql = sql;
     return { rows: [
-      { merchant: 'Netflix', occurrences: 12, distinct_months: 12, span_months: 11,
-        avg_amount: -15.99, std_amount: 0, first_date: '2025-01-05', last_date: '2025-12-05' },
+      { merchant: 'Netflix', occurrences: 12, first_date: '2025-01-05', last_date: '2025-12-05',
+        avg_amount: -15.99, std_amount: 0, min_amount: -15.99, max_amount: -15.99,
+        median_gap: 30, mean_gap: 30, std_gap: 1 },
     ] };
   });
   const out = await _runTool(pool, 'default', 'find_recurring', { today: '2026-02-01' });
   // Defaults to expenses.
   assert.match(recurringSql, /amount < 0/);
-  // Cadence + stability discrimination is done in SQL, not by the model.
-  assert.match(recurringSql, /date_trunc\('month', date\)/);
-  assert.match(recurringSql, /STDDEV_POP\(amount\)/);
+  // Cadence detection is gap analysis, not amount stability.
+  assert.match(recurringSql, /LAG\(date\)/);
+  assert.match(recurringSql, /percentile_cont\(0\.5\)/); // median gap
   assert.match(recurringSql, /HAVING COUNT\(\*\) >= 3/);
-  const c = out.candidates[0];
+  // The old amount-CV filter is GONE — amount never excludes. std_amount may
+  // still be SELECTed (it drives the fixed/variable split in JS), but it must
+  // not be COMPARED in a filter (no `std_amount <=/</>=` predicate).
+  assert.doesNotMatch(recurringSql, /std_amount\s*(<=|<|>=|>)/);
+  // The regularity filter keys on gaps, not amounts.
+  assert.match(recurringSql, /std_gap\s*\)?\s*<=|mean_gap/);
+  // Flat amount -> "fixed" list, labeled monthly.
+  assert.strictEqual(out.variable.length, 0);
+  const c = out.fixed[0];
   assert.strictEqual(c.merchant, 'Netflix');
+  assert.strictEqual(c.cadence, 'monthly');
   assert.strictEqual(c.typicalAmount, -15.99);
-  assert.strictEqual(c.estimatedMonthlyCost, 15.99); // magnitude, readable
+  assert.strictEqual(c.estimatedMonthlyCost, 15.99); // monthly => ×1
   assert.strictEqual(c.occurrences, 12);
   assert.strictEqual(c.firstDate, '2025-01-05');
+});
+
+test('find_recurring gap-regularity filter uses gap CV, not amount CV', async () => {
+  let recurringSql = null;
+  const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
+  // default gap-CV cap 0.35
+  await _runTool(pool, 'default', 'find_recurring', { today: '2026-08-05' });
+  assert.match(recurringSql, /GREATEST\(mean_gap, 1\) \* 0\.35/);
+  // amount is no longer an exclusion filter anywhere in the SQL.
+  assert.doesNotMatch(recurringSql, /ABS\(avg_amount\) \* 0\.08/);
+  assert.doesNotMatch(recurringSql, /std_amount\s*(<=|<|>=|>)/);
+  // overridable
+  await _runTool(pool, 'default', 'find_recurring', { maxGapVariation: 0.15, today: '2026-08-05' });
+  assert.match(recurringSql, /GREATEST\(mean_gap, 1\) \* 0\.15/);
 });
 
 test('find_recurring applies a recency window by default (last charge cutoff)', async () => {
@@ -612,18 +636,6 @@ test('find_recurring activeWithinMonths:0 disables the recency gate', async () =
   const out = await _runTool(pool, 'default', 'find_recurring', { activeWithinMonths: 0, today: '2026-08-05' });
   assert.doesNotMatch(recurringSql, /last_date >= \$/); // no recency clause
   assert.strictEqual(out.activeWithinMonths, 0);
-});
-
-test('find_recurring stability is a coefficient of variation, tightened from 15%', async () => {
-  let recurringSql = null;
-  const pool = fakePool((sql) => { recurringSql = sql; return { rows: [] }; });
-  // default cvMax 0.08
-  await _runTool(pool, 'default', 'find_recurring', { today: '2026-08-05' });
-  assert.match(recurringSql, /ABS\(avg_amount\) \* 0\.08/);
-  assert.doesNotMatch(recurringSql, /ABS\(avg_amount\) \* 0\.15/); // old loose bound gone
-  // overridable
-  await _runTool(pool, 'default', 'find_recurring', { maxAmountVariation: 0.03, today: '2026-08-05' });
-  assert.match(recurringSql, /ABS\(avg_amount\) \* 0\.03/);
 });
 
 test('find_recurring honors minOccurrences (clamped) and income override', async () => {
@@ -696,4 +708,129 @@ test('sign filter narrows to expenses', async () => {
   });
   await queryTransactions(pool, 'default', { sign: 'expense' });
   assert.match(whereSql, /amount < 0/);
+});
+
+/* ── Change 2: find_recurring cadence redesign — cases that slipped through ── */
+
+test('find_recurring catches a bimonthly mortgage (non-monthly cadence)', async () => {
+  // The old monthly-only detector missed this: median gap ~60 days is not
+  // "monthly", but it IS a regular cadence. Flat amount -> fixed, labeled
+  // bimonthly, and estimatedMonthlyCost halves the per-charge amount.
+  const pool = fakePool(() => ({ rows: [
+    { merchant: 'HOME MORTGAGE', occurrences: 8, first_date: '2025-01-01', last_date: '2026-01-01',
+      avg_amount: -2200, std_amount: 0, min_amount: -2200, max_amount: -2200,
+      median_gap: 60, mean_gap: 60, std_gap: 2 },
+  ] }));
+  const out = await _runTool(pool, 'default', 'find_recurring', { today: '2026-02-01' });
+  assert.strictEqual(out.variable.length, 0);
+  const m = out.fixed[0];
+  assert.strictEqual(m.merchant, 'HOME MORTGAGE');
+  assert.strictEqual(m.cadence, 'bimonthly');
+  assert.strictEqual(m.medianGapDays, 60);
+  assert.strictEqual(m.typicalAmount, -2200);
+  assert.strictEqual(m.estimatedMonthlyCost, 1100); // 2200 × 0.5/month
+});
+
+test('find_recurring keeps a variable-but-regular utility bill (amount never excludes)', async () => {
+  // The old amount-CV filter dropped this because the amount swings with usage.
+  // Now it survives on gap-regularity and lands in the "variable" list with a
+  // range + note; typicalAmount is the average.
+  const pool = fakePool(() => ({ rows: [
+    { merchant: 'CITY POWER', occurrences: 11, first_date: '2025-02-10', last_date: '2026-01-10',
+      avg_amount: -140, std_amount: 45, min_amount: -220, max_amount: -80,
+      median_gap: 30, mean_gap: 30, std_gap: 2 },
+  ] }));
+  const out = await _runTool(pool, 'default', 'find_recurring', { today: '2026-02-01' });
+  assert.strictEqual(out.fixed.length, 0);
+  const u = out.variable[0];
+  assert.strictEqual(u.merchant, 'CITY POWER');
+  assert.strictEqual(u.cadence, 'monthly');
+  assert.strictEqual(u.typicalAmount, -140);
+  assert.deepStrictEqual(u.amountRange, { min: -220, max: -80 });
+  assert.match(u.note, /varies/i);
+});
+
+test('find_recurring drops merchants whose spacing is irregular (high gap CV survives to SQL)', async () => {
+  // Regularity is enforced in SQL; here we just confirm the JS cadence gate
+  // also rejects a regular-but-unrecognized gap (e.g. every ~45 days).
+  const pool = fakePool(() => ({ rows: [
+    { merchant: 'ODD VENDOR', occurrences: 6, first_date: '2025-01-01', last_date: '2025-10-01',
+      avg_amount: -50, std_amount: 0, min_amount: -50, max_amount: -50,
+      median_gap: 45, mean_gap: 45, std_gap: 1 },
+  ] }));
+  const out = await _runTool(pool, 'default', 'find_recurring', { today: '2025-11-01' });
+  assert.strictEqual(out.fixed.length, 0);
+  assert.strictEqual(out.variable.length, 0); // 45-day gap maps to no cadence band
+});
+
+/* ── Change 1: savings-category exclusion + includeSavings opt-in ── */
+
+test('savingsCategoriesFromState pulls distinct category tags from state.sav', () => {
+  const state = { sav: [
+    { n: 'House Fund', c: 'Home' },
+    { n: 'Washing Machine', c: 'Home' },   // duplicate category
+    { n: 'Emergency Fund', c: 'Emergency' },
+    { n: 'No Category', c: '' },            // ignored
+    { n: 'Bad' },                           // no c -> ignored
+  ] };
+  assert.deepStrictEqual(savingsCategoriesFromState(state), ['Home', 'Emergency']);
+  assert.deepStrictEqual(savingsCategoriesFromState({}), []);
+  assert.deepStrictEqual(savingsCategoriesFromState(null), []);
+});
+
+test('withSavingsExclusion merges savings cats into excludeCategories by default', () => {
+  const out = withSavingsExclusion({ excludeCategories: ['Transfers'] }, ['Home', 'Emergency', 'transfers']);
+  // Existing exclusion kept; savings appended; de-duped case-insensitively.
+  assert.deepStrictEqual(out.excludeCategories, ['Transfers', 'Home', 'Emergency']);
+  // Original input not mutated.
+  const original = { foo: 1 };
+  const merged = withSavingsExclusion(original, ['Home']);
+  assert.notStrictEqual(merged, original);
+  assert.deepStrictEqual(merged.excludeCategories, ['Home']);
+});
+
+test('withSavingsExclusion is a no-op when includeSavings:true', () => {
+  const input = { includeSavings: true, excludeCategories: ['Transfers'] };
+  assert.strictEqual(withSavingsExclusion(input, ['Home', 'Emergency']), input); // same ref, untouched
+});
+
+test('_runTool excludes savings categories by default and opts in with includeSavings', async () => {
+  const savCats = ['Home', 'Emergency'];
+  let excludeParams = null;
+  const pool = fakePool((sql, params) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    // unmatchedExclusions probe returns the savings cats as existing (no warning)
+    if (/DISTINCT lower/.test(sql)) return { rows: [{ v: 'home' }, { v: 'emergency' }] };
+    excludeParams = params;
+    return { rows: [] };
+  });
+
+  // Default: savings categories are excluded (appear as NOT IN params).
+  await _runTool(pool, 'default', 'get_aggregates', { sign: 'expense' }, savCats);
+  assert.ok(excludeParams.includes('Home'));
+  assert.ok(excludeParams.includes('Emergency'));
+
+  // Opt-in: includeSavings:true suppresses the exclusion.
+  excludeParams = null;
+  await _runTool(pool, 'default', 'get_aggregates', { sign: 'expense', includeSavings: true }, savCats);
+  assert.ok(!excludeParams.includes('Home'));
+  assert.ok(!excludeParams.includes('Emergency'));
+});
+
+test('savings exclusion inherits the unmatched-exclusion warning path', async () => {
+  // A savings category that matches no transactions should surface the loud
+  // warning, same as any other excludeCategories miss.
+  const pool = fakePool((sql) => {
+    if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0, total: 0 }] };
+    if (/DISTINCT lower/.test(sql)) return { rows: [{ v: 'dining' }] }; // no "Home"
+    return { rows: [] };
+  });
+  const out = await _runTool(pool, 'default', 'get_aggregates', {}, ['Home']);
+  assert.ok(out.warnings && out.warnings.some(w => /Home/.test(w)));
+});
+
+test('buildSystemPrompt steers savings exclusion + includeSavings opt-in', () => {
+  const sys = buildSystemPrompt({ today: '2026-08-05' });
+  assert.match(sys, /Savings contributions are NOT spending/);
+  assert.match(sys, /includeSavings:true/);
 });

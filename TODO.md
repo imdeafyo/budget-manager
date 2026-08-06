@@ -410,23 +410,6 @@ reload). Persist per-user conversation following the `st`-blob / cross-device
 merge pattern so history crosses devices. Proxy contract to `/api/insights`
 doesn't change — this is additive behind it.
 
-### Retirement/savings classification across Insights reports — `ready: design first`
-Real-data test surfaced this: retirement/investment contributions are stored as
-transactions and dominate frequency + "expense" reports (e.g. "Global Ex-us
-Equity Index Fund" as a top merchant, retirement contributions as the biggest
-"expenses"). They're conceptually savings, not spending — but they should still
-be *reportable*. Decide how Insights treats them:
-- What defines a retirement/savings flow? A category set? Specific accounts? A
-  flag? (Corey: "make sure retirement accounts are always treated separately for
-  these reports, but also always reported — they're really a savings account,
-  not an expense.")
-- Where does the boundary live so it's consistent across `get_aggregates`,
-  `find_recurring`, and count queries — a reusable filter (e.g. a
-  `spendingOnly`/`excludeSavings` flag on the tools) plus prompt steering, so
-  "my biggest expenses" and "merchants I use most" default to real spending but
-  the model can still pull savings/retirement when asked.
-Start at the design step — this is a modeling decision, not a mechanical filter.
-
 ### Same-merchant identity / refi grouping in find_recurring — `parked: needs fuzzy matching`
 Real-data test: a refinanced mortgage shows up as two separate "subscriptions"
 (Loancare then Lakeview) because they're distinct description strings that start
@@ -434,8 +417,9 @@ and stop around the refi. `find_recurring` groups by exact `description`, so it
 can't see that these are the same obligation over time. Fixing this needs some
 form of merchant-identity resolution (normalization/aliasing, or detecting a
 hand-off where one recurring charge stops as another of similar amount begins).
-Genuinely harder than a filter — park until the classification work above lands,
-since it may inform how merchants are canonicalized.
+Genuinely harder than a filter — savings classification has landed, so this is
+now unblocked as a modeling problem, but still parked behind merchant-identity
+resolution (normalization/aliasing, or refi hand-off detection).
 
 ### Anomaly / overspend surfacing — `ready`
 Exact aggregates shipped (`get_aggregates`: sum/avg/min/max/count over all rows,
@@ -498,6 +482,26 @@ A note-to-self already covers the need. Revisit only if bug thoughts get lost.
 ## Done
 
 Newest first, with commit hashes.
+
+- **LLM Insights — savings exclusion + gap-based find_recurring redesign** —
+  `[commit hash]` — two deploy-only changes in `src/lib/insights.js` +
+  `src/server.js` (+ tests, verified failing pre-fix). No generic build, no
+  schema change:
+  - Savings classification: savings-category transactions are excluded from
+    expense / top-merchant / recurring queries by default, with an
+    `includeSavings:true` opt-in for saving/contribution questions. Savings
+    category names are read from state (distinct `c` tags on `state.sav`,
+    no hardcoding) via `savingsCategoriesFromState`, passed on `ctx`, and folded
+    into `excludeCategories` by `withSavingsExclusion` — so it inherits the
+    existing loud unmatched-exclusion warning path. Prompt steers the default +
+    opt-in. Closes the "retirement dominates my expenses" report skew.
+  - `find_recurring` redesign: keys on gap-regularity, not amount stability. A
+    `LAG()` gap CTE + median-gap cadence bands (weekly→quarterly) + low gap-CV
+    now detect ANY regular cadence (catches a bimonthly/semi-monthly mortgage the
+    monthly-only detector missed). Amount NO LONGER excludes anything — it only
+    splits survivors into `fixed` (<5% amount CV) and `variable` (≥5%, with a
+    min–max range + note), so variable-but-regular utilities are kept.
+    `estimatedMonthlyCost` normalizes by cadence. Recency window preserved.
 
 - **LLM Insights — find_recurring hardening + loud unmatched-exclusion warnings** —
   `[commit hash]` — real-data testing exposed three defects; fixed the two

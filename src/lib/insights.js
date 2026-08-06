@@ -92,6 +92,62 @@ function insightsConfigured(provider = 'claude') {
 // the result says so loudly and the model is told to surface it.
 const QUERY_ROW_CAP = 500;
 
+/* ─────────────────────── Savings-category exclusion ───────────────────────
+ * Savings contributions live in the transactions table like any other row, but
+ * they are NOT spending — folding them into "expenses" / "top merchants" /
+ * "recurring" answers overstates outflow and buries real discretionary spend.
+ * A "savings" transaction is one whose category is a savings category.
+ *
+ * Which categories are savings is read from saved state, never hardcoded: the
+ * budget's savings line items (state.sav) each carry a category tag `c`, and
+ * the distinct set of those tags is exactly the household's savings categories.
+ * (There is no account signal for savings — deliberately skipped.) The server
+ * extracts these once via savingsCategoriesFromState and passes them on ctx;
+ * the chat loop threads them onto every tool call as ctx.savingsCategories.
+ *
+ * Enforcement reuses the existing excludeCategories machinery, so savings
+ * exclusion inherits the same NOT-IN SQL and the same loud unmatched-name
+ * warning path — no parallel filter to drift. It is applied by DEFAULT and
+ * opted out per call with includeSavings:true (set by the model only when the
+ * user explicitly asks about saving / contributions).
+ */
+
+// Distinct savings category names from the budget's savings line items.
+// Defensive about state shape: state.sav may be absent or malformed.
+function savingsCategoriesFromState(state) {
+  if (!state || typeof state !== 'object' || !Array.isArray(state.sav)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of state.sav) {
+    const c = item && typeof item.c === 'string' ? item.c.trim() : '';
+    if (c && !seen.has(c)) { seen.add(c); out.push(c); }
+  }
+  return out;
+}
+
+// Merge the standing savings categories into a filter's excludeCategories,
+// unless the caller opted in with includeSavings:true. Returns a NEW filter
+// object (never mutates the model-supplied input). De-dupes case-insensitively
+// against any excludeCategories the model already passed so we don't double-add.
+// Because it feeds excludeCategories, the unmatched-name warning path applies
+// automatically — a savings category that matches nothing gets flagged too.
+function withSavingsExclusion(filters = {}, savingsCategories = []) {
+  if (filters.includeSavings === true) return filters;
+  const sav = Array.isArray(savingsCategories)
+    ? savingsCategories.filter(c => typeof c === 'string' && c.length)
+    : [];
+  if (!sav.length) return filters;
+  const existing = Array.isArray(filters.excludeCategories)
+    ? filters.excludeCategories.filter(c => typeof c === 'string' && c.length)
+    : [];
+  const lower = new Set(existing.map(c => c.toLowerCase()));
+  const merged = [...existing];
+  for (const c of sav) {
+    if (!lower.has(c.toLowerCase())) { lower.add(c.toLowerCase()); merged.push(c); }
+  }
+  return { ...filters, excludeCategories: merged };
+}
+
 // Build the shared WHERE clause + params from a filter object. Returns
 // { whereSql, params, nextIndex } so callers can append their own clauses
 // (e.g. LIMIT) continuing the $N numbering.
@@ -445,28 +501,62 @@ async function getAggregates(pool, userId, args = {}) {
   });
 }
 
-/* find_recurring — surface likely subscriptions / recurring charges
- * ("what am I paying for every month?"). A subscription is a merchant that
- * recurs at a roughly monthly cadence, with a stable amount, and is STILL
- * active — distinct from a merchant you simply visit often (Starbucks, whose
- * amount and timing vary) and from a charge that recurred years ago and
- * stopped (an old loan, a cancelled service).
+/* find_recurring — surface likely recurring charges / subscriptions
+ * ("what am I paying for every month?"). A recurring charge is a merchant that
+ * hits at a REGULAR cadence and is STILL active — distinct from a merchant you
+ * simply visit at random (Starbucks, whose gaps are erratic) and from a charge
+ * that recurred years ago and stopped (an old loan, a cancelled service).
  *
- * All of the discrimination happens in SQL so the model never eyeballs rows:
- *   - occurrences        COUNT(*) per merchant
- *   - span in months     from first to last charge date
- *   - amount stability    coefficient of variation (stddev / |avg|); a real
- *                         subscription's is near zero. Proportional, so it does
- *                         not wave a $5.5k mortgage through just because $800 of
- *                         swing is "only 15%".
- *   - monthly cadence      distinct year-month buckets ≈ span months (roughly
- *                          one hit per month, not many in one month)
+ * Cadence, not amount, is the recurrence signal. The old detector keyed on
+ * amount stability and so (a) missed non-monthly cadences — a bimonthly /
+ * semi-monthly mortgage never looked "monthly" — and (b) dropped genuinely
+ * recurring bills whose amount legitimately varies (a utility bill that swings
+ * with usage). This version detects ANY regular spacing via gap analysis and
+ * never uses amount to exclude anything.
+ *
+ * All discrimination happens in SQL so the model never eyeballs rows:
+ *   - consecutive gaps    LAG(date) over each merchant's date-ordered charges
+ *                         gives the day-gap between successive charges.
+ *   - regular spacing     the MEDIAN gap must fall in a known cadence band
+ *                         (~14 biweekly, ~15 semi-monthly, ~30 monthly,
+ *                         ~90 quarterly) AND the gaps must be consistent
+ *                         (low gap coefficient-of-variation). This is what
+ *                         separates a real cadence from random visits.
  *   - recency             last charge within activeWithinMonths of today, so
- *                          "what am I paying for" means CURRENTLY, not in 2017.
- * Reports each survivor with its typical amount and an estimated monthly cost.
- * Defaults to expenses (sign 'expense') since that is what "paying for" means,
- * but callers can override.
+ *                         "what am I paying for" means CURRENTLY, not in 2017.
+ *
+ * Amount is used ONLY to SPLIT the survivors (never to exclude):
+ *   - fixed     amount coefficient of variation < 5% — flat-price subs.
+ *   - variable  amount CV ≥ 5% — clearly-recurring but variable bills, returned
+ *               with a min–max range and a note.
+ * One tool, one SQL pass; the two lists are split on the way out.
+ * estimatedMonthlyCost normalizes the typical charge by its cadence (a
+ * semi-monthly charge counts twice a month, a quarterly one a third of a month).
+ * Defaults to expenses (sign 'expense'); callers can override.
  */
+
+// Cadence bands keyed by the median day-gap between successive charges. Each
+// band has an inclusive [min,max] gap window, a label, and how many times per
+// month it lands (used to normalize estimatedMonthlyCost). Bands are chosen not
+// to overlap; a merchant's median gap picks exactly one, else it is not a
+// recognized cadence and is dropped. Weekly is included so a weekly bill counts.
+const CADENCE_BANDS = [
+  { label: 'weekly',       min: 5,   max: 10,  perMonth: 52 / 12 },
+  { label: 'biweekly',     min: 11,  max: 14,  perMonth: 26 / 12 },
+  { label: 'semi-monthly', min: 15,  max: 18,  perMonth: 2 },
+  { label: 'monthly',      min: 25,  max: 35,  perMonth: 1 },
+  { label: 'bimonthly',    min: 50,  max: 70,  perMonth: 0.5 },
+  { label: 'quarterly',    min: 80,  max: 100, perMonth: 1 / 3 },
+];
+
+function cadenceForGap(medianGap) {
+  if (medianGap == null) return null;
+  for (const b of CADENCE_BANDS) {
+    if (medianGap >= b.min && medianGap <= b.max) return b;
+  }
+  return null;
+}
+
 async function findRecurring(pool, userId, args = {}) {
   // Default to expenses unless the caller explicitly overrides sign.
   const filters = { ...args };
@@ -498,67 +588,113 @@ async function findRecurring(pool, userId, args = {}) {
     outerParams.push(cutoff);
   }
 
-  // Amount-stability tolerance as a coefficient of variation (stddev / |avg|),
-  // plus a tiny absolute floor so a perfectly-flat cheap charge with a few
-  // cents of rounding still passes. Default CV cap 0.08 (8%): Netflix at $15.99
-  // ± pennies passes; a refinanced mortgage swinging hundreds of dollars fails.
-  const cvMax = Math.max(0.01, Math.min(Number(args.maxAmountVariation) || 0.08, 1));
+  // Gap regularity tolerance: the coefficient of variation of the day-gaps
+  // between successive charges (stddev/mean of the gaps). A truly regular
+  // cadence has near-zero gap-CV; random visits have high gap-CV. Default 0.35
+  // tolerates a few days of drift (weekends, month-length differences) without
+  // waving through erratic spending. This replaces amount CV as the filter —
+  // amount NEVER excludes anything now, it only splits fixed vs variable below.
+  const gapCvMax = Math.max(0.05, Math.min(Number(args.maxGapVariation) || 0.35, 1.5));
 
-  // Per-merchant stats. distinct_months counts the year-months a merchant
-  // appears in; span_months is the calendar distance first→last. A monthly
-  // subscription has distinct_months ≈ span_months + 1 and low CV.
+  // Amount CV boundary between the "fixed" and "variable" output lists. Not a
+  // filter — every survivor lands in exactly one list. 5% by default: Netflix
+  // (flat) is fixed; a usage-driven utility bill is variable.
+  const amountCvSplit = Math.max(0.01, Math.min(Number(args.fixedAmountThreshold) || 0.05, 1));
+
+  // Gap analysis. `gaps` gets the day-gap to the previous charge for each row
+  // (NULL for a merchant's first charge). `merchant_gaps` aggregates per
+  // merchant: occurrence count, first/last date, amount stats (for the SPLIT,
+  // not a filter), and gap stats — the MEDIAN gap (cadence band) and the gap
+  // mean/stddev (regularity). Median is percentile_cont(0.5) so one freak gap
+  // (a skipped month) doesn't distort the cadence read the way a mean would.
   const res = await pool.query(
-    `WITH per_merchant AS (
-       SELECT description AS merchant,
+    `WITH gaps AS (
+       SELECT description AS merchant, date, amount,
+              (date - LAG(date) OVER (PARTITION BY description ORDER BY date))::int AS gap_days
+         FROM transactions
+        WHERE ${whereSql} AND description <> ''
+     ),
+     merchant_gaps AS (
+       SELECT merchant,
               COUNT(*)::int AS occurrences,
-              COUNT(DISTINCT date_trunc('month', date))::int AS distinct_months,
               MIN(date) AS first_date,
               MAX(date) AS last_date,
               COALESCE(AVG(amount), 0)::float AS avg_amount,
               COALESCE(STDDEV_POP(amount), 0)::float AS std_amount,
-              (EXTRACT(YEAR FROM AGE(MAX(date), MIN(date))) * 12
-               + EXTRACT(MONTH FROM AGE(MAX(date), MIN(date))))::int AS span_months
-         FROM transactions
-        WHERE ${whereSql} AND description <> ''
-        GROUP BY description
+              MIN(amount)::float AS min_amount,
+              MAX(amount)::float AS max_amount,
+              -- percentile_cont ignores NULL gaps (the first charge) natively;
+              -- ordered-set aggregates don't take a FILTER clause.
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY gap_days)::float AS median_gap,
+              COALESCE(AVG(gap_days) FILTER (WHERE gap_days IS NOT NULL), 0)::float AS mean_gap,
+              COALESCE(STDDEV_POP(gap_days) FILTER (WHERE gap_days IS NOT NULL), 0)::float AS std_gap
+         FROM gaps
+        GROUP BY merchant
        HAVING COUNT(*) >= ${minOccurrences}
      )
-     SELECT * FROM per_merchant
-      WHERE distinct_months >= ${minOccurrences}
-        -- amount stability as coefficient of variation: stddev must be within
-        -- cvMax of the typical amount (with a small absolute floor). Because it
-        -- is proportional, large-but-variable charges (refinanced mortgages,
-        -- variable loan servicing) are dropped, not waved through.
-        AND ABS(std_amount) <= GREATEST(ABS(avg_amount) * ${cvMax}, 1)
-        -- monthly cadence: appears in most of the months it spans (allows a
-        -- couple of gaps), i.e. not many charges bunched in one month.
-        AND distinct_months >= GREATEST(span_months, 1) * 0.7
+     SELECT * FROM merchant_gaps
+      WHERE median_gap IS NOT NULL
+        -- regular spacing: consistent gaps (low gap coefficient of variation).
+        -- Amount is NOT used here — a variable-but-regular bill still passes.
+        AND ABS(std_gap) <= GREATEST(mean_gap, 1) * ${gapCvMax}
         -- recency: last charge recent enough to still be "what I'm paying for".
         ${recencyClause}
-      ORDER BY ABS(avg_amount) * distinct_months DESC
+      ORDER BY ABS(avg_amount) * occurrences DESC
       LIMIT ${limit}`,
     outerParams
   );
 
+  const fixed = [];
+  const variable = [];
+  for (const r of res.rows) {
+    const band = cadenceForGap(r.median_gap);
+    // A survivor with a regular gap that doesn't map to a known cadence band
+    // (e.g. every ~45 days) is not a cadence we name — skip it rather than
+    // mislabel. The gap-CV filter already ensured regularity.
+    if (!band) continue;
+
+    const typical = Math.round(r.avg_amount * 100) / 100;
+    const amountCv = Math.abs(r.avg_amount) > 0
+      ? Math.abs(r.std_amount) / Math.abs(r.avg_amount)
+      : 0;
+    // estimatedMonthlyCost normalizes the typical charge by cadence: a
+    // semi-monthly charge costs ~2× its per-charge amount each month, a
+    // quarterly one ~1/3. Magnitude, for readability regardless of sign.
+    const estimatedMonthlyCost = Math.round(Math.abs(typical) * band.perMonth * 100) / 100;
+
+    const entry = {
+      merchant: r.merchant,
+      cadence: band.label,
+      occurrences: r.occurrences,
+      medianGapDays: Math.round(r.median_gap),
+      typicalAmount: typical,
+      estimatedMonthlyCost,
+      firstDate: r.first_date instanceof Date ? r.first_date.toISOString().slice(0, 10) : r.first_date,
+      lastDate: r.last_date instanceof Date ? r.last_date.toISOString().slice(0, 10) : r.last_date,
+    };
+
+    if (amountCv < amountCvSplit) {
+      fixed.push(entry);
+    } else {
+      // Variable bills carry the observed amount range + a note so the model
+      // presents them as "varies" rather than quoting a false single price.
+      const min = Math.round(r.min_amount * 100) / 100;
+      const max = Math.round(r.max_amount * 100) / 100;
+      variable.push({
+        ...entry,
+        amountRange: { min, max },
+        note: `Amount varies (${Math.abs(min)}–${Math.abs(max)}); typicalAmount is the average.`,
+      });
+    }
+  }
+
   return {
     minOccurrences,
     activeWithinMonths,
-    maxAmountVariation: cvMax,
-    candidates: res.rows.map(r => {
-      const typical = Math.round(r.avg_amount * 100) / 100;
-      return {
-        merchant: r.merchant,
-        occurrences: r.occurrences,
-        distinctMonths: r.distinct_months,
-        spanMonths: r.span_months,
-        typicalAmount: typical,
-        // Estimated monthly cost: the typical charge (magnitude), since these
-        // are ~monthly. Positive number for readability regardless of sign.
-        estimatedMonthlyCost: Math.abs(typical),
-        firstDate: r.first_date instanceof Date ? r.first_date.toISOString().slice(0, 10) : r.first_date,
-        lastDate: r.last_date instanceof Date ? r.last_date.toISOString().slice(0, 10) : r.last_date,
-      };
-    }),
+    maxGapVariation: gapCvMax,
+    fixedAmountThreshold: amountCvSplit,
+    fixed,
+    variable,
   };
 }
 
@@ -597,6 +733,7 @@ const TOOLS = [
         sortBy: { type: 'string', enum: ['date', 'amount', 'absamount'], description: 'Sort column (default date)' },
         sortDir: { type: 'string', enum: ['asc', 'desc'], description: 'Sort direction (default desc). For biggest expense use amount asc.' },
         limit: { type: 'number', description: 'Max rows to return (default 50, hard cap 500)' },
+        includeSavings: { type: 'boolean', description: 'By default, savings-category transactions (contributions to savings buckets) are EXCLUDED, since they are not spending. Set true ONLY when the user explicitly asks about saving / contributions.' },
       },
     },
   },
@@ -629,19 +766,24 @@ const TOOLS = [
         groupBy: { type: 'string', enum: ['category', 'account', 'merchant', 'month', 'week', 'year', 'day'], description: 'Per-group totals instead of one summary. category/account/merchant order by spend; month/week/year/day are TIME buckets ordered chronologically (use these for "spending each month" / trends) and return a "period" label per row.' },
         groupLimit: { type: 'number', description: 'Max groups to return when groupBy is set (dimensions: default 20, cap 100; time: default 60, cap 366)' },
         minCount: { type: 'number', description: 'With a category/account/merchant groupBy, keep only groups with MORE THAN this many transactions and order by frequency — for "merchants I visited more than N times". Ignored for time groupings.' },
+        includeSavings: { type: 'boolean', description: 'By default, savings-category transactions are EXCLUDED, since they are not spending. Set true ONLY when the user explicitly asks about saving / contributions.' },
       },
     },
   },
   {
     name: 'find_recurring',
     description:
-      'Detect likely recurring charges / subscriptions ("what am I paying for ' +
-      'every month?"). Returns merchants that recur at a roughly monthly ' +
-      'cadence with a STABLE amount — real subscriptions, not merchants you ' +
-      'just visit often (whose amounts vary). Each candidate includes its ' +
-      'typical amount, an estimatedMonthlyCost, occurrence count, and the ' +
-      'first/last charge dates. Defaults to expenses. Use this instead of ' +
-      'listing rows and guessing what repeats.',
+      'Detect recurring charges / subscriptions ("what am I paying for every ' +
+      'month?"). Detects ANY regular cadence via gap analysis — weekly, ' +
+      'biweekly, semi-monthly, monthly, bimonthly, quarterly — not just ' +
+      'monthly, so a semi-monthly mortgage is caught. Amount is NOT used to ' +
+      'exclude anything, so variable-but-regular bills (utilities) are caught ' +
+      'too. Returns TWO lists: "fixed" (flat-price, amount barely varies) and ' +
+      '"variable" (regular cadence but the amount moves — each carries an ' +
+      'amountRange and a note). Every entry has a cadence label, typicalAmount, ' +
+      'estimatedMonthlyCost (normalized to the cadence), occurrences, median ' +
+      'gap in days, and first/last charge dates. Defaults to expenses and to ' +
+      'still-active charges. Use this instead of listing rows and guessing.',
     input_schema: {
       type: 'object',
       properties: {
@@ -653,24 +795,29 @@ const TOOLS = [
         sign: { type: 'string', enum: ['expense', 'income'], description: 'Which side to scan; defaults to expense ("paying for").' },
         minOccurrences: { type: 'number', description: 'Minimum times a merchant must appear to be considered recurring (default 3, min 2, cap 60).' },
         activeWithinMonths: { type: 'number', description: 'Only count merchants whose LAST charge is within this many months of today — i.e. still active. Default 3. Pass 0 to include charges that stopped long ago (for "what did I USED to pay for").' },
-        maxAmountVariation: { type: 'number', description: 'Max coefficient of variation (stddev/|avg|) for the amount to count as "stable". Default 0.08 (8%). Lower is stricter. Raise it to catch charges whose price drifts.' },
-        limit: { type: 'number', description: 'Max candidates to return (default 40, cap 100).' },
+        maxGapVariation: { type: 'number', description: 'Max coefficient of variation of the day-gaps between charges (how consistent the spacing must be). Default 0.35. Lower is stricter (more regular). This is the recurrence filter — amount is never used to exclude.' },
+        fixedAmountThreshold: { type: 'number', description: 'Amount coefficient of variation below which a charge is reported as "fixed" vs "variable". Default 0.05 (5%). Only SPLITS the output lists; never excludes.' },
+        includeSavings: { type: 'boolean', description: 'By default, savings-category charges are excluded. Set true ONLY when the user explicitly asks about recurring saving / contributions.' },
+        limit: { type: 'number', description: 'Max candidates to return across both lists (default 40, cap 100).' },
       },
     },
   },
 ];
 
 // Dispatch a tool call by name. Returns the JSON-serializable result the
-// model will see as the tool result.
-async function runTool(pool, userId, name, input) {
+// model will see as the tool result. `savingsCategories` (from ctx) is folded
+// into each tool's filters as a default exclusion — see withSavingsExclusion —
+// unless the model passed includeSavings:true on the call.
+async function runTool(pool, userId, name, input, savingsCategories = []) {
+  const filters = withSavingsExclusion(input || {}, savingsCategories);
   if (name === 'query_transactions') {
-    return queryTransactions(pool, userId, input || {});
+    return queryTransactions(pool, userId, filters);
   }
   if (name === 'get_aggregates') {
-    return getAggregates(pool, userId, input || {});
+    return getAggregates(pool, userId, filters);
   }
   if (name === 'find_recurring') {
-    return findRecurring(pool, userId, input || {});
+    return findRecurring(pool, userId, filters);
   }
   return { error: `unknown tool: ${name}` };
 }
@@ -701,8 +848,9 @@ function buildSystemPrompt(ctx = {}) {
     '- To EXCLUDE things ("not transfers", "excluding securities trades"), pass excludeCategories / excludeAccounts / descriptionExcludes on the SAME tool call — do not filter by hand and do not report an empty result when the tool actually supports the exclusion. If you are unsure which category or account names exist, call get_aggregates with groupBy "category" (or "account") first to see the real names, then filter by those exact names. If a tool result includes a "warnings" field saying an excluded category/account name did not exist, you MUST tell the user the exclusion did not apply and did not silently drop anything — never present such a result as if the exclusion worked.',
     '- For "each month / per week / over time / trend" questions, call get_aggregates with groupBy "month" (or "week"/"year") — it returns one exact row per period in chronological order. Do NOT list transactions and bucket them yourself.',
     '- To match several categories or accounts at once ("Dining or Groceries"), pass categories:[...] or accounts:[...] in ONE call rather than making separate calls and adding the results by hand. For "uncategorized" transactions pass uncategorized:true.',
-    '- For "what am I paying for every month", "which subscriptions do I have", or recurring-charge questions, call find_recurring — it detects merchants that repeat at a monthly cadence with a stable amount AND are still active (a charge within the last 3 months by default), and returns their monthly cost. It deliberately excludes charges that stopped long ago and merchants whose amount varies too much to be a subscription. Do NOT list transactions and guess what repeats. For "what did I USED to pay for" pass activeWithinMonths:0.',
+    '- For "what am I paying for every month", "which subscriptions do I have", or recurring-charge questions, call find_recurring — it detects any regular cadence (weekly through quarterly) via gap analysis, not just monthly, and does NOT drop bills whose amount varies. It returns two lists: "fixed" (flat price) and "variable" (regular but the amount moves, with an amountRange). Each entry names its cadence and an estimatedMonthlyCost normalized to that cadence. It excludes charges that stopped long ago by default. Do NOT list transactions and guess what repeats. For "what did I USED to pay for" pass activeWithinMonths:0.',
     '- For "merchants (or categories/accounts) I used more than N times", call get_aggregates with the matching groupBy and minCount:N — it keeps only groups above that count and orders by frequency. Do NOT list rows and tally by hand.',
+    '- Savings contributions are NOT spending: expense, top-merchant, and recurring queries EXCLUDE savings-category transactions by default. When the user explicitly asks about saving or contributions (how much am I saving, my savings by month, recurring transfers into savings), pass includeSavings:true so those rows are counted.',
     '- Amounts are signed: expenses negative, income positive.',
     '- You may PROPOSE budget or category changes as text for the user to apply manually. You cannot and must not claim to have changed anything — you have no write access.',
     '- Be concise and concrete. Prefer specific figures and short actionable takeaways.',
@@ -955,7 +1103,7 @@ async function runInsightsChat({ pool, userId, question, history = [], ctx = {},
     for (const tu of toolUses) {
       let result;
       try {
-        result = await runTool(pool, userId, tu.name, tu.input);
+        result = await runTool(pool, userId, tu.name, tu.input, ctx.savingsCategories || []);
       } catch (e) {
         logger.error({ event: 'insights.tool.error', tool: tu.name, err: e.message }, 'insights tool failed');
         result = { error: e.message };
@@ -996,6 +1144,8 @@ module.exports = {
   queryTransactions,
   getAggregates,
   findRecurring,
+  savingsCategoriesFromState,
+  withSavingsExclusion,
   TOOLS,
   MODEL: PROVIDER_MODELS.claude, // back-comparable default; per-provider via modelFor
   modelFor,
