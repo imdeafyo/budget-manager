@@ -12,7 +12,7 @@
     "coverage": "vitest run --coverage"
   },
   "dependencies": {
-    "react": "^19.2.5",
+    "react": "^19.3.0",
     "react-dom": "^19.2.8",
     "recharts": "^3.10.1"
   },
